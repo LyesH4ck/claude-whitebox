@@ -1,10 +1,11 @@
 {
   "name": "Transilience Community Security Tools",
   "description": "Claude Code plugins for authorized security testing, bug bounty hunting, AI threat testing, and recon",
+  "owner": { "name": "Transilience AI" },
   "plugins": [
     {
       "name": "pentest",
-      "path": "plugins/pentest",
+      "source": "./plugins/pentest",
       "description": "Full penetration testing framework — 100+ attack categories covering OWASP, injection, authentication, cloud, and more"
     },
     {
