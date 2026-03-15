@@ -1,0 +1,18 @@
+# Claude Code local config — never commit
+.claude/
+
+# Plugin outputs (generated during testing)
+plugins/*/skills/*/outputs/*
+!plugins/*/skills/*/outputs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
