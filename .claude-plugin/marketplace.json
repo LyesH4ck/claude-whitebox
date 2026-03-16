@@ -11,7 +11,7 @@
       "name": "pentest",
       "source": "./plugins/pentest",
       "description": "Full penetration testing framework - 100+ attack categories covering OWASP, injection, authentication, cloud, and more",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "author": {
         "name": "Stickman230",
         "url": "https://github.com/Stickman230"
