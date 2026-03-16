@@ -1,12 +1,23 @@
 {
-  "name": "Transilience Community Security Tools",
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-pentest",
   "description": "Claude Code plugins for authorized security testing, bug bounty hunting, AI threat testing, and recon",
-  "owner": { "name": "Transilience AI" },
+  "owner": {
+    "name": "Stickman230",
+    "email": "maxime.reynaud230@gmail.com"
+  },
   "plugins": [
     {
       "name": "pentest",
       "source": "./plugins/pentest",
-      "description": "Full penetration testing framework — 100+ attack categories covering OWASP, injection, authentication, cloud, and more"
+      "description": "Full penetration testing framework - 100+ attack categories covering OWASP, injection, authentication, cloud, and more",
+      "version": "1.0.0",
+      "author": {
+        "name": "Stickman230",
+        "url": "https://github.com/Stickman230"
+      },
+      "category": "security",
+      "strict": false
     }
   ]
 }
