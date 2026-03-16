@@ -72,6 +72,43 @@ The Pentester Orchestrator will:
 
 ---
 
+## Slash Commands
+
+Two slash commands are included for guided session management. They are auto-discovered by Claude Code and invoked by name.
+
+### /pentest:pentest
+
+**Purpose:** Replaces the plain-text "Start a pentest…" workflow with a structured on-ramp that collects scope before handing off to the orchestrator.
+
+**Invoke:** Type `/pentest:pentest` in Claude Code.
+
+**Flow:**
+1. Displays ASCII art banner
+2. Asks whether to isolate the session to the pentest plugin (recommended)
+3. Collects 5 scope fields one at a time: target URL/IP, engagement name, out-of-scope restrictions, testing window, and authentication credentials
+4. Outputs an engagement summary for review
+5. Automatically deploys Pentester Orchestrator at Phase 1 (Recon) — Phase 0 scope confirmation is skipped because scope was already collected
+
+**Isolation note:** If "Yes" is selected in step 2, Claude constrains itself to pentest plugin agents and skills for the duration of the session. This constraint is lifted when `/pentest:exit-pentest` runs or `/clear` resets the context.
+
+### /pentest:exit-pentest
+
+**Purpose:** Structured session close — reads findings, flushes unsaved notes, outputs a severity-bucketed summary, and lifts the isolation constraint.
+
+**Invoke:** Type `/pentest:exit-pentest` at the end of an engagement.
+
+**Flow:**
+1. Asks for the engagement name (the name used in `outputs/{name}/`)
+2. Reads findings from `outputs/{name}/findings/` (Schema A) or `outputs/{name}/processed/findings/` (Schema B) — whichever the engagement used
+3. Flushes any unsaved in-progress notes or findings to disk
+4. Outputs severity-bucketed session summary (Critical / High / Medium / Low / Info counts + top 3 findings)
+5. Outputs an isolation lift instruction block
+6. Suggests running `/clear` to fully reset context before the next engagement
+
+**Note:** Run `/clear` after `/pentest:exit-pentest` to fully reset the context window. The engagement outputs remain in `outputs/{name}/` after `/clear`.
+
+---
+
 ## Architecture
 
 ```mermaid
