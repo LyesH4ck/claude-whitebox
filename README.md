@@ -48,14 +48,13 @@
 First Add Marketplace
 ```bash
 # Add marketplace from inside claude code
-/plugin marketplace add affaan-m/everything-claude-code
-
+/plugin marketplace add Stickman230/claude-pentest
 ```
 Then Install plugin
 
 ```bash
 # Install plugin from inside claude caude
-/plugin install everything-claude-code@everything-claude-code
+/plugin install claude-pentest@claude-pentest
 ```
 
 The plugin installs into your project's `.claude/` directory. Once installed, the Pentester Orchestrator agent is available in any Claude Code session.
