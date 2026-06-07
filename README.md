@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-pentest</h1>
   <p align="center">
-    A full penetration testing framework for Claude Code — 15 agents, 6 skill coordinators, 63 attack categories.
+    A full penetration testing framework for Claude Code with 15 agents, 6 skill coordinators and 63 attack categories.
     <br />
     Structured, human-in-the-loop, evidence-driven.
   </p>
@@ -33,7 +33,7 @@
 
 ## What this is
 
-`claude-pentest` is a Claude Code plugin that gives Claude structured penetration testing capabilities. It is not a script or scanner — it is an **agent coordination framework**: a top-level orchestrator deploys specialized executor agents, each following a strict 4-phase workflow, requiring operator approval before any active exploitation begins. Every finding ships with a working PoC, captured HTTP evidence, and a Playwright screenshot.
+`claude-pentest` is a Claude Code plugin that gives Claude structured penetration testing capabilities. It is not a script or scanner, it is an **agent coordination framework**: a top-level orchestrator deploys specialized executor agents, each following a strict 6-phase workflow, requiring operator approval before any active exploitation begins. Every finding ships with a working PoC, captured HTTP evidence, and a Playwright screenshot.
 
 **Key principles:**
 - Human-in-the-loop at every escalation point — Claude cannot proceed to exploitation without your confirmation
