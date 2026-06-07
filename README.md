@@ -24,8 +24,6 @@
     <img src="https://img.shields.io/badge/authorized_use_only-red?style=flat-square" alt="Authorized use only" />
   </p>
   <p align="center">
-    <strong>Language / 语言 / Langue</strong>
-    <br />
     <a href="README.md"><strong>English</strong></a> | <a href="README.zh-CN.md">简体中文</a> | <a href="README.fr.md">Français</a>
   </p>
 </p>
