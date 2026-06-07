@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-pentest",
-  "description": "Claude Code plugins for authorized security testing, bug bounty hunting, AI threat testing, and recon",
+  "description": "Claude Code plugins for authorized security testing, AI threat testing, and reconnaissance",
   "owner": {
     "name": "Stickman230",
     "email": "maxime.reynaud230@gmail.com"
@@ -10,8 +10,8 @@
     {
       "name": "pentest",
       "source": "./plugins/pentest",
-      "description": "Full penetration testing framework - 100+ attack categories covering OWASP, injection, authentication, cloud, and more",
-      "version": "2.0.0",
+      "description": "Full penetration testing framework - 63 attack categories across 11 domains covering OWASP, injection, authentication, cloud, and more",
+      "version": "2.2.5",
       "author": {
         "name": "Stickman230",
         "url": "https://github.com/Stickman230"

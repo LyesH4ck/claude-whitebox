@@ -53,67 +53,161 @@ First Add Marketplace
 Then Install plugin
 
 ```bash
-# Install plugin from inside claude caude
-/plugin install claude-pentest@claude-pentest
+# Install plugin from inside claude code
+/plugin install pentest@claude-pentest
 ```
 
-The plugin installs into your project's `.claude/` directory. Once installed, the Pentester Orchestrator agent is available in any Claude Code session.
+The plugin installs into your project's `.claude/` directory. Once installed, all agents, skills, and slash commands are available in any Claude Code session.
+
+### Optional: Kali Server (MKS)
+
+For server-side testing (nmap, sqlmap, gobuster, Metasploit, etc.), the plugin can connect to a remote Kali Linux REST API. Without it, agents fall back to whatever tools are available locally via Bash.
+
+**Setup:** Deploy [MCP-Kali-Server](https://github.com/Wh0am123/MCP-Kali-Server) on a Kali Linux host reachable from your machine, then run `/pentest:pentest-kali` in Claude Code to connect and save the configuration. The server URL and tool availability are written to `.pentest-mks.json` and picked up automatically at engagement launch.
 
 ---
 
 ## Quick Start
 
-Open Claude Code in your project directory and type:
+The recommended way to start an engagement is via the guided slash command:
 
 ```
-Start a pentest engagement on https://example.com
+/pentest:pentest
 ```
 
-The Pentester Orchestrator will:
-
-1. Ask you to confirm scope (target, in-scope, out-of-scope, Rules of Engagement)
-2. Run web application mapping to build an inventory
-3. Present a test plan for your approval
-4. Deploy executor agents in parallel
-5. Aggregate findings and present a summary
-6. Write the final report to `outputs/example-com/pentest-report.json`
+This walks you through scope collection, attack profile selection, optional Kali server configuration, and automatically hands off to the Pentester Orchestrator at Phase 1 (Recon). See [Slash Commands](#slash-commands) below for the full command reference.
 
 ---
 
 ## Slash Commands
 
-Two slash commands are included for guided session management. They are auto-discovered by Claude Code and invoked by name.
+Five slash commands are included for guided session management. They are auto-discovered by Claude Code and invoked by name.
 
 ### /pentest:pentest
 
-**Purpose:** Replaces the plain-text "Start a pentest…" workflow with a structured on-ramp that collects scope before handing off to the orchestrator.
-
-**Invoke:** Type `/pentest:pentest` in Claude Code.
+**Purpose:** Guided engagement launcher — collects scope, attack profile, and Kali server configuration, then hands off to the orchestrator.
 
 **Flow:**
 1. Displays ASCII art banner
-2. Asks whether to isolate the session to the pentest plugin (recommended)
-3. Collects 5 scope fields one at a time: target URL/IP, engagement name, out-of-scope restrictions, testing window, and authentication credentials
-4. Outputs an engagement summary for review
-5. Automatically deploys Pentester Orchestrator at Phase 1 (Recon) — Phase 0 scope confirmation is skipped because scope was already collected
+2. Asks whether to isolate the session to the pentest plugin (recommended — prevents other plugins interfering with the engagement)
+3. Checks for a saved scope (`.pentest-scope.json`) — if found, offers to reuse it or enter new scope. Collects 7 scope fields if entering new scope: target, engagement name, out-of-scope restrictions, testing window, authentication credentials, max execution time, and thoroughness level (Light / Medium / Deep / Full)
+4. Checks for a saved attack profile (`.pentest-attacks.json`) — if found, offers to use it or run the full suite. If no profile is found, offers inline mode selection (Full / Web app / API & cloud / Custom)
+5. Checks for a configured Kali server (`.pentest-mks.json`) — if active, displays tool availability and asks whether to use MKS endpoints
+6. Outputs an engagement summary for review
+7. Automatically deploys the Pentester Orchestrator at Phase 1 (Recon) — Phase 0 scope confirmation and Phase 0b MKS check are skipped as both were handled by the command
 
-**Isolation note:** If "Yes" is selected in step 2, Claude constrains itself to pentest plugin agents and skills for the duration of the session. This constraint is lifted when `/pentest:exit-pentest` runs or `/clear` resets the context.
+**Isolation note:** If isolation is selected in step 2, Claude constrains itself to pentest plugin agents and skills for the duration of the session. This constraint is lifted when `/pentest:pentest-exit` runs or `/clear` resets the context.
 
-### /pentest:exit-pentest
+---
 
-**Purpose:** Structured session close — reads findings, flushes unsaved notes, outputs a severity-bucketed summary, and lifts the isolation constraint.
+### /pentest:pentest-scope
 
-**Invoke:** Type `/pentest:exit-pentest` at the end of an engagement.
+**Purpose:** Define or update engagement scope without launching a pentest. Useful for preparing scope ahead of time or updating scope mid-engagement.
 
 **Flow:**
-1. Asks for the engagement name (the name used in `outputs/{name}/`)
+1. Reads any existing `.pentest-scope.json` and displays current scope if found
+2. If an existing scope is found: offers update or cancel; detects drastic vs minor target changes when an engagement is active (drastic change = different domain or IP subnet triggers a warning with options)
+3. Collects all 7 scope fields in sequence
+4. Writes `.pentest-scope.json` with `status: pending`
+5. Displays a confirmation block with next steps
+
+---
+
+### /pentest:pentest-attacks
+
+**Purpose:** Define which attack categories the orchestrator should use, without launching a pentest. Saves the profile for reuse across sessions.
+
+**Flow:**
+1. Reads any existing `.pentest-attacks.json` and displays it if found; offers update or keep
+2. Mode selection: Full suite / Web application profile / API & cloud profile / Custom
+3. Custom mode: three multi-select questions covering all 12 attack categories — each selection maps to the correct skill coordinator and executor agent(s)
+4. Writes `.pentest-attacks.json`
+5. Displays a confirmation block
+
+**Presets:**
+- **Web app** — injection, client-side, server-side, authentication, API security, business logic
+- **API & cloud** — API security, cloud & containers, IP infrastructure, CVE testing, domain recon
+
+---
+
+### /pentest:pentest-kali
+
+**Purpose:** Connect a remote Metasploit-Kali Server (MKS) REST API (see [Kali MCP](https://github.com/Wh0am123/MCP-Kali-Server)) and configure agents to prefer its endpoints over local Bash equivalents.
+
+**Flow:**
+1. Asks for the MKS server URL (e.g., `http://192.168.1.10:5000`)
+2. Verifies connectivity via `/health` endpoint
+3. Parses and displays tool availability: nmap, gobuster, dirb, nikto (verified), sqlmap, hydra, john, metasploit (assumed)
+4. Writes `.pentest-mks.json` with `status: active`
+5. Displays the active MKS session block with curl usage examples for each tool
+
+When MKS is active, the orchestrator enables **Phase 5 (Post-Exploitation)** if a CVE or RCE finding is confirmed — deploying Metasploit via the MKS endpoint.
+
+---
+
+### /pentest:pentest-exit
+
+**Purpose:** Structured session close — reads findings, flushes unsaved notes, outputs a severity-bucketed summary, resets session state, and lifts the isolation constraint.
+
+**Flow:**
+1. Asks for the engagement name (used as the `outputs/{name}/` folder)
 2. Reads findings from `outputs/{name}/findings/` (Schema A) or `outputs/{name}/processed/findings/` (Schema B) — whichever the engagement used
 3. Flushes any unsaved in-progress notes or findings to disk
 4. Outputs severity-bucketed session summary (Critical / High / Medium / Low / Info counts + top 3 findings)
 5. Outputs an isolation lift instruction block
-6. Suggests running `/clear` to fully reset context before the next engagement
+6. Resets both `.pentest-scope.json` and `.pentest-attacks.json` to `status: pending` — a subsequent `/pentest:pentest` will offer to reuse them rather than assuming they are still active
+7. Prompts to run `/clear` to fully reset the context window before the next engagement
 
-**Note:** Run `/clear` after `/pentest:exit-pentest` to fully reset the context window. The engagement outputs remain in `outputs/{name}/` after `/clear`.
+**Note:** Engagement outputs remain in `outputs/{name}/` after `/clear`.
+
+---
+
+## Session State Files
+
+Three JSON files persist session configuration at the project root. They decouple preparation from launch — you can define scope, attack profile, and Kali server connection independently, then launch when ready.
+
+| File | Written by | Purpose |
+|------|-----------|---------|
+| `.pentest-scope.json` | `/pentest:pentest-scope`, `/pentest:pentest` | Target, engagement name, out-of-scope, window, auth, timing, thoroughness, and `status: pending\|active` |
+| `.pentest-attacks.json` | `/pentest:pentest-attacks`, `/pentest:pentest` | Attack mode and selected categories with skill/executor mapping, and `status: pending\|active` |
+| `.pentest-mks.json` | `/pentest:pentest-kali` | Kali server URL, essential tool availability flags, and `status: active` |
+
+### Lifecycle
+
+```
+/pentest:pentest-scope   → writes .pentest-scope.json   (status: pending)
+/pentest:pentest-attacks → writes .pentest-attacks.json (status: pending)
+/pentest:pentest-kali    → writes .pentest-mks.json     (status: active)
+        ↓
+/pentest:pentest reads all three files at launch:
+  • scope found   → offers reuse or new scope; sets status: active on confirm
+  • attacks found → offers reuse or full suite
+  • MKS found     → offers MKS tools or skip; passes mks_active to orchestrator
+        ↓
+Pentester Orchestrator receives confirmed scope + attack mode + MKS status.
+Skips Phase 0 (scope) and Phase 0b (MKS check) — both pre-resolved.
+        ↓
+/pentest:pentest-exit resets scope and attacks to status: pending.
+.pentest-mks.json is left active (server connection persists across engagements).
+```
+
+### Typical workflows
+
+**Prepare ahead, launch when ready:**
+```
+/pentest:pentest-scope    # define scope
+/pentest:pentest-attacks  # define attack profile
+/pentest:pentest-kali     # connect Kali server (optional)
+/pentest:pentest          # launch — all three are detected and offered for reuse
+```
+
+**Quick launch (no pre-configuration):**
+```
+/pentest:pentest          # collects scope inline, offers attack mode, checks for MKS
+```
+
+**Reuse across engagements:**  
+After `/pentest:pentest-exit`, `.pentest-scope.json` and `.pentest-attacks.json` are reset to `status: pending`. The next `/pentest:pentest` will detect them and offer reuse — useful when re-testing the same target with the same attack profile. Edit the scope fields as needed via `/pentest:pentest-scope` before relaunching.
 
 ---
 
@@ -177,30 +271,41 @@ graph TD
 
 ```mermaid
 flowchart LR
-    P0["Phase 0\nScope Confirmation"]
+    P0["Phase 0\nScope Confirmation\n(skipped via /pentest:pentest)"]
+    P0B["Phase 0b\nMKS Check"]
     P1["Phase 1\nRecon & Inventory"]
     P2["Phase 2\nTest Plan"]
     GATE1{{"✋ Operator\nApproval"}}
     P3["Phase 3\nExecutor Deployment"]
     P4["Phase 4\nFindings Aggregate"]
     GATE2{{"✋ Operator\nConfirmation"}}
-    P5["Phase 5\nReport"]
+    P5["Phase 5\nPost-Exploitation\n(MKS + RCE only)"]
+    P6["Phase 6\nReport"]
 
-    P0 -->|"Target + scope\nconfirmed"| P1
+    P0 --> P0B
+    P0B -->|"MKS status\nresolved"| P1
     P1 -->|"Inventory\ncomplete"| P2
     P2 --> GATE1
     GATE1 -->|"Approved"| P3
-    GATE1 -->|"Rejected"| P2
+    GATE1 -->|"Modify"| P2
     P3 -->|"All executors\ncomplete"| P4
     P4 --> GATE2
     GATE2 -->|"Confirmed"| P5
-    GATE2 -->|"More testing"| P3
+    P5 -->|"MKS + RCE confirmed\n(conditional)"| P6
+    GATE2 -->|"No post-exploitation"| P6
 
     style GATE1 fill:#DC2626,color:#fff
     style GATE2 fill:#DC2626,color:#fff
     style P0 fill:#374151,color:#fff
-    style P5 fill:#065F46,color:#fff
+    style P5 fill:#92400E,color:#fff
+    style P6 fill:#065F46,color:#fff
 ```
+
+**Phase 0** is skipped when launching via `/pentest:pentest` — scope is collected by the command before the orchestrator is deployed.
+
+**Phase 0b** resolves Kali server availability. When `/pentest:pentest` is used, this is also pre-resolved and the orchestrator skips the check.
+
+**Phase 5 (Post-Exploitation)** is conditional — it only activates when both a Kali server is connected (`.pentest-mks.json` active) and at least one finding confirms a CVE or RCE. It is never run speculatively.
 
 Within each executor agent, a second approval gate exists between **Phase 2 (Experiment — safe probes only)** and **Phase 3 (Test — active exploitation)**. The executor presents its candidate vectors and waits for explicit confirmation before proceeding.
 
@@ -274,7 +379,7 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 ## Attack Coverage
 
 <details>
-<summary><strong>Injection (8)</strong> — SQLi, NoSQLi, CMDi, SSTI, XXE, LDAP, SAML, Type Juggling</summary>
+<summary><strong>Injection (9)</strong> — SQLi, NoSQLi, CMDi, SSTI, XXE, LDAP, SAML, Type Juggling, File Inclusion</summary>
 
 | Sub-category | Techniques |
 |-------------|-----------|
@@ -286,6 +391,7 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 | `ldap-injection` | LDAP filter injection |
 | `saml-injection` | SAML response manipulation, signature wrapping |
 | `type-juggling` | PHP loose comparison exploitation |
+| `file-inclusion` | LFI/RFI, PHP wrappers, log poisoning, path-to-inclusion |
 
 </details>
 
@@ -388,7 +494,7 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 </details>
 
 <details>
-<summary><strong>IP Infrastructure (9)</strong> — Port Scanning, DNS, SMB, MITM, Sniffing, DoS, VLAN, IPv6, Reference</summary>
+<summary><strong>IP Infrastructure (8)</strong> — Port Scanning, DNS, SMB, MITM, Sniffing, DoS, VLAN, IPv6</summary>
 
 | Sub-category | Key tools |
 |-------------|-----------|
@@ -400,7 +506,6 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 | `dos` | hping3, slowloris — authorized load testing only |
 | `vlan-hopping` | yersinia, 802.1Q double-tagging attack |
 | `ipv6` | IPv6 enumeration, rogue Router Advertisement, SLAAC attacks |
-| `reference` | Protocol reference files and scan feedback-loop matrices |
 
 </details>
 
@@ -495,13 +600,15 @@ outputs/{engagement}/
 ```
 claude-pentest/
 ├── .claude-plugin/
-│   └── marketplace.json             # Marketplace listing (Transilience Community Security Tools)
+│   └── marketplace.json             # Marketplace listing (claude-pentest)
 ├── plugins/
 │   └── pentest/
 │       ├── .claude-plugin/
-│       │   └── plugin.json          # Plugin metadata (v1.0.0, MIT)
+│       │   └── plugin.json          # Plugin metadata (MIT)
 │       ├── agents/                  # 15 agent .md files
 │       ├── docs/
+│       │   ├── CLAUDE.md            # Agent architecture overview
+│       │   ├── WORKFLOWS.md         # Planning & approval workflow reference
 │       │   └── reference/
 │       │       ├── OUTPUT_STRUCTURE.md
 │       │       └── TEST_PLAN_FORMAT.md
@@ -510,6 +617,7 @@ claude-pentest/
 │           ├── common-appsec-patterns/
 │           ├── cve-testing/
 │           ├── domain-assessment/
+│           ├── mks/                 # Metasploit-Kali Server tool preferences
 │           ├── web-application-mapping/
 │           └── pentest/
 │               ├── SKILL.md         # Main attack index
@@ -528,7 +636,7 @@ This plugin is for **authorized security testing only**. Before using this plugi
 - Define scope in writing (Rules of Engagement)
 - For full-scope engagements, confirm physical/social engineering is explicitly authorized
 
-Misuse of this software to access systems without authorization is illegal. The authors and Transilience AI are not responsible for unauthorized use.
+Misuse of this software to access systems without authorization is illegal. The authors are not responsible for unauthorized use.
 
 ---
 
