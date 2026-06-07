@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-pentest</h1>
   <p align="center">
-    A full penetration testing framework for Claude Code with 15 agents, 6 skill coordinators and 63 attack categories.
+    A full penetration testing framework for Claude Code with Kali MCP integration containing 15 agents, 6 skill coordinators and 63 attack categories.
     <br />
     Structured, human-in-the-loop, evidence-driven.
   </p>
