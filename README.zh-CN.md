@@ -38,7 +38,7 @@
 
 ## 这是什么
 
-`claude-pentest` 是一个 Claude Code 插件，它为 Claude 提供结构化的渗透测试能力。它不是一个脚本或扫描器 —— 而是一个 **agent 协调框架**：一个顶层编排器（orchestrator）部署专门的执行器（executor）agent，每个 agent 都遵循严格的 4 阶段工作流，并要求在任何主动利用（exploitation）开始前获得操作员批准。每一项发现都附带可运行的 PoC、捕获的 HTTP 证据，以及一张 Playwright 截图。
+`claude-pentest` 是一个 Claude Code 插件，它为 Claude 提供结构化的渗透测试能力。它不是一个脚本或扫描器 —— 而是一个 **agent 协调框架**：`/pentest:pentest` 命令在主会话中协调整个任务 —— 它执行侦察、向规划器（planner）agent 请求部署计划，然后并行部署专门的执行器（executor）agent（每个都遵循严格的 4 阶段工作流），将时间预算用于升级（escalation），并要求在任何主动利用（exploitation）开始前获得操作员批准。每一项发现都附带可运行的 PoC、捕获的 HTTP 证据，以及一张 Playwright 截图。
 
 **核心原则：**
 - 在每个升级节点都保持人工介入 —— 未经你的确认，Claude 无法进入利用阶段
@@ -80,7 +80,7 @@
 /pentest:pentest
 ```
 
-它会引导你完成范围（scope）收集、攻击画像（profile）选择、可选的 Kali 服务器配置，并自动在阶段 1（侦察）将控制权交给 Pentester Orchestrator。完整的命令参考请见下方的 [Slash 命令](#slash-命令)。
+它会引导你完成范围（scope）收集、攻击画像（profile）选择、可选的 Kali 服务器配置，然后自行执行整个任务（预检 → 侦察 → 规划 → 执行器部署 → 时间预算循环 → 报告）。完整的命令参考请见下方的 [Slash 命令](#slash-命令)。
 
 ---
 
@@ -90,16 +90,16 @@
 
 ### /pentest:pentest
 
-**用途：** 引导式任务启动器 —— 收集范围、攻击画像和 Kali 服务器配置，然后交给编排器。
+**用途：** 引导式任务启动器*兼*编排器 —— 收集范围、攻击画像和 Kali 服务器配置，然后在主会话中执行整个任务（由命令负责调度，因为该运行环境只允许一层子 agent 嵌套）。
 
 **流程：**
 1. 显示 ASCII 艺术横幅
 2. 询问是否将会话隔离到 pentest 插件（推荐 —— 可防止其他插件干扰任务）
-3. 检查是否存在已保存的范围（`.pentest-scope.json`）—— 若存在，则提供复用或输入新范围。输入新范围时收集 7 个范围字段：目标、任务名称、范围外限制、测试窗口、认证凭据、最大执行时间，以及彻底程度（Light / Medium / Deep / Full）
+3. 检查是否存在已保存的范围（`.pentest-scope.json`）—— 若存在，则提供复用或输入新范围。输入新范围时收集以下范围字段：目标、任务名称、范围外限制、时间预算（任务将消耗的配额）、认证凭据、彻底程度（Light / Medium / Deep / Full），以及交付物格式。目标、范围、认证和时间预算为自由文本输入；彻底程度和交付物格式为多选
 4. 检查是否存在已保存的攻击画像（`.pentest-attacks.json`）—— 若存在，则提供使用它或运行完整套件。若未找到画像，则提供内联模式选择（Full / Web 应用 / API 与云 / 自定义）
-5. 检查是否已配置 Kali 服务器（`.pentest-mks.json`）—— 若处于活动状态，则显示工具可用性并询问是否使用 MKS 端点
+5. 检查是否已配置 Kali 服务器（`.pentest-mks.json`）—— 若处于活动状态，则显示工具可用性并询问是否使用 MKS 端点；若未配置，则提供内联连接（输入 URL + `/health` 检查），免去你另行运行命令再重新启动
 6. 输出任务摘要供审阅
-7. 在阶段 1（侦察）自动部署 Pentester Orchestrator —— 阶段 0 范围确认与阶段 0b MKS 检查会被跳过，因为两者都已由命令处理
+7. 在主会话中执行整个任务：预检可达性检查 → 部署侦察 agent → 调用 `pentester-orchestrator` 规划器以获取部署计划 → 提交计划供批准 → 并行部署专门的执行器 agent → 时间预算配额循环（升级）→ 聚合 → 写出 `pentest-report.json` + `report.md`
 
 **隔离说明：** 若在第 2 步选择了隔离，Claude 会在本次会话期间将自身约束在 pentest 插件的 agent 和 skill 范围内。当运行 `/pentest:pentest-exit` 或 `/clear` 重置上下文时，该约束将被解除。
 
@@ -112,7 +112,7 @@
 **流程：**
 1. 读取任何已存在的 `.pentest-scope.json`，若找到则显示当前范围
 2. 若找到已存在的范围：提供更新或取消；当任务处于活动状态时，检测目标的重大变更与轻微变更（重大变更 = 不同的域名或 IP 子网，会触发带选项的警告）
-3. 依次收集全部 7 个范围字段
+3. 依次收集各范围字段（目标/范围/认证/时间预算为自由文本；彻底程度和交付物格式为多选）
 4. 写入 `.pentest-scope.json`，状态为 `status: pending`
 5. 显示带后续步骤的确认信息块
 
@@ -120,7 +120,7 @@
 
 ### /pentest:pentest-attacks
 
-**用途：** 在不启动渗透测试的情况下定义编排器应使用的攻击类别。保存该画像以便跨会话复用。
+**用途：** 在不启动渗透测试的情况下定义任务应覆盖的攻击类别。保存该画像以便跨会话复用。
 
 **流程：**
 1. 读取任何已存在的 `.pentest-attacks.json`，若找到则显示；提供更新或保留
@@ -146,7 +146,7 @@
 4. 写入 `.pentest-mks.json`，状态为 `status: active`
 5. 显示活动的 MKS 会话信息块，并附带每个工具的 curl 用法示例
 
-当 MKS 处于活动状态时，若确认了 CVE 或 RCE 发现，编排器会启用 **阶段 5（后渗透）** —— 通过 MKS 端点部署 Metasploit。
+当 MKS 处于活动状态时，若确认了 CVE 或 RCE 发现，时间预算循环会执行**后渗透** —— 通过 MKS 端点部署 Metasploit。它绝不会在没有依据的情况下推测性执行。
 
 ---
 
@@ -173,7 +173,7 @@
 
 | 文件 | 写入者 | 用途 |
 |------|-----------|---------|
-| `.pentest-scope.json` | `/pentest:pentest-scope`、`/pentest:pentest` | 目标、任务名称、范围外、窗口、认证、时序、彻底程度，以及 `status: pending\|active` |
+| `.pentest-scope.json` | `/pentest:pentest-scope`、`/pentest:pentest` | 目标、任务名称、范围外、认证、timing（时间预算/配额）、彻底程度、output_formats，以及 `status: pending\|active` |
 | `.pentest-attacks.json` | `/pentest:pentest-attacks`、`/pentest:pentest` | 攻击模式和带 skill/executor 映射的所选类别，以及 `status: pending\|active` |
 | `.pentest-mks.json` | `/pentest:pentest-kali` | Kali 服务器 URL、核心工具可用性标志，以及 `status: active` |
 
@@ -187,10 +187,10 @@
 /pentest:pentest 在启动时读取全部三个文件：
   • 找到 scope   → 提供复用或新范围；确认后设为 status: active
   • 找到 attacks → 提供复用或完整套件
-  • 找到 MKS     → 提供 MKS 工具或跳过；向编排器传递 mks_active
+  • 找到 MKS     → 提供 MKS 工具或跳过；将 mks_active 带入任务
         ↓
-Pentester Orchestrator 接收已确认的范围 + 攻击模式 + MKS 状态。
-跳过阶段 0（范围）和阶段 0b（MKS 检查）—— 两者均已预先解析。
+命令执行整个任务：预检 → 侦察 → 规划器 → 批准 →
+执行器部署 → 时间预算循环 → 报告。范围与 MKS 均已解析。
         ↓
 /pentest:pentest-exit 将 scope 和 attacks 重置为 status: pending。
 .pentest-mks.json 保持活动（服务器连接跨任务持续）。
@@ -220,15 +220,17 @@ Pentester Orchestrator 接收已确认的范围 + 攻击模式 + MKS 状态。
 
 ```mermaid
 graph TD
-    User["👤 Operator"] --> Orch["🎯 Pentester Orchestrator"]
+    User["👤 操作员"] --> CMD["⌨️ /pentest:pentest 命令<br/>（负责编排）"]
+    CMD --> PLAN["🎯 pentester-orchestrator<br/>（规划器 — 返回计划）"]
+    PLAN -.部署计划.-> CMD
 
-    Orch --> WAM["🗺️ web-application-mapping"]
-    Orch --> CAP["🛡️ common-appsec-patterns"]
-    Orch --> CVE["🔍 cve-testing"]
-    Orch --> DOM["🌐 domain-assessment"]
-    Orch --> PKI["🗡️ pentest (main index)"]
-    Orch --> AUTH["🔐 authenticating"]
-    Orch --> PATT["📦 patt-fetcher"]
+    CMD --> WAM["🗺️ web-application-mapping"]
+    CMD --> CAP["🛡️ common-appsec-patterns"]
+    CMD --> CVE["🔍 cve-testing"]
+    CMD --> DOM["🌐 domain-assessment"]
+    CMD --> PKI["🗡️ pentest (主索引)"]
+    CMD --> AUTH["🔐 authenticating"]
+    CMD --> PATT["📦 patt-fetcher"]
 
     WAM --> SC["inventory-software-catalog"]
     WAM --> DS["inventory-directory-scanner"]
@@ -260,7 +262,8 @@ graph TD
     DOMT --> OUT
     EXEC --> OUT
 
-    style Orch fill:#7C3AED,color:#fff
+    style CMD fill:#7C3AED,color:#fff
+    style PLAN fill:#4C1D95,color:#fff
     style WAM fill:#1D4ED8,color:#fff
     style CAP fill:#1D4ED8,color:#fff
     style CVE fill:#1D4ED8,color:#fff
@@ -276,41 +279,42 @@ graph TD
 
 ```mermaid
 flowchart LR
-    P0["Phase 0\nScope Confirmation\n(skipped via /pentest:pentest)"]
-    P0B["Phase 0b\nMKS Check"]
-    P1["Phase 1\nRecon & Inventory"]
-    P2["Phase 2\nTest Plan"]
-    GATE1{{"✋ Operator\nApproval"}}
-    P3["Phase 3\nExecutor Deployment"]
-    P4["Phase 4\nFindings Aggregate"]
-    GATE2{{"✋ Operator\nConfirmation"}}
-    P5["Phase 5\nPost-Exploitation\n(MKS + RCE only)"]
-    P6["Phase 6\nReport"]
+    P1["6.1 初始化\n(时间配额)"]
+    P2["6.2 预检\n(可达性)"]
+    P3["6.3 侦察\n与清点"]
+    P4["6.4 规划\n(规划器 agent)"]
+    GATE1{{"✋ 操作员\n批准"}}
+    P5["6.5 执行器\n部署"]
+    P6["6.6 配额循环\n(升级)"]
+    P7["6.7 聚合"]
+    GATE2{{"✋ 操作员\n确认"}}
+    P8["报告\njson + report.md"]
 
-    P0 --> P0B
-    P0B -->|"MKS status\nresolved"| P1
-    P1 -->|"Inventory\ncomplete"| P2
-    P2 --> GATE1
-    GATE1 -->|"Approved"| P3
-    GATE1 -->|"Modify"| P2
-    P3 -->|"All executors\ncomplete"| P4
-    P4 --> GATE2
-    GATE2 -->|"Confirmed"| P5
-    P5 -->|"MKS + RCE confirmed\n(conditional)"| P6
-    GATE2 -->|"No post-exploitation"| P6
+    P1 --> P2
+    P2 -->|"可达"| P3
+    P3 -->|"清点\n完成"| P4
+    P4 --> GATE1
+    GATE1 -->|"批准"| P5
+    GATE1 -->|"修改"| P4
+    P5 --> P6
+    P6 -->|"配额耗尽 /\n攻击面穷尽"| P7
+    P7 --> GATE2
+    GATE2 -->|"确认"| P8
 
     style GATE1 fill:#DC2626,color:#fff
     style GATE2 fill:#DC2626,color:#fff
-    style P0 fill:#374151,color:#fff
-    style P5 fill:#92400E,color:#fff
-    style P6 fill:#065F46,color:#fff
+    style P2 fill:#374151,color:#fff
+    style P6 fill:#92400E,color:#fff
+    style P8 fill:#065F46,color:#fff
 ```
 
-**阶段 0** 在通过 `/pentest:pentest` 启动时会被跳过 —— 范围在部署编排器之前已由命令收集。
+`/pentest:pentest` 命令自行执行这些步骤（该运行环境只允许一层子 agent 嵌套，因此由命令——而非某个 agent——来部署执行器）。`pentester-orchestrator` agent 是一个**规划器**：在步骤 6.4，它读取范围 + 侦察结果并返回部署计划，由命令提交批准后再执行。
 
-**阶段 0b** 解析 Kali 服务器的可用性。使用 `/pentest:pentest` 时，这一步也已预先解析，编排器会跳过该检查。
+**预检（6.2）** 在部署任何执行器之前，如目标不可达则提前中止并给出可操作的提示。
 
-**阶段 5（后渗透）** 是有条件的 —— 仅当同时满足以下两点时才会激活：已连接 Kali 服务器（`.pentest-mks.json` 活动），且至少有一项发现确认了 CVE 或 RCE。它绝不会被推测性地运行。
+**时间预算是配额，而非上限（6.6）** —— 第一波之后，命令会将剩余预算用于升级（认证后重测、漏洞串联、用合适的工具确认未确认的发现、扩大 payload 集）。提前结束需记录“攻击面已穷尽”的理由。
+
+**后渗透** 仅当同时满足以下两点时才在配额循环中运行：已连接 Kali 服务器（`.pentest-mks.json` 活动），且至少有一项发现确认了 CVE 或 RCE。它绝不会被推测性地运行。
 
 在每个执行器 agent 内部，**阶段 2（实验 —— 仅安全探测）** 与 **阶段 3（测试 —— 主动利用）** 之间存在第二道批准门。执行器会展示其候选向量并等待明确确认后才继续。
 
@@ -335,7 +339,7 @@ flowchart LR
 
 | Agent | 描述 | 工具 |
 |-------|-------------|-------|
-| `pentester-orchestrator` | 协调完整任务：部署执行器、监控进度、聚合发现、生成报告。从不直接执行攻击。 | Task, TaskOutput, Read, Write, Bash, Glob, Grep |
+| `pentester-orchestrator` | **规划器。** 读取已确认的范围 + 侦察结果并返回部署计划（`plan/deployment-plan.json` + `plan/test-plan.md`）。不部署 agent —— 由 `/pentest:pentest` 命令负责部署（单层子 agent 嵌套约束）。 | Read, Write, Bash, Glob, Grep |
 
 ### 执行器 Agent
 
@@ -616,6 +620,7 @@ claude-pentest/
 │       │   ├── WORKFLOWS.md         # 规划与批准工作流参考
 │       │   └── reference/
 │       │       ├── OUTPUT_STRUCTURE.md
+│       │       ├── REPORT_CONTRACT.md
 │       │       └── TEST_PLAN_FORMAT.md
 │       └── skills/
 │           ├── authenticating/

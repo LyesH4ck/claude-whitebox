@@ -4,6 +4,95 @@ All notable changes to `claude-pentest` are documented here.
 
 ---
 
+## [2.2.6] — 2026-06-08
+
+Engagement-driven improvement pass. Headline: a re-architecture so the multi-agent design actually
+runs (orchestration could not delegate), a time-budget that is spent rather than merely capped, and a
+fixed deliverable contract. Also: pre-flight reachability, coverage-gap escalation, launch-time
+deliverable-format selection, inline Kali-server connect, false-positive mitigation, and a scope-
+question UX cleanup.
+
+### Fixed
+- **Orchestration no longer collapses to a single generalist agent.** This harness allows only one
+  level of subagent nesting, so the `pentester-orchestrator` — dispatched as a subagent — could not
+  call `Task`/`AskUserQuestion` and silently fell back to one agent improvising the whole engagement
+  via raw HTTP, with the specialized executors never running. **Re-architected:** the
+  `pentester-orchestrator` is now a **planner** that reads scope + recon and writes
+  `plan/deployment-plan.json` + `plan/test-plan.md`, and the `/pentest:pentest` command (running in
+  the main session, which genuinely has `Task`) now owns dispatch — it deploys recon agents, invokes
+  the planner, presents the plan, deploys the specialized executor agents in parallel, aggregates, and
+  reports. The multi-agent design now actually runs.
+
+### Added
+- **Time-budget quota loop.** The command captures a start timestamp and parses the timing value into
+  a budget treated as a **quota to spend, not a ceiling to stay under**. It checkpoints at ~50% and,
+  while budget remains and the surface is not exhausted, dispatches escalation waves (authenticated
+  re-test, vulnerability chaining, tool-confirming unconfirmed findings, broader payloads, and
+  post-exploitation only when MKS is active + a CVE/RCE finding is confirmed). Finishing early now
+  requires a logged `surface-exhausted` justification rather than being the default.
+- **Pre-flight reachability check.** Before deploying anything, the command does a liveness +
+  fingerprint request and aborts early with an actionable message if the target is down.
+- **Coverage-gap escalation.** Suspected-but-unconfirmed findings (e.g. a DOM-XSS the first pass could
+  not browser-confirm) are flagged in the plan with a `confirmation_tool` and get a dedicated
+  escalation attempt with the right tool (Playwright) when budget remains — they are no longer left as
+  footnotes.
+- **`docs/reference/REPORT_CONTRACT.md` — a fixed deliverable contract.** Defines the
+  `pentest-report.json` schema (engagement metadata, `findings[]` with confidence/status/owasp,
+  summary counts, `tested_not_vulnerable`, `coverage_gaps`, `de_scoped_for_time`, `time_budget`), the
+  **required** consolidated `report.md` template, a consistent severity rubric, and the OWASP Top-10
+  (2021) mapping. Two runs now produce structurally identical deliverable sets; a run is incomplete
+  without `report.md`.
+- **Thoroughness ↔ time reconciliation.** The planner reconciles requested thoroughness against the
+  time quota in the plan (breadth-first when tight) and records `effective_thoroughness` +
+  `de_scoped_for_time`, so the report never claims "Full" while delivering "Medium".
+- **Launch-time deliverable-format selection.** A multi-select question lets the operator request
+  extra artifacts on top of the always-produced `report.md` + `pentest-report.json`: executive
+  summary, remediation plan, CSV findings table, and PDF/DOCX renders. Stored as `output_formats` in
+  `.pentest-scope.json`; the report step produces exactly those. PDF/DOCX render via pandoc and
+  degrade gracefully to markdown with a warning if pandoc is unavailable.
+- **Inline Kali-server (MKS) connect.** When no MKS is configured, `/pentest:pentest` now offers to
+  connect one inline (URL prompt + `/health` check + writes `.pentest-mks.json`) instead of telling
+  the operator to run `/pentest:pentest-kali` and relaunch.
+- **False-positive mitigation.** The aggregation step runs a verification + de-duplication pass:
+  findings on the same vuln-class/endpoint/parameter are merged, and a finding may only be labelled
+  `confirmed` with reproducible evidence (executed PoC or deterministic request/response) — weaker
+  signals are downgraded to `probable`/`unconfirmed` and surfaced as coverage gaps.
+- **MKS resilience to a broken Kali server.** The plugin no longer trusts the server's `/health`
+  verdict (some builds run their internal `which` probe as an argv list, which crashes and
+  under-reports every tool as missing even when installed). Tool availability is now re-verified
+  through the unaffected `/api/command` string endpoint, and the `mks` skill probes capability once and
+  routes tool calls through `/api/command` when the structured `/api/tools/*` endpoints are broken —
+  with a documented shell-injection caveat for that path. Connecting an MKS no longer falsely reports
+  installed tools as missing, and engagements keep working against an affected server.
+
+### Changed
+- **Scope questions.** Target, engagement name, out-of-scope, time budget, and auth are now collected
+  as free-text prompts (no canned `localhost`-style options that never fit real targets). Time is a
+  single "time budget" quota field; thoroughness and deliverable formats are multiple choice. Applies
+  to both `/pentest:pentest` and `/pentest:pentest-scope`. The `.pentest-scope.json` schema uses a
+  single `timing` field plus a new `output_formats` array (legacy `window` is read for backward
+  compatibility when present).
+- `commands/pentest.md` — Step 6 ("Orchestrator Handoff") replaced by Step 6.1–6.7
+  (Init → Pre-flight → Recon → Planning → Approval+Dispatch → Quota loop → Aggregate+Report).
+  `allowed-tools` gains `TaskOutput`, `Bash`, `Glob`, `Grep` so the command can timestamp, monitor,
+  aggregate, and write deliverables.
+- `agents/pentester-orchestrator.md` — rewritten from coordinator to planner; `tools` reduced to
+  `[Read, Write, Bash, Glob, Grep]` (removed the non-functional `Task`/`TaskOutput`/`AskUserQuestion`);
+  added the deployment-plan schema, the thoroughness/time reconciliation rules, and a prominent
+  explanation of the nesting constraint.
+- `docs/WORKFLOWS.md`, `docs/CLAUDE.md`, `docs/reference/OUTPUT_STRUCTURE.md`, and
+  `docs/reference/TEST_PLAN_FORMAT.md` updated to the command-owns-orchestration / orchestrator-as-planner
+  model and to point at `REPORT_CONTRACT.md`.
+- `skills/mks/SKILL.md` — added a capability probe, a layered fallback (structured → `/api/command` →
+  local Bash), per-tool `/api/command` command strings, and `which`-based tool verification.
+  `commands/pentest-kali.md` and the inline MKS connect in `commands/pentest.md` re-verify `/health`
+  "missing" verdicts via `/api/command`.
+
+### Version
+- `plugin.json` and `marketplace.json` bumped to 2.2.6
+
+---
+
 ## [2.2.5] — 2026-06-07
 
 Third audit pass — full file-by-file read of every agent, skill, reference doc, and config.

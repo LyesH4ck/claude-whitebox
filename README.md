@@ -36,7 +36,7 @@
 
 ## What this is
 
-`claude-pentest` is a Claude Code plugin that gives Claude structured penetration testing capabilities. It is not a script or scanner, it is an **agent coordination framework**: a top-level orchestrator deploys specialized executor agents, each following a strict 6-phase workflow, requiring operator approval before any active exploitation begins. Every finding ships with a working PoC, captured HTTP evidence, and a Playwright screenshot.
+`claude-pentest` is a Claude Code plugin that gives Claude structured penetration testing capabilities. It is not a script or scanner, it is an **agent coordination framework**: the `/pentest:pentest` command coordinates the engagement from the main session — it runs reconnaissance, asks a planner agent for a deployment plan, then deploys specialized executor agents (each following a strict 4-phase workflow) in parallel, spending the time budget on escalation, and requiring operator approval before any active exploitation begins. Every finding ships with a working PoC, captured HTTP evidence, and a Playwright screenshot.
 
 **Key principles:**
 - Human-in-the-loop at every escalation point — Claude cannot proceed to exploitation without your confirmation
@@ -78,7 +78,7 @@ The recommended way to start an engagement is via the guided slash command:
 /pentest:pentest
 ```
 
-This walks you through scope collection, attack profile selection, optional Kali server configuration, and automatically hands off to the Pentester Orchestrator at Phase 1 (Recon). See [Slash Commands](#slash-commands) below for the full command reference.
+This walks you through scope collection, attack profile selection, optional Kali server configuration, then runs the engagement itself (pre-flight → recon → planning → executor deployment → time-budget loop → report). See [Slash Commands](#slash-commands) below for the full command reference.
 
 ---
 
@@ -88,16 +88,16 @@ Five slash commands are included for guided session management. They are auto-di
 
 ### /pentest:pentest
 
-**Purpose:** Guided engagement launcher — collects scope, attack profile, and Kali server configuration, then hands off to the orchestrator.
+**Purpose:** Guided engagement launcher *and* orchestrator — collects scope, attack profile, and Kali server configuration, then runs the engagement from the main session (the command owns dispatch because the harness allows only one level of subagent nesting).
 
 **Flow:**
 1. Displays ASCII art banner
 2. Asks whether to isolate the session to the pentest plugin (recommended — prevents other plugins interfering with the engagement)
-3. Checks for a saved scope (`.pentest-scope.json`) — if found, offers to reuse it or enter new scope. Collects 7 scope fields if entering new scope: target, engagement name, out-of-scope restrictions, testing window, authentication credentials, max execution time, and thoroughness level (Light / Medium / Deep / Full)
+3. Checks for a saved scope (`.pentest-scope.json`) — if found, offers to reuse it or enter new scope. Collects the scope fields if entering new scope: target, engagement name, out-of-scope restrictions, time budget (the quota the engagement spends), authentication credentials, thoroughness level (Light / Medium / Deep / Full), and deliverable formats. Target, scope, auth, and time budget are free-text prompts; thoroughness and deliverable formats are multiple choice
 4. Checks for a saved attack profile (`.pentest-attacks.json`) — if found, offers to use it or run the full suite. If no profile is found, offers inline mode selection (Full / Web app / API & cloud / Custom)
-5. Checks for a configured Kali server (`.pentest-mks.json`) — if active, displays tool availability and asks whether to use MKS endpoints
+5. Checks for a configured Kali server (`.pentest-mks.json`) — if active, displays tool availability and asks whether to use MKS endpoints; if none is configured, offers to connect one inline (URL prompt + `/health` check) so you don't have to run a separate command and relaunch
 6. Outputs an engagement summary for review
-7. Automatically deploys the Pentester Orchestrator at Phase 1 (Recon) — Phase 0 scope confirmation and Phase 0b MKS check are skipped as both were handled by the command
+7. Runs the engagement from the main session: pre-flight reachability check → dispatches recon agents → invokes the `pentester-orchestrator` planner for a deployment plan → presents the plan for approval → deploys the specialized executor agents in parallel → time-budget quota loop (escalation) → aggregates → writes `pentest-report.json` + `report.md`
 
 **Isolation note:** If isolation is selected in step 2, Claude constrains itself to pentest plugin agents and skills for the duration of the session. This constraint is lifted when `/pentest:pentest-exit` runs or `/clear` resets the context.
 
@@ -110,7 +110,7 @@ Five slash commands are included for guided session management. They are auto-di
 **Flow:**
 1. Reads any existing `.pentest-scope.json` and displays current scope if found
 2. If an existing scope is found: offers update or cancel; detects drastic vs minor target changes when an engagement is active (drastic change = different domain or IP subnet triggers a warning with options)
-3. Collects all 7 scope fields in sequence
+3. Collects the scope fields in sequence (free-text for target/scope/auth/time budget; multiple choice for thoroughness and deliverable formats)
 4. Writes `.pentest-scope.json` with `status: pending`
 5. Displays a confirmation block with next steps
 
@@ -118,7 +118,7 @@ Five slash commands are included for guided session management. They are auto-di
 
 ### /pentest:pentest-attacks
 
-**Purpose:** Define which attack categories the orchestrator should use, without launching a pentest. Saves the profile for reuse across sessions.
+**Purpose:** Define which attack categories the engagement should cover, without launching a pentest. Saves the profile for reuse across sessions.
 
 **Flow:**
 1. Reads any existing `.pentest-attacks.json` and displays it if found; offers update or keep
@@ -144,7 +144,7 @@ Five slash commands are included for guided session management. They are auto-di
 4. Writes `.pentest-mks.json` with `status: active`
 5. Displays the active MKS session block with curl usage examples for each tool
 
-When MKS is active, the orchestrator enables **Phase 5 (Post-Exploitation)** if a CVE or RCE finding is confirmed — deploying Metasploit via the MKS endpoint.
+When MKS is active, the time-budget loop runs **post-exploitation** if a CVE or RCE finding is confirmed — deploying Metasploit via the MKS endpoint. It never runs speculatively.
 
 ---
 
@@ -171,7 +171,7 @@ Three JSON files persist session configuration at the project root. They decoupl
 
 | File | Written by | Purpose |
 |------|-----------|---------|
-| `.pentest-scope.json` | `/pentest:pentest-scope`, `/pentest:pentest` | Target, engagement name, out-of-scope, window, auth, timing, thoroughness, and `status: pending\|active` |
+| `.pentest-scope.json` | `/pentest:pentest-scope`, `/pentest:pentest` | Target, engagement name, out-of-scope, auth, timing (time budget/quota), thoroughness, output_formats, and `status: pending\|active` |
 | `.pentest-attacks.json` | `/pentest:pentest-attacks`, `/pentest:pentest` | Attack mode and selected categories with skill/executor mapping, and `status: pending\|active` |
 | `.pentest-mks.json` | `/pentest:pentest-kali` | Kali server URL, essential tool availability flags, and `status: active` |
 
@@ -185,10 +185,10 @@ Three JSON files persist session configuration at the project root. They decoupl
 /pentest:pentest reads all three files at launch:
   • scope found   → offers reuse or new scope; sets status: active on confirm
   • attacks found → offers reuse or full suite
-  • MKS found     → offers MKS tools or skip; passes mks_active to orchestrator
+  • MKS found     → offers MKS tools or skip; carries mks_active into the engagement
         ↓
-Pentester Orchestrator receives confirmed scope + attack mode + MKS status.
-Skips Phase 0 (scope) and Phase 0b (MKS check) — both pre-resolved.
+The command runs the engagement: pre-flight → recon → planner → approval →
+executor deployment → time-budget loop → report. Scope and MKS are already resolved.
         ↓
 /pentest:pentest-exit resets scope and attacks to status: pending.
 .pentest-mks.json is left active (server connection persists across engagements).
@@ -218,15 +218,17 @@ After `/pentest:pentest-exit`, `.pentest-scope.json` and `.pentest-attacks.json`
 
 ```mermaid
 graph TD
-    User["👤 Operator"] --> Orch["🎯 Pentester Orchestrator"]
+    User["👤 Operator"] --> CMD["⌨️ /pentest:pentest command<br/>(owns orchestration)"]
+    CMD --> PLAN["🎯 pentester-orchestrator<br/>(planner — returns a plan)"]
+    PLAN -.deployment plan.-> CMD
 
-    Orch --> WAM["🗺️ web-application-mapping"]
-    Orch --> CAP["🛡️ common-appsec-patterns"]
-    Orch --> CVE["🔍 cve-testing"]
-    Orch --> DOM["🌐 domain-assessment"]
-    Orch --> PKI["🗡️ pentest (main index)"]
-    Orch --> AUTH["🔐 authenticating"]
-    Orch --> PATT["📦 patt-fetcher"]
+    CMD --> WAM["🗺️ web-application-mapping"]
+    CMD --> CAP["🛡️ common-appsec-patterns"]
+    CMD --> CVE["🔍 cve-testing"]
+    CMD --> DOM["🌐 domain-assessment"]
+    CMD --> PKI["🗡️ pentest (main index)"]
+    CMD --> AUTH["🔐 authenticating"]
+    CMD --> PATT["📦 patt-fetcher"]
 
     WAM --> SC["inventory-software-catalog"]
     WAM --> DS["inventory-directory-scanner"]
@@ -258,7 +260,8 @@ graph TD
     DOMT --> OUT
     EXEC --> OUT
 
-    style Orch fill:#7C3AED,color:#fff
+    style CMD fill:#7C3AED,color:#fff
+    style PLAN fill:#4C1D95,color:#fff
     style WAM fill:#1D4ED8,color:#fff
     style CAP fill:#1D4ED8,color:#fff
     style CVE fill:#1D4ED8,color:#fff
@@ -274,41 +277,42 @@ graph TD
 
 ```mermaid
 flowchart LR
-    P0["Phase 0\nScope Confirmation\n(skipped via /pentest:pentest)"]
-    P0B["Phase 0b\nMKS Check"]
-    P1["Phase 1\nRecon & Inventory"]
-    P2["Phase 2\nTest Plan"]
+    P1["6.1 Init\n(time quota)"]
+    P2["6.2 Pre-flight\n(reachability)"]
+    P3["6.3 Recon\n& Inventory"]
+    P4["6.4 Planning\n(planner agent)"]
     GATE1{{"✋ Operator\nApproval"}}
-    P3["Phase 3\nExecutor Deployment"]
-    P4["Phase 4\nFindings Aggregate"]
+    P5["6.5 Executor\nDeployment"]
+    P6["6.6 Quota loop\n(escalation)"]
+    P7["6.7 Aggregate"]
     GATE2{{"✋ Operator\nConfirmation"}}
-    P5["Phase 5\nPost-Exploitation\n(MKS + RCE only)"]
-    P6["Phase 6\nReport"]
+    P8["Report\njson + report.md"]
 
-    P0 --> P0B
-    P0B -->|"MKS status\nresolved"| P1
-    P1 -->|"Inventory\ncomplete"| P2
-    P2 --> GATE1
-    GATE1 -->|"Approved"| P3
-    GATE1 -->|"Modify"| P2
-    P3 -->|"All executors\ncomplete"| P4
-    P4 --> GATE2
-    GATE2 -->|"Confirmed"| P5
-    P5 -->|"MKS + RCE confirmed\n(conditional)"| P6
-    GATE2 -->|"No post-exploitation"| P6
+    P1 --> P2
+    P2 -->|"reachable"| P3
+    P3 -->|"inventory\ncomplete"| P4
+    P4 --> GATE1
+    GATE1 -->|"Approved"| P5
+    GATE1 -->|"Modify"| P4
+    P5 --> P6
+    P6 -->|"quota spent /\nsurface exhausted"| P7
+    P7 --> GATE2
+    GATE2 -->|"Confirmed"| P8
 
     style GATE1 fill:#DC2626,color:#fff
     style GATE2 fill:#DC2626,color:#fff
-    style P0 fill:#374151,color:#fff
-    style P5 fill:#92400E,color:#fff
-    style P6 fill:#065F46,color:#fff
+    style P2 fill:#374151,color:#fff
+    style P6 fill:#92400E,color:#fff
+    style P8 fill:#065F46,color:#fff
 ```
 
-**Phase 0** is skipped when launching via `/pentest:pentest` — scope is collected by the command before the orchestrator is deployed.
+The `/pentest:pentest` command runs these steps itself (the harness allows only one level of subagent nesting, so the command — not an agent — dispatches the executors). The `pentester-orchestrator` agent is a **planner**: at step 6.4 it reads scope + recon and returns a deployment plan, which the command presents for approval and then executes.
 
-**Phase 0b** resolves Kali server availability. When `/pentest:pentest` is used, this is also pre-resolved and the orchestrator skips the check.
+**Pre-flight (6.2)** aborts early with an actionable message if the target is unreachable, before any executor is deployed.
 
-**Phase 5 (Post-Exploitation)** is conditional — it only activates when both a Kali server is connected (`.pentest-mks.json` active) and at least one finding confirms a CVE or RCE. It is never run speculatively.
+**The time budget is a quota, not a ceiling (6.6)** — after the first wave, the command spends remaining budget escalating (authenticated re-test, vulnerability chaining, confirming unconfirmed findings with the right tool, broader payloads). Finishing early requires a logged "surface exhausted" justification.
+
+**Post-exploitation** runs inside the quota loop only when both a Kali server is connected (`.pentest-mks.json` active) and at least one finding confirms a CVE or RCE. It is never run speculatively.
 
 Within each executor agent, a second approval gate exists between **Phase 2 (Experiment — safe probes only)** and **Phase 3 (Test — active exploitation)**. The executor presents its candidate vectors and waits for explicit confirmation before proceeding.
 
@@ -333,7 +337,7 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 
 | Agent | Description | Tools |
 |-------|-------------|-------|
-| `pentester-orchestrator` | Coordinates full engagements: deploys executors, monitors progress, aggregates findings, generates reports. Never executes attacks directly. | Task, TaskOutput, Read, Write, Bash, Glob, Grep |
+| `pentester-orchestrator` | **Planner.** Reads confirmed scope + recon and returns a deployment plan (`plan/deployment-plan.json` + `plan/test-plan.md`). Does not deploy agents — the `/pentest:pentest` command dispatches (one-level subagent-nesting constraint). | Read, Write, Bash, Glob, Grep |
 
 ### Executor Agents
 
@@ -614,6 +618,7 @@ claude-pentest/
 │       │   ├── WORKFLOWS.md         # Planning & approval workflow reference
 │       │   └── reference/
 │       │       ├── OUTPUT_STRUCTURE.md
+│       │       ├── REPORT_CONTRACT.md
 │       │       └── TEST_PLAN_FORMAT.md
 │       └── skills/
 │           ├── authenticating/
