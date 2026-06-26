@@ -1,10 +1,10 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "claude-pentest",
-  "description": "Claude Code plugins for authorized security testing, AI threat testing, and reconnaissance",
+  "name": "claude-whitebox",
+  "description": "Claude Code plugins for authorized security testing: white-box source-code audit and black-box penetration testing, for AI threat testing and reconnaissance",
   "owner": {
-    "name": "Stickman230",
-    "email": "maxime.reynaud230@gmail.com"
+    "name": "Christophe Bailleux",
+    "email": "ch.bailleux@gmail.com"
   },
   "plugins": [
     {
@@ -15,6 +15,18 @@
       "author": {
         "name": "Stickman230",
         "url": "https://github.com/Stickman230"
+      },
+      "category": "security",
+      "strict": false
+    },
+    {
+      "name": "codeaudit",
+      "source": "./plugins/codeaudit",
+      "description": "White-box source code security audit - static source-to-sink analysis across 10 vulnerability domains with optional live correlation",
+      "version": "0.1.0",
+      "author": {
+        "name": "Christophe Bailleux",
+        "url": "https://github.com/LyesH4ck"
       },
       "category": "security",
       "strict": false

@@ -1,22 +1,22 @@
 <p align="center">
-  <h1 align="center">claude-pentest</h1>
+  <h1 align="center">claude-whitebox</h1>
   <p align="center">
     一个为 Claude Code 打造的完整渗透测试框架 —— 15 个 agent、6 个 skill 协调器、63 个攻击类别。
     <br />
     结构化、人工介入（human-in-the-loop）、以证据为驱动。
   </p>
   <p align="center">
-    <a href="https://github.com/Stickman230/claude-pentest/blob/main/LICENSE">
-      <img src="https://img.shields.io/github/license/Stickman230/claude-pentest?style=flat-square" alt="License" />
+    <a href="https://github.com/LyesH4ck/claude-whitebox/blob/main/LICENSE">
+      <img src="https://img.shields.io/github/license/LyesH4ck/claude-whitebox?style=flat-square" alt="License" />
     </a>
-    <a href="https://github.com/Stickman230/claude-pentest/stargazers">
-      <img src="https://img.shields.io/github/stars/Stickman230/claude-pentest?style=flat-square&color=yellow" alt="Stars" />
+    <a href="https://github.com/LyesH4ck/claude-whitebox/stargazers">
+      <img src="https://img.shields.io/github/stars/LyesH4ck/claude-whitebox?style=flat-square&color=yellow" alt="Stars" />
     </a>
-    <a href="https://github.com/Stickman230/claude-pentest/network/members">
-      <img src="https://img.shields.io/github/forks/Stickman230/claude-pentest?style=flat-square" alt="Forks" />
+    <a href="https://github.com/LyesH4ck/claude-whitebox/network/members">
+      <img src="https://img.shields.io/github/forks/LyesH4ck/claude-whitebox?style=flat-square" alt="Forks" />
     </a>
-    <a href="https://github.com/Stickman230/claude-pentest/issues">
-      <img src="https://img.shields.io/github/issues/Stickman230/claude-pentest?style=flat-square" alt="Issues" />
+    <a href="https://github.com/LyesH4ck/claude-whitebox/issues">
+      <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
     <img src="https://img.shields.io/badge/agents-15-0EA5E9?style=flat-square" alt="15 agents" />
@@ -38,7 +38,9 @@
 
 ## 这是什么
 
-`claude-pentest` 是一个 Claude Code 插件，它为 Claude 提供结构化的渗透测试能力。它不是一个脚本或扫描器 —— 而是一个 **agent 协调框架**：`/pentest:pentest` 命令在主会话中协调整个任务 —— 它执行侦察、向规划器（planner）agent 请求部署计划，然后并行部署专门的执行器（executor）agent（每个都遵循严格的 4 阶段工作流），将时间预算用于升级（escalation），并要求在任何主动利用（exploitation）开始前获得操作员批准。每一项发现都附带可运行的 PoC、捕获的 HTTP 证据，以及一张 Playwright 截图。
+`claude-whitebox` 是一个用于授权安全测试的 Claude Code 插件市场（marketplace），包含 **`pentest`**（黑盒渗透测试）和 **`codeaudit`**（白盒源代码审计）两个插件 —— 详见 [INSTALL.md](INSTALL.md)。
+
+**`pentest`** 插件为 Claude 提供结构化的渗透测试能力。它不是一个脚本或扫描器 —— 而是一个 **agent 协调框架**：`/pentest:pentest` 命令在主会话中协调整个任务 —— 它执行侦察、向规划器（planner）agent 请求部署计划，然后并行部署专门的执行器（executor）agent（每个都遵循严格的 4 阶段工作流），将时间预算用于升级（escalation），并要求在任何主动利用（exploitation）开始前获得操作员批准。每一项发现都附带可运行的 PoC、捕获的 HTTP 证据，以及一张 Playwright 截图。
 
 **核心原则：**
 - 在每个升级节点都保持人工介入 —— 未经你的确认，Claude 无法进入利用阶段
@@ -53,13 +55,14 @@
 首先添加 Marketplace
 ```bash
 # 在 Claude Code 内添加 marketplace
-/plugin marketplace add Stickman230/claude-pentest
+/plugin marketplace add LyesH4ck/claude-whitebox
 ```
 然后安装插件
 
 ```bash
 # 在 Claude Code 内安装插件
-/plugin install pentest@claude-pentest
+/plugin install pentest@claude-whitebox
+/plugin install codeaudit@claude-whitebox
 ```
 
 插件会安装到你项目的 `.claude/` 目录中。安装完成后，所有 agent、skill 和 slash 命令将在任何 Claude Code 会话中可用。
@@ -607,9 +610,9 @@ outputs/{engagement}/
 ## 仓库结构
 
 ```
-claude-pentest/
+claude-whitebox/
 ├── .claude-plugin/
-│   └── marketplace.json             # Marketplace 列表（claude-pentest）
+│   └── marketplace.json             # Marketplace 列表（claude-whitebox）
 ├── plugins/
 │   └── pentest/
 │       ├── .claude-plugin/
@@ -654,10 +657,10 @@ claude-pentest/
 
 MIT —— 详情见 [LICENSE](LICENSE)。
 
-Copyright © Stickman230
+Copyright © Stickman230 —— `pentest` 插件原作者。Fork 由 Christophe Bailleux 维护。
 
 ---
 
 <p align="center">
-  使用 <a href="https://claude.ai/code">Claude Code</a> 构建 · 由 <a href="https://github.com/Stickman230">Stickman230</a> 发布
+  使用 <a href="https://claude.ai/code">Claude Code</a> 构建 · 原作者 <a href="https://github.com/Stickman230">Stickman230</a> · 由 <a href="https://github.com/LyesH4ck">Christophe Bailleux</a> 维护
 </p>

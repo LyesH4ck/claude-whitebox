@@ -1,22 +1,22 @@
 <p align="center">
-  <h1 align="center">claude-pentest</h1>
+  <h1 align="center">claude-whitebox</h1>
   <p align="center">
     Un framework complet de tests d'intrusion pour Claude Code — 15 agents, 6 coordinateurs de skills, 63 catégories d'attaques.
     <br />
     Structuré, avec intervention humaine (human-in-the-loop), guidé par les preuves.
   </p>
   <p align="center">
-    <a href="https://github.com/Stickman230/claude-pentest/blob/main/LICENSE">
-      <img src="https://img.shields.io/github/license/Stickman230/claude-pentest?style=flat-square" alt="License" />
+    <a href="https://github.com/LyesH4ck/claude-whitebox/blob/main/LICENSE">
+      <img src="https://img.shields.io/github/license/LyesH4ck/claude-whitebox?style=flat-square" alt="License" />
     </a>
-    <a href="https://github.com/Stickman230/claude-pentest/stargazers">
-      <img src="https://img.shields.io/github/stars/Stickman230/claude-pentest?style=flat-square&color=yellow" alt="Stars" />
+    <a href="https://github.com/LyesH4ck/claude-whitebox/stargazers">
+      <img src="https://img.shields.io/github/stars/LyesH4ck/claude-whitebox?style=flat-square&color=yellow" alt="Stars" />
     </a>
-    <a href="https://github.com/Stickman230/claude-pentest/network/members">
-      <img src="https://img.shields.io/github/forks/Stickman230/claude-pentest?style=flat-square" alt="Forks" />
+    <a href="https://github.com/LyesH4ck/claude-whitebox/network/members">
+      <img src="https://img.shields.io/github/forks/LyesH4ck/claude-whitebox?style=flat-square" alt="Forks" />
     </a>
-    <a href="https://github.com/Stickman230/claude-pentest/issues">
-      <img src="https://img.shields.io/github/issues/Stickman230/claude-pentest?style=flat-square" alt="Issues" />
+    <a href="https://github.com/LyesH4ck/claude-whitebox/issues">
+      <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
     <img src="https://img.shields.io/badge/agents-15-0EA5E9?style=flat-square" alt="15 agents" />
@@ -38,7 +38,9 @@
 
 ## Qu'est-ce que c'est
 
-`claude-pentest` est un plugin Claude Code qui dote Claude de capacités structurées de tests d'intrusion. Ce n'est ni un script ni un scanner — c'est un **framework de coordination d'agents** : la commande `/pentest:pentest` coordonne l'engagement depuis la session principale — elle effectue la reconnaissance, demande un plan de déploiement à un agent planificateur, puis déploie en parallèle des agents exécuteurs spécialisés (chacun suivant un workflow strict en 4 phases), consacre le budget temps à l'escalade, et exige l'approbation de l'opérateur avant toute exploitation active. Chaque découverte est accompagnée d'un PoC fonctionnel, de preuves HTTP capturées et d'une capture d'écran Playwright.
+`claude-whitebox` est un marketplace de plugins Claude Code pour les tests de sécurité autorisés, regroupant **`pentest`** (test d'intrusion black-box) et **`codeaudit`** (audit de code source white-box) — voir [INSTALL.md](INSTALL.md).
+
+Le plugin **`pentest`** dote Claude de capacités structurées de tests d'intrusion. Ce n'est ni un script ni un scanner — c'est un **framework de coordination d'agents** : la commande `/pentest:pentest` coordonne l'engagement depuis la session principale — elle effectue la reconnaissance, demande un plan de déploiement à un agent planificateur, puis déploie en parallèle des agents exécuteurs spécialisés (chacun suivant un workflow strict en 4 phases), consacre le budget temps à l'escalade, et exige l'approbation de l'opérateur avant toute exploitation active. Chaque découverte est accompagnée d'un PoC fonctionnel, de preuves HTTP capturées et d'une capture d'écran Playwright.
 
 **Principes clés :**
 - Intervention humaine à chaque point d'escalade — Claude ne peut pas passer à l'exploitation sans votre confirmation
@@ -53,13 +55,14 @@
 Ajoutez d'abord le Marketplace
 ```bash
 # Ajoutez le marketplace depuis Claude Code
-/plugin marketplace add Stickman230/claude-pentest
+/plugin marketplace add LyesH4ck/claude-whitebox
 ```
 Installez ensuite le plugin
 
 ```bash
 # Installez le plugin depuis Claude Code
-/plugin install pentest@claude-pentest
+/plugin install pentest@claude-whitebox
+/plugin install codeaudit@claude-whitebox
 ```
 
 Le plugin s'installe dans le répertoire `.claude/` de votre projet. Une fois installé, tous les agents, skills et commandes slash sont disponibles dans n'importe quelle session Claude Code.
@@ -607,9 +610,9 @@ outputs/{engagement}/
 ## Structure du dépôt
 
 ```
-claude-pentest/
+claude-whitebox/
 ├── .claude-plugin/
-│   └── marketplace.json             # Référencement marketplace (claude-pentest)
+│   └── marketplace.json             # Référencement marketplace (claude-whitebox)
 ├── plugins/
 │   └── pentest/
 │       ├── .claude-plugin/
@@ -654,10 +657,10 @@ L'utilisation abusive de ce logiciel pour accéder à des systèmes sans autoris
 
 MIT — voir [LICENSE](LICENSE) pour les détails.
 
-Copyright © Stickman230
+Copyright © Stickman230 — auteur original du plugin `pentest`. Fork maintenu par Christophe Bailleux.
 
 ---
 
 <p align="center">
-  Conçu avec <a href="https://claude.ai/code">Claude Code</a> · Publié par <a href="https://github.com/Stickman230">Stickman230</a>
+  Conçu avec <a href="https://claude.ai/code">Claude Code</a> · À l'origine par <a href="https://github.com/Stickman230">Stickman230</a> · Maintenu par <a href="https://github.com/LyesH4ck">Christophe Bailleux</a>
 </p>

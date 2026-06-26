@@ -1,0 +1,121 @@
+# Installing claude-whitebox
+
+`claude-whitebox` is a Claude Code **plugin marketplace** bundling two security plugins:
+
+| Plugin | Command | What it does |
+|--------|---------|--------------|
+| `codeaudit` | `/codeaudit:codeaudit` | White-box source-code security audit (static source-to-sink, optional live correlation) |
+| `pentest`   | `/pentest:pentest`     | Black-box penetration testing framework (63 attack categories, agent-coordinated) |
+
+Both run inside Claude Code as agents, skills, and slash commands — no separate service to host.
+
+---
+
+## Prerequisites
+
+- **Claude Code** installed and working (`claude` in your shell, or the desktop/IDE app).
+  Install: https://docs.claude.com/en/docs/claude-code
+- **git** (to add the marketplace from GitHub).
+- Optional, per plugin — see [Optional tooling](#optional-tooling) below.
+
+---
+
+## Install from GitHub (recommended)
+
+Run these **inside a Claude Code session** (the `/plugin` commands are Claude Code built-ins):
+
+```text
+# 1. Register this marketplace
+/plugin marketplace add LyesH4ck/claude-whitebox
+
+# 2. Install the plugin(s) you want — name@marketplace
+/plugin install codeaudit@claude-whitebox
+/plugin install pentest@claude-whitebox
+```
+
+Plugins install into your project's `.claude/` directory. Once installed, every agent, skill, and slash
+command is available in any Claude Code session for that project.
+
+Verify:
+
+```text
+/plugin                 # lists installed plugins
+/help                   # the /codeaudit:* and /pentest:* commands now appear
+```
+
+---
+
+## Install locally (development / offline)
+
+If you have the repository checked out and want to run it without GitHub (e.g. while editing the
+skills), point the marketplace at the local path instead of the GitHub slug:
+
+```text
+/plugin marketplace add /home/cbailleux/PENTEST-AI/claude-whitebox
+/plugin install codeaudit@claude-whitebox
+/plugin install pentest@claude-whitebox
+```
+
+After editing any plugin file, refresh the marketplace so Claude Code picks up the change:
+
+```text
+/plugin marketplace update claude-whitebox
+```
+
+---
+
+## Quick start
+
+```text
+# White-box audit of the current repository
+/codeaudit:codeaudit
+
+# Penetration test (asks for scope + authorization first)
+/pentest:pentest
+```
+
+> Both plugins are for **authorized** security testing only. `pentest` requires explicit operator
+> approval before any active exploitation begins; `codeaudit` is read-only static analysis by default.
+
+---
+
+## Optional tooling
+
+These plugins work out of the box, but some features call external tools when present:
+
+**`codeaudit` — dependency (SCA) auditing** picks up whichever scanner is installed and otherwise falls
+back to manual version review:
+- `npm audit` (Node), `pip-audit` (Python), `osv-scanner`, `govulncheck` (Go), `trivy`.
+
+**`pentest` — active testing** uses, when available:
+- **Playwright MCP** — browser-driven evidence capture (XSS, CSP, CSRF PoCs, screenshots).
+- **Kali / MKS (Metasploit-Kali Server) MCP** — network and exploitation tooling (nmap, ffuf, sqlmap,
+  subfinder, …). See the project README for Kali MCP integration details.
+
+Missing tools degrade gracefully: the affected agent reports a coverage gap instead of failing.
+
+---
+
+## Updating
+
+```text
+/plugin marketplace update claude-whitebox     # pull latest marketplace metadata
+/plugin install codeaudit@claude-whitebox      # reinstall to get the newest version
+```
+
+## Uninstalling
+
+```text
+/plugin uninstall codeaudit
+/plugin uninstall pentest
+/plugin marketplace remove claude-whitebox
+```
+
+---
+
+## Attribution & license
+
+MIT-licensed. The `pentest` framework is the original work of
+[Stickman230](https://github.com/Stickman230) (`claude-pentest`); this distribution is maintained by
+[Christophe Bailleux](https://github.com/LyesH4ck), who authors the `codeaudit` plugin. The upstream
+copyright notice is retained in [`LICENSE`](./LICENSE) as MIT requires.
