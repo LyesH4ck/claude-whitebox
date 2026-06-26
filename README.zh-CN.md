@@ -89,7 +89,7 @@
 
 ## Slash 命令
 
-包含五个用于引导式会话管理的 slash 命令。它们会被 Claude Code 自动发现并按名称调用。
+两个插件都提供用于引导式会话管理的 slash 命令，由 Claude Code 自动发现并按名称调用。**`pentest`** 命令负责编排渗透测试任务；**`codeaudit`** 命令驱动白盒审计工作流。
 
 ### /pentest:pentest
 
@@ -167,6 +167,32 @@
 7. 提示在下一次任务前运行 `/clear` 以彻底重置上下文窗口
 
 **注意：** 任务输出在 `/clear` 之后仍保留在 `outputs/{name}/` 中。
+
+---
+
+### /codeaudit:codeaudit
+
+**用途：** 启动白盒源代码审计*并*进行编排 —— 收集范围（仓库路径、可选的 live URL、漏洞类别、深度），然后掌控整个流程：`code-recon` 基线 → 通过 `audit-planner` 规划 → 并行派发审计 agent → 完整性循环，直到范围内每条 source→sink 路径都被分析 → 聚合 → `codeaudit-report.json` + `report.md`。
+
+**默认静态** —— 只读取源代码，绝不运行应用。若提供 live URL，则进入*混合*模式，用一次良性的见证请求来佐证代码发现；代码追踪始终独立成立。
+
+---
+
+### /codeaudit:codeaudit-scope
+
+**用途：** 定义或更新审计范围但不启动 —— 仓库路径、聚焦/排除路径、可选的 live URL、深度、交付物格式。写入 `.codeaudit-scope.json`。
+
+---
+
+### /codeaudit:codeaudit-classes
+
+**用途：** 定义或更新审计覆盖的 OWASP 漏洞类别 —— 注入、XSS、认证、访问控制、SSRF、密钥、加密、依赖、配置、日志 —— 但不启动。写入 `.codeaudit-classes.json`。
+
+---
+
+### /codeaudit:codeaudit-exit
+
+**用途：** 关闭审计会话 —— 汇总发现、将输出刷写到 `outputs/{engagement}/`、解除隔离、将范围/类别配置重置为 pending，并提示运行 `/clear`。
 
 ---
 

@@ -89,7 +89,7 @@ Elle vous accompagne dans la collecte du périmètre, la sélection du profil d'
 
 ## Commandes slash
 
-Cinq commandes slash sont incluses pour la gestion guidée de session. Elles sont découvertes automatiquement par Claude Code et invoquées par leur nom.
+Les deux plugins fournissent des commandes slash pour la gestion guidée de session, découvertes automatiquement par Claude Code et invoquées par leur nom. Les commandes **`pentest`** orchestrent les engagements ; les commandes **`codeaudit`** pilotent le workflow d'audit white-box.
 
 ### /pentest:pentest
 
@@ -167,6 +167,32 @@ Lorsque MKS est actif, la boucle de budget temps exécute une **post-exploitatio
 7. Invite à exécuter `/clear` pour réinitialiser entièrement la fenêtre de contexte avant le prochain engagement
 
 **Remarque :** les sorties de l'engagement restent dans `outputs/{name}/` après `/clear`.
+
+---
+
+### /codeaudit:codeaudit
+
+**But :** lancer un audit white-box de code source *et* l'orchestrer — collecte le périmètre (chemin du dépôt, URL live optionnelle, classes de vulnérabilités, profondeur), puis pilote tout le déroulé : baseline `code-recon` → planification via `audit-planner` → déploiement parallèle des auditeurs → boucle de complétude jusqu'à ce que chaque chemin source→sink du périmètre soit analysé → agrégation → `codeaudit-report.json` + `report.md`.
+
+**Statique par défaut** — il lit le code source et n'exécute jamais l'application. Si une URL live est fournie, il passe en mode *hybride* et corrobore une découverte de code avec une seule requête témoin bénigne ; la trace de code reste autosuffisante.
+
+---
+
+### /codeaudit:codeaudit-scope
+
+**But :** définir ou mettre à jour le périmètre d'audit sans le lancer — chemin du dépôt, chemins ciblés / hors-périmètre, URL live optionnelle, profondeur, formats de livrables. Écrit `.codeaudit-scope.json`.
+
+---
+
+### /codeaudit:codeaudit-classes
+
+**But :** définir ou mettre à jour les classes de vulnérabilités OWASP couvertes — injection, XSS, authentification, contrôle d'accès, SSRF, secrets, crypto, dépendances, configuration, journalisation — sans lancer l'audit. Écrit `.codeaudit-classes.json`.
+
+---
+
+### /codeaudit:codeaudit-exit
+
+**But :** clôturer la session d'audit — résume les découvertes, vide les sorties vers `outputs/{engagement}/`, lève l'isolation, réinitialise le profil périmètre/classes à « pending », et propose `/clear`.
 
 ---
 

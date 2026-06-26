@@ -87,7 +87,7 @@ This walks you through scope collection, attack profile selection, optional Kali
 
 ## Slash Commands
 
-Five slash commands are included for guided session management. They are auto-discovered by Claude Code and invoked by name.
+Both plugins ship slash commands for guided session management, auto-discovered by Claude Code and invoked by name. The **`pentest`** commands orchestrate engagements; the **`codeaudit`** commands drive the white-box audit workflow.
 
 ### /pentest:pentest
 
@@ -165,6 +165,32 @@ When MKS is active, the time-budget loop runs **post-exploitation** if a CVE or 
 7. Prompts to run `/clear` to fully reset the context window before the next engagement
 
 **Note:** Engagement outputs remain in `outputs/{name}/` after `/clear`.
+
+---
+
+### /codeaudit:codeaudit
+
+**Purpose:** Launch a white-box source-code audit *and* orchestrate it — collects scope (repo path, optional live URL, vuln classes, depth), then owns the full run: `code-recon` baseline → planning via the `audit-planner` → parallel auditor dispatch → a completeness loop that runs until every in-scope source→sink path is analyzed → aggregation → `codeaudit-report.json` + `report.md`.
+
+**Static by default** — it reads source and never runs the app. If a live URL is supplied it runs in *hybrid* mode, corroborating a code finding with a single benign witness request; the code trace always stands on its own.
+
+---
+
+### /codeaudit:codeaudit-scope
+
+**Purpose:** Define or update the audit scope without launching — repo path, focus / out-of-scope paths, optional live URL, depth, and deliverable formats. Writes `.codeaudit-scope.json`.
+
+---
+
+### /codeaudit:codeaudit-classes
+
+**Purpose:** Define or update which OWASP vulnerability classes the audit covers — injection, XSS, auth, access control, SSRF, secrets, crypto, dependencies, configuration, logging — without launching. Writes `.codeaudit-classes.json`.
+
+---
+
+### /codeaudit:codeaudit-exit
+
+**Purpose:** Close the audit session — summarizes findings, flushes outputs to `outputs/{engagement}/`, lifts isolation, resets the scope/class profile to pending, and prompts for `/clear`.
 
 ---
 
