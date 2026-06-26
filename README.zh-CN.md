@@ -198,13 +198,20 @@
 
 ## 会话状态文件
 
-三个 JSON 文件在项目根目录持久化会话配置。它们将准备与启动解耦 —— 你可以独立地定义范围、攻击画像和 Kali 服务器连接，然后在准备就绪时启动。
+会话配置持久化在项目根目录的小型 JSON 文件中，将准备与启动解耦 —— 你可以独立地定义范围（以及 pentest 的攻击画像和 Kali 连接），然后在准备就绪时启动。**`pentest`** 插件使用三个：
 
 | 文件 | 写入者 | 用途 |
 |------|-----------|---------|
 | `.pentest-scope.json` | `/pentest:pentest-scope`、`/pentest:pentest` | 目标、任务名称、范围外、认证、timing（时间预算/配额）、彻底程度、output_formats，以及 `status: pending\|active` |
 | `.pentest-attacks.json` | `/pentest:pentest-attacks`、`/pentest:pentest` | 攻击模式和带 skill/executor 映射的所选类别，以及 `status: pending\|active` |
 | `.pentest-mks.json` | `/pentest:pentest-kali` | Kali 服务器 URL、核心工具可用性标志，以及 `status: active` |
+
+**`codeaudit`** 插件采用相同模式，使用其自己的文件：
+
+| 文件 | 写入者 | 用途 |
+|------|-----------|---------|
+| `.codeaudit-scope.json` | `/codeaudit:codeaudit-scope`、`/codeaudit:codeaudit` | 仓库路径、聚焦/排除路径、可选 live URL、深度、交付物格式，以及 `status: pending\|active` |
+| `.codeaudit-classes.json` | `/codeaudit:codeaudit-classes`、`/codeaudit:codeaudit` | 为审计选择的 OWASP 漏洞类别，以及 `status: pending\|active` |
 
 ### 生命周期
 

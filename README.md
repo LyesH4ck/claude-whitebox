@@ -196,13 +196,20 @@ When MKS is active, the time-budget loop runs **post-exploitation** if a CVE or 
 
 ## Session State Files
 
-Three JSON files persist session configuration at the project root. They decouple preparation from launch — you can define scope, attack profile, and Kali server connection independently, then launch when ready.
+Session configuration persists in small JSON files at the project root, decoupling preparation from launch — define scope (and, for pentest, the attack profile and Kali connection) independently, then launch when ready. The **`pentest`** plugin uses three:
 
 | File | Written by | Purpose |
 |------|-----------|---------|
 | `.pentest-scope.json` | `/pentest:pentest-scope`, `/pentest:pentest` | Target, engagement name, out-of-scope, auth, timing (time budget/quota), thoroughness, output_formats, and `status: pending\|active` |
 | `.pentest-attacks.json` | `/pentest:pentest-attacks`, `/pentest:pentest` | Attack mode and selected categories with skill/executor mapping, and `status: pending\|active` |
 | `.pentest-mks.json` | `/pentest:pentest-kali` | Kali server URL, essential tool availability flags, and `status: active` |
+
+The **`codeaudit`** plugin uses the same pattern with its own files:
+
+| File | Written by | Purpose |
+|------|-----------|---------|
+| `.codeaudit-scope.json` | `/codeaudit:codeaudit-scope`, `/codeaudit:codeaudit` | Repo path, focus / out-of-scope paths, optional live URL, depth, deliverable formats, and `status: pending\|active` |
+| `.codeaudit-classes.json` | `/codeaudit:codeaudit-classes`, `/codeaudit:codeaudit` | Selected OWASP vulnerability classes to audit, and `status: pending\|active` |
 
 ### Lifecycle
 

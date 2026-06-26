@@ -198,13 +198,20 @@ Lorsque MKS est actif, la boucle de budget temps exécute une **post-exploitatio
 
 ## Fichiers d'état de session
 
-Trois fichiers JSON persistent la configuration de session à la racine du projet. Ils découplent la préparation du lancement — vous pouvez définir le périmètre, le profil d'attaque et la connexion au serveur Kali indépendamment, puis lancer une fois prêt.
+La configuration de session persiste dans de petits fichiers JSON à la racine du projet, découplant la préparation du lancement — définissez le périmètre (et, pour le pentest, le profil d'attaque et la connexion Kali) indépendamment, puis lancez une fois prêt. Le plugin **`pentest`** en utilise trois :
 
 | Fichier | Écrit par | Objectif |
 |------|-----------|---------|
 | `.pentest-scope.json` | `/pentest:pentest-scope`, `/pentest:pentest` | Cible, nom de l'engagement, hors périmètre, authentification, timing (budget temps/quota), approfondissement, output_formats, et `status: pending\|active` |
 | `.pentest-attacks.json` | `/pentest:pentest-attacks`, `/pentest:pentest` | Mode d'attaque et catégories sélectionnées avec association skill/executor, et `status: pending\|active` |
 | `.pentest-mks.json` | `/pentest:pentest-kali` | URL du serveur Kali, indicateurs de disponibilité des outils essentiels, et `status: active` |
+
+Le plugin **`codeaudit`** suit le même schéma avec ses propres fichiers :
+
+| Fichier | Écrit par | Objectif |
+|------|-----------|---------|
+| `.codeaudit-scope.json` | `/codeaudit:codeaudit-scope`, `/codeaudit:codeaudit` | Chemin du dépôt, chemins ciblés / hors-périmètre, URL live optionnelle, profondeur, formats de livrables, et `status: pending\|active` |
+| `.codeaudit-classes.json` | `/codeaudit:codeaudit-classes`, `/codeaudit:codeaudit` | Classes de vulnérabilités OWASP sélectionnées pour l'audit, et `status: pending\|active` |
 
 ### Cycle de vie
 
