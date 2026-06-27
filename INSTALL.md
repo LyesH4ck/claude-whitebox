@@ -1,13 +1,16 @@
 # Installing claude-whitebox
 
-`claude-whitebox` is a Claude Code **plugin marketplace** bundling two security plugins:
+`claude-whitebox` is a Claude Code **plugin marketplace** bundling these plugins:
 
 | Plugin | Command | What it does |
 |--------|---------|--------------|
 | `codeaudit` | `/codeaudit:codeaudit` | White-box source-code security audit (static source-to-sink, optional live correlation) |
 | `pentest`   | `/pentest:pentest`     | Black-box penetration testing framework (63 attack categories, agent-coordinated) |
+| `playwright` | _(MCP provider)_ | Playwright MCP server with stealth-friendly defaults; **dependency of `pentest`'s client-side agents** (XSS, CSP, prototype-pollution, JS mapping) |
 
-Both run inside Claude Code as agents, skills, and slash commands — no separate service to host.
+The `codeaudit` and `pentest` plugins run inside Claude Code as agents, skills, and slash commands — no
+separate service to host. The `playwright` plugin contributes an MCP server (browser automation) rather
+than commands.
 
 ---
 
@@ -31,7 +34,13 @@ Run these **inside a Claude Code session** (the `/plugin` commands are Claude Co
 # 2. Install the plugin(s) you want — name@marketplace
 /plugin install codeaudit@claude-whitebox
 /plugin install pentest@claude-whitebox
+/plugin install playwright@claude-whitebox   # required for pentest's client-side (browser) tests
 ```
+
+> **`pentest` depends on `playwright`.** The client-side agents (`xss-tester`, `csp-bypass-tester`,
+> `prototype-pollution-tester`, `inventory-javascript-mapper`) call `mcp__plugin_playwright_playwright__*`,
+> which the `playwright` plugin provides. Without it, server-side testing still works but browser-driven
+> tests are unavailable. After install, run `/mcp` to confirm the tools registered.
 
 Plugins install into your project's `.claude/` directory. Once installed, every agent, skill, and slash
 command is available in any Claude Code session for that project.

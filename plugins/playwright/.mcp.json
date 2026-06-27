@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@latest",
+        "--config",
+        "${CLAUDE_PLUGIN_ROOT}/playwright-mcp-stealth.config.json"
+      ]
+    }
+  }
+}

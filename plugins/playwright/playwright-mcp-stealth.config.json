@@ -1,5 +1,5 @@
 {
-  "_comment": "Stealth-friendly config for @playwright/mcp (Microsoft official). Pass via --config. Authorized engagements only. See playwright-automation.md -> 'Stealth & WAF/bot-detection evasion'.",
+  "_comment": "Stealth-friendly config for @playwright/mcp (Microsoft official). Loaded by this plugin's .mcp.json via --config. Authorized engagements only. See pentest/skills/.../playwright-automation.md -> 'Stealth & WAF/bot-detection evasion'.",
   "browser": {
     "browserName": "chromium",
     "isolated": false,
