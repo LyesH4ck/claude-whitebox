@@ -19,7 +19,9 @@ than commands.
 - **Claude Code** installed and working (`claude` in your shell, or the desktop/IDE app).
   Install: https://docs.claude.com/en/docs/claude-code
 - **git** (to add the marketplace from GitHub).
-- Optional, per plugin — see [Optional tooling](#optional-tooling) below.
+- **Node.js ≥ 18** (for the `playwright` plugin's MCP server and stealth probe).
+- Optional, per plugin — see [Optional tooling](#optional-tooling) below, and
+  [Browser automation setup](#browser-automation-setup-the-playwright-plugin) for the `playwright` plugin.
 
 ---
 
@@ -63,6 +65,7 @@ skills), point the marketplace at the local path instead of the GitHub slug:
 /plugin marketplace add /home/cbailleux/PENTEST-AI/claude-whitebox
 /plugin install codeaudit@claude-whitebox
 /plugin install pentest@claude-whitebox
+/plugin install playwright@claude-whitebox
 ```
 
 After editing any plugin file, refresh the marketplace so Claude Code picks up the change:
@@ -70,6 +73,34 @@ After editing any plugin file, refresh the marketplace so Claude Code picks up t
 ```text
 /plugin marketplace update claude-whitebox
 ```
+
+---
+
+## Browser automation setup (the `playwright` plugin)
+
+The `playwright` plugin runs Microsoft's `@playwright/mcp` (**Option A** — stealth-friendly MCP server)
+and ships a standalone full-stealth probe (**Option B** — WAF-bypass fallback). On a **new machine**,
+after `/plugin install playwright@claude-whitebox`:
+
+1. **Node.js ≥ 18** (for `npx`/`node`) — usually already present alongside Claude Code.
+2. **Chromium for Playwright** — needed by both A and B. Install once:
+   ```bash
+   npx playwright install chromium
+   ```
+   The default config uses **bundled Chromium, headless**, so no Google Chrome or display is required.
+3. **Option B probe dependencies** — only if you'll use the WAF-bypass fallback. `node_modules` is **not**
+   committed, so install per machine, inside the plugin's `stealth/` dir (it lives in Claude Code's plugin
+   cache):
+   ```bash
+   cd ~/.claude/plugins/cache/claude-whitebox/playwright/*/stealth && npm install
+   ```
+   If skipped, the probe prints `{"ok":false,"error":"deps_missing","hint":"..."}` with the exact path.
+
+Verify the MCP server is live: **`/mcp`** → `plugin:playwright:playwright · ✔ connected`.
+
+> **Max stealth (desktop only).** To use real Google Chrome + headed instead of bundled headless, edit the
+> plugin's `playwright-mcp-stealth.config.json` (`"channel": "chrome"`, `"headless": false`). Requires
+> Chrome installed and a display (`xvfb-run` on a headless server). **Authorized engagements only.**
 
 ---
 
@@ -97,7 +128,9 @@ back to manual version review:
 - `npm audit` (Node), `pip-audit` (Python), `osv-scanner`, `govulncheck` (Go), `trivy`.
 
 **`pentest` — active testing** uses, when available:
-- **Playwright MCP** — browser-driven evidence capture (XSS, CSP, CSRF PoCs, screenshots).
+- **Playwright MCP** (the `playwright` plugin) — browser-driven evidence capture (XSS, CSP, CSRF PoCs,
+  screenshots). See [Browser automation setup](#browser-automation-setup-the-playwright-plugin) for the
+  one-time `npx playwright install chromium` (Option A) and `npm install` (Option B) steps.
 - **Kali / MKS (Metasploit-Kali Server) MCP** — network and exploitation tooling (nmap, ffuf, sqlmap,
   subfinder, …). See the project README for Kali MCP integration details.
 
