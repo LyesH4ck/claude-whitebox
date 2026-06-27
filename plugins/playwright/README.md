@@ -12,13 +12,17 @@ being blocked and silently logged as "couldn't confirm" coverage gaps.
 
 `playwright-mcp-stealth.config.json` (loaded by `.mcp.json` via `--config`):
 
-- **`launchOptions`** — `channel: "chrome"` (real Google Chrome, not bundled `HeadlessChrome`),
-  `headless: false`, `--disable-blink-features=AutomationControlled`
+- **`launchOptions`** — `headless: true` with **bundled Chromium** (portable; runs on headless servers),
+  plus `--disable-blink-features=AutomationControlled`
 - **`contextOptions`** — realistic `userAgent`, `viewport`, `locale`, `timezoneId`
-- **`initScript`** — small `navigator.webdriver` / `window.chrome` patch
+- **`initScript`** — `stealth-init.js`, a small `navigator.webdriver` / `window.chrome` patch
+  (a **file path**, not inline JS — inline strings crash `@playwright/mcp` with "Init script file does not exist")
 
-This defeats **JS-level** bot detection only — not TLS fingerprinting (JA3/JA4) or IP reputation. For
-those, add a residential/proxy egress. **Authorized engagements only.**
+This portable default applies the **JS-level** stealth that works headless. It does **not** defeat TLS
+fingerprinting (JA3/JA4), IP reputation, or the headless rendering tell. For maximum stealth on a
+**desktop** (real Chrome + a display), edit `launchOptions`: set `"channel": "chrome"` and
+`"headless": false` (see the `_maxstealth_hint` in the config). For TLS/IP, add a residential/proxy
+egress. **Authorized engagements only.**
 
 ## Install
 
@@ -30,13 +34,16 @@ Then confirm the tools registered with `/mcp` (expect `mcp__plugin_playwright_pl
 
 ## Prerequisites
 
-- **Google Chrome** installed (for `channel: "chrome"`).
-- A **display** for headed mode — on a headless server use `xvfb-run`, or set `"headless": true` in the
-  config (still better than bundled Chromium: the real-Chrome channel, UA and args remain).
+- **Chromium for Playwright** installed once: `npx playwright install chromium`. The default config uses
+  bundled Chromium so it runs anywhere (including headless servers) — no Google Chrome or display needed.
+- For the **desktop max-stealth override** (`channel: "chrome"` + `headless: false`): real Google Chrome
+  installed and a display (use `xvfb-run` on a server).
 
 ## Tuning
 
 Edit `playwright-mcp-stealth.config.json`:
-- Different platform UA → match `channel`/`userAgent`/`timezoneId` consistently.
+- Max stealth on desktop → `launchOptions.channel: "chrome"`, `headless: false`.
+- Different platform → keep `userAgent` / `timezoneId` consistent with each other.
 - Route through a proxy → add `--proxy-server` to `.mcp.json` args, or `launchOptions.proxy`.
-- Disable stealth for debugging → set `"headless": true` and drop the `args`/`initScript`.
+- Disable stealth for debugging → drop the `args` and `initScript`.
+- `initScript` entries are **file paths** relative to the config, not inline JS.
