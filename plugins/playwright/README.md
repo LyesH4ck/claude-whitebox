@@ -47,3 +47,16 @@ Edit `playwright-mcp-stealth.config.json`:
 - Route through a proxy → add `--proxy-server` to `.mcp.json` args, or `launchOptions.proxy`.
 - Disable stealth for debugging → drop the `args` and `initScript`.
 - `initScript` entries are **file paths** relative to the config, not inline JS.
+
+## Option B — full-stealth fallback (`stealth/`)
+
+The MCP server (above) runs **vanilla** Playwright, so it can't load `puppeteer-extra-plugin-stealth`. When
+a target's WAF still blocks the MCP browser, escalate to the standalone probe in **[`stealth/`](./stealth/)**:
+it runs `playwright-extra` + the stealth plugin (full automation-tell coverage) and is driven via Bash,
+returning JSON. See [`stealth/README.md`](./stealth/README.md). First use: `cd stealth && npm install`.
+
+```bash
+# Did stealth get past the WAF? then confirm an XSS, capture endpoints, grab evidence
+node stealth/probe.mjs --url "https://target/app" --action navigate          # {"blocked":false,...}
+node stealth/probe.mjs --url "https://target/s?q=<script>alert(1)</script>" --action xss-probe
+```

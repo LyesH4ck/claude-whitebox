@@ -1,0 +1,13 @@
+{
+  "name": "claude-whitebox-stealth-probe",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Standalone stealth Playwright probe (Option B) — full puppeteer-extra-stealth coverage for WAF-gated client-side testing. Run via Bash by pentest agents when the MCP browser is blocked. Authorized engagements only.",
+  "bin": { "stealth-probe": "./probe.mjs" },
+  "dependencies": {
+    "playwright": "^1.48.0",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}
