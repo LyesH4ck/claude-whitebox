@@ -213,6 +213,11 @@ Le plugin **`codeaudit`** suit le même schéma avec ses propres fichiers :
 | `.codeaudit-scope.json` | `/codeaudit:codeaudit-scope`, `/codeaudit:codeaudit` | Chemin du dépôt, chemins ciblés / hors-périmètre, URL live optionnelle, profondeur, formats de livrables, et `status: pending\|active` |
 | `.codeaudit-classes.json` | `/codeaudit:codeaudit-classes`, `/codeaudit:codeaudit` | Classes de vulnérabilités OWASP sélectionnées pour l'audit, et `status: pending\|active` |
 
+Deux autres fichiers racine **rédigés par l'opérateur** configurent l'agent `idor-bola-tester` (sans
+`status`/cycle de vie — gitignorés en tant que `.pentest-*.json` car ils contiennent des sessions vivantes) :
+`.pentest-identities.json` (sessions par identité) et `.pentest-authz-requests.json` (le corpus de requêtes).
+Les templates sont dans `…/web-applications/access-control/authz-matrix/examples/`.
+
 ### Cycle de vie
 
 ```

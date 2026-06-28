@@ -213,6 +213,10 @@
 | `.codeaudit-scope.json` | `/codeaudit:codeaudit-scope`、`/codeaudit:codeaudit` | 仓库路径、聚焦/排除路径、可选 live URL、深度、交付物格式，以及 `status: pending\|active` |
 | `.codeaudit-classes.json` | `/codeaudit:codeaudit-classes`、`/codeaudit:codeaudit` | 为审计选择的 OWASP 漏洞类别，以及 `status: pending\|active` |
 
+另有两个由**操作员编写**的根文件用于配置 `idor-bola-tester`（无 `status`/生命周期 —— 仍作为 `.pentest-*.json`
+被 gitignore，因为它们包含有效会话）：`.pentest-identities.json`（每个身份的会话）和
+`.pentest-authz-requests.json`（请求语料）。模板见 `…/web-applications/access-control/authz-matrix/examples/`。
+
 ### 生命周期
 
 ```
