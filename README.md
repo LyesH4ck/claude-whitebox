@@ -168,6 +168,19 @@ When MKS is active, the time-budget loop runs **post-exploitation** if a CVE or 
 
 ---
 
+### /pentest:idor
+
+**Purpose:** Targeted IDOR/BOLA/BFLA/BOPLA test on a single scope — deploys the `idor-bola-tester` agent directly (no recon/planner/quota loop). Adapts to however many identities you supply (0/1/2/N) and gates the verdict on the oracle strength (`200 ≠ BOLA`).
+
+**Flow:**
+1. Resolves the target (`$ARGUMENTS` / `.pentest-scope.json` / prompt) + an authorization gate
+2. Reads identities from `.pentest-identities.json` (or helps create it; unauth-only allowed with a warning) and shows the oracle tier
+3. Resolves the request corpus (`.pentest-authz-requests.json` / api-discovery inventory / live crawl)
+4. Plan confirmation, then deploys `idor-bola-tester` (cross-replay authorization matrix + verification bar)
+5. Summarizes confirmed findings + `authz-matrix.md`
+
+---
+
 ### /codeaudit:codeaudit
 
 **Purpose:** Launch a white-box source-code audit *and* orchestrate it — collects scope (repo path, optional live URL, vuln classes, depth), then owns the full run: `code-recon` baseline → planning via the `audit-planner` → parallel auditor dispatch → a completeness loop that runs until every in-scope source→sink path is analyzed → aggregation → `codeaudit-report.json` + `report.md`.

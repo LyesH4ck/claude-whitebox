@@ -170,6 +170,19 @@ Lorsque MKS est actif, la boucle de budget temps exécute une **post-exploitatio
 
 ---
 
+### /pentest:idor
+
+**But :** test IDOR/BOLA/BFLA/BOPLA ciblé sur un seul périmètre — déploie directement l'agent `idor-bola-tester` (sans recon/planificateur/boucle de quota). S'adapte au nombre d'identités fournies (0/1/2/N) et plafonne le verdict selon la force de l'oracle (`200 ≠ BOLA`).
+
+**Déroulé :**
+1. Résout la cible (`$ARGUMENTS` / `.pentest-scope.json` / invite) + une porte d'autorisation
+2. Lit les identités depuis `.pentest-identities.json` (ou aide à le créer ; unauth-only autorisé avec avertissement) et affiche le tier d'oracle
+3. Résout le corpus de requêtes (`.pentest-authz-requests.json` / inventaire api-discovery / crawl live)
+4. Confirmation du plan, puis déploie `idor-bola-tester` (matrice d'autorisation par cross-replay + barre de vérification)
+5. Résume les découvertes confirmées + `authz-matrix.md`
+
+---
+
 ### /codeaudit:codeaudit
 
 **But :** lancer un audit white-box de code source *et* l'orchestrer — collecte le périmètre (chemin du dépôt, URL live optionnelle, classes de vulnérabilités, profondeur), puis pilote tout le déroulé : baseline `code-recon` → planification via `audit-planner` → déploiement parallèle des auditeurs → boucle de complétude jusqu'à ce que chaque chemin source→sink du périmètre soit analysé → agrégation → `codeaudit-report.json` + `report.md`.

@@ -170,6 +170,19 @@
 
 ---
 
+### /pentest:idor
+
+**用途：** 针对单一范围的 IDOR/BOLA/BFLA/BOPLA 定向测试 —— 直接部署 `idor-bola-tester` agent（无侦察/规划器/配额循环）。根据你提供的身份数量自适应（0/1/2/N），并按 oracle 强度对结论设置上限（`200 ≠ BOLA`）。
+
+**流程：**
+1. 解析目标（`$ARGUMENTS` / `.pentest-scope.json` / 提示）+ 授权确认门
+2. 从 `.pentest-identities.json` 读取身份（或协助创建；允许仅 unauth 并给出警告），并显示 oracle 层级
+3. 解析请求语料（`.pentest-authz-requests.json` / api-discovery 清单 / 实时爬取）
+4. 计划确认，然后部署 `idor-bola-tester`（cross-replay 授权矩阵 + 验证门槛）
+5. 汇总已确认发现 + `authz-matrix.md`
+
+---
+
 ### /codeaudit:codeaudit
 
 **用途：** 启动白盒源代码审计*并*进行编排 —— 收集范围（仓库路径、可选的 live URL、漏洞类别、深度），然后掌控整个流程：`code-recon` 基线 → 通过 `audit-planner` 规划 → 并行派发审计 agent → 完整性循环，直到范围内每条 source→sink 路径都被分析 → 聚合 → `codeaudit-report.json` + `report.md`。
