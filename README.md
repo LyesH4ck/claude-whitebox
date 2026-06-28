@@ -181,6 +181,22 @@ When MKS is active, the time-budget loop runs **post-exploitation** if a CVE or 
 
 ---
 
+### /pentest:xss
+
+**Purpose:** Targeted XSS test on a single scope — deploys the `xss-tester` agent (Playwright) directly (no full engagement). Reflected + stored + DOM, with a capability-aware recon preflight that maps SPA routes so client-only views aren't missed.
+
+**Flow:** resolve target + authorization gate → optional auth session + input points → recon preflight (maps SPA views) → plan confirmation → deploy `xss-tester` (Playwright evidence) → summary + surface-coverage declaration.
+
+---
+
+### /pentest:sql
+
+**Purpose:** Targeted SQL/NoSQL injection test on a single scope — deploys the `injection-tester` agent (sqlmap + curl) directly (no full engagement). SQLi + NoSQLi operator injection + OS command injection, with a capability-aware recon preflight.
+
+**Flow:** resolve target + authorization gate → optional auth + parameters + DB type → recon preflight (api/param discovery) → plan confirmation → deploy `injection-tester` → summary + surface-coverage declaration.
+
+---
+
 ### /codeaudit:codeaudit
 
 **Purpose:** Launch a white-box source-code audit *and* orchestrate it — collects scope (repo path, optional live URL, vuln classes, depth), then owns the full run: `code-recon` baseline → planning via the `audit-planner` → parallel auditor dispatch → a completeness loop that runs until every in-scope source→sink path is analyzed → aggregation → `codeaudit-report.json` + `report.md`.

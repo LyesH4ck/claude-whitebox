@@ -183,6 +183,22 @@ Lorsque MKS est actif, la boucle de budget temps exécute une **post-exploitatio
 
 ---
 
+### /pentest:xss
+
+**But :** test XSS ciblé sur un seul périmètre — déploie directement l'agent `xss-tester` (Playwright), sans engagement complet. Reflected + stored + DOM, avec un preflight de recon capability-aware qui mappe les routes SPA pour ne pas rater les vues client-only.
+
+**Déroulé :** cible + porte d'autorisation → session d'auth optionnelle + points d'entrée → preflight de recon (mappe les vues SPA) → confirmation du plan → déploie `xss-tester` (preuve Playwright) → résumé + déclaration de couverture de surface.
+
+---
+
+### /pentest:sql
+
+**But :** test d'injection SQL/NoSQL ciblé sur un seul périmètre — déploie directement l'agent `injection-tester` (sqlmap + curl), sans engagement complet. SQLi + NoSQLi (operator injection) + injection de commande OS, avec un preflight de recon capability-aware.
+
+**Déroulé :** cible + porte d'autorisation → auth optionnelle + paramètres + type de DB → preflight de recon (découverte api/paramètres) → confirmation du plan → déploie `injection-tester` → résumé + déclaration de couverture de surface.
+
+---
+
 ### /codeaudit:codeaudit
 
 **But :** lancer un audit white-box de code source *et* l'orchestrer — collecte le périmètre (chemin du dépôt, URL live optionnelle, classes de vulnérabilités, profondeur), puis pilote tout le déroulé : baseline `code-recon` → planification via `audit-planner` → déploiement parallèle des auditeurs → boucle de complétude jusqu'à ce que chaque chemin source→sink du périmètre soit analysé → agrégation → `codeaudit-report.json` + `report.md`.

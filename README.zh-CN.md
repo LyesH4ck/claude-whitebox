@@ -183,6 +183,22 @@
 
 ---
 
+### /pentest:xss
+
+**用途：** 针对单一范围的 XSS 定向测试 —— 直接部署 `xss-tester` agent（Playwright），无需完整任务。反射型 + 存储型 + DOM，配合 capability-aware 侦察 preflight 映射 SPA 路由，避免遗漏仅客户端的视图。
+
+**流程：** 解析目标 + 授权门 → 可选认证会话 + 输入点 → 侦察 preflight（映射 SPA 视图）→ 计划确认 → 部署 `xss-tester`（Playwright 证据）→ 汇总 + 表面覆盖声明。
+
+---
+
+### /pentest:sql
+
+**用途：** 针对单一范围的 SQL/NoSQL 注入定向测试 —— 直接部署 `injection-tester` agent（sqlmap + curl），无需完整任务。SQLi + NoSQLi（运算符注入）+ OS 命令注入，配合 capability-aware 侦察 preflight。
+
+**流程：** 解析目标 + 授权门 → 可选认证 + 参数 + 数据库类型 → 侦察 preflight（api/参数发现）→ 计划确认 → 部署 `injection-tester` → 汇总 + 表面覆盖声明。
+
+---
+
 ### /codeaudit:codeaudit
 
 **用途：** 启动白盒源代码审计*并*进行编排 —— 收集范围（仓库路径、可选的 live URL、漏洞类别、深度），然后掌控整个流程：`code-recon` 基线 → 通过 `audit-planner` 规划 → 并行派发审计 agent → 完整性循环，直到范围内每条 source→sink 路径都被分析 → 聚合 → `codeaudit-report.json` + `report.md`。
