@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    A full penetration testing framework for Claude Code with Kali MCP integration containing 15 agents, 6 skill coordinators and 63 attack categories.
+    A full penetration testing framework for Claude Code with Kali MCP integration containing 16 agents, 6 skill coordinators and 63 attack categories.
     <br />
     Structured, human-in-the-loop, evidence-driven.
   </p>
@@ -19,7 +19,7 @@
       <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
-    <img src="https://img.shields.io/badge/agents-15-0EA5E9?style=flat-square" alt="15 agents" />
+    <img src="https://img.shields.io/badge/agents-16-0EA5E9?style=flat-square" alt="16 agents" />
     <img src="https://img.shields.io/badge/attack_categories-63-EF4444?style=flat-square" alt="63 attack categories" />
     <img src="https://img.shields.io/badge/authorized_use_only-red?style=flat-square" alt="Authorized use only" />
   </p>
@@ -383,6 +383,7 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 | `xss-tester` | Reflected, stored, DOM-based XSS. Covers framework sinks (React, Vue, Angular), WAF evasion, CSP bypass. Evidence via Playwright. | Playwright MCP, Bash, Read, Write |
 | `csrf-tester` | CSRF: missing tokens, SameSite bypass, token reuse, method override. Generates browser-loadable PoC HTML. | Bash, Read, Write |
 | `injection-tester` | SQLi, NoSQLi, OS command injection. Automated with sqlmap + manual curl probing. | Bash, Read, Write |
+| `idor-bola-tester` | IDOR/BOLA (API1), BFLA (API5), BOPLA/mass-assignment (API3) via an adaptive multi-identity oracle (0/1/2/N accounts) + cross-replay authorization matrix, with a `200≠BOLA` verification bar. REST + GraphQL, read + state-changing. Pairs with the deterministic `authz-matrix` engine. | Bash, Read, Write |
 | `csp-bypass-tester` | CSP header analysis + bypass vectors: unsafe-inline, wildcard sources, JSONP, Angular sandbox, open redirects. | Playwright MCP, Bash, Read, Write |
 | `prototype-pollution-tester` | Client-side prototype pollution via URL params, hash fragments, JSON. Verifies `Object.prototype` pollution in browser DOM. | Playwright MCP, Bash, Read, Write |
 | `cve-tester` | Identifies tech stacks, researches NVD/Exploit-DB/GitHub, adapts PoC exploits, validates exploitability live. | Bash, Read, Write, WebFetch, WebSearch |
