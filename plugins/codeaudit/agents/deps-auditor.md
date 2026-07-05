@@ -3,6 +3,7 @@ name: deps-auditor
 description: White-box dependency (SCA) auditor. Inventories declared dependencies from manifests/lockfiles, runs an available vulnerability scanner (npm audit, pip-audit, osv-scanner, govulncheck, trivy) or falls back to version/EOL review, and renders per-finding verdicts for vulnerable or outdated components. Covers OWASP A06. Deployed by the /codeaudit:codeaudit command.
 color: orange
 tools: [Read, Grep, Glob, Bash, Write]
+model: haiku
 ---
 
 # Dependency (SCA) Auditor

@@ -3,6 +3,7 @@ name: secrets-auditor
 description: White-box secrets auditor. Scans source and config for hardcoded credentials, API keys, private keys, tokens, and connection strings; confirms each against entropy/patterns and git-tracking status, and renders per-finding verdicts. Covers OWASP A05/A07. Deployed by the /codeaudit:codeaudit command.
 color: red
 tools: [Read, Grep, Glob, Bash, Write]
+model: haiku
 ---
 
 # Secrets Auditor

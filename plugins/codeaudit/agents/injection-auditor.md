@@ -66,10 +66,10 @@ non-attacker-controlled "source", unreachable sink).
 
 ## Phase 4 — Emit
 
-For each `vulnerable` path, write `outputs/{engagement}/findings/finding-{NNN}/` per the contract
+For each `vulnerable` path, write `outputs/{engagement}/findings/finding-inj-{NNN}/` per the contract
 (`description.md`, `snippet.txt`, `trace.md`, optional `poc.md`/`corroboration.txt`). Use the next free
-`NNN` (check existing dirs first to avoid collisions across parallel auditors — claim ids by reading the
-highest existing and continuing; if a collision risk remains, prefix your class: `finding-inj-NNN`).
+`NNN` within your class prefix (check existing `finding-inj-*` dirs first and continue from the highest).
+The class prefix keeps ids collision-free across parallel auditors.
 
 Record every `safe` vector for the `tested_not_vulnerable` section (write to
 `outputs/{engagement}/findings/_safe-injection.md`). List `unconfirmed` items as coverage gaps in the
