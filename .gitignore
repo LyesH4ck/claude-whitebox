@@ -10,6 +10,9 @@ plugins/*/skills/*/outputs/*
 .pentest-*.json
 .codeaudit-*.json
 
+# Local OAST test lab — deliberately vulnerable, never commit or deploy
+/oast-lab/
+
 # Python
 __pycache__/
 *.py[cod]
