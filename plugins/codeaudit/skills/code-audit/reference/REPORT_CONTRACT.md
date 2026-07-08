@@ -78,12 +78,15 @@ A run is **incomplete** if `report.md` does not exist.
   `owasp`, `location` (file + line), `source`, `sink`. Optional: `cwe`, `cvss`, `trace`, `slot_type`,
   `externally_reachable`, `endpoint`, `witness_payload`, `evidence`.
 - **`endpoint`** (optional, request-reachable findings only) — the live HTTP binding
-  `{ method, path, param, in }`, **resolved from `recon/sink-inventory.json` `entry_points`** by matching the
-  finding's `source` (its `in`+`name`+`file:line`) to the entry point that exposes it. Set it whenever the
-  route is statically resolvable; **omit it** when routing is dynamic (programmatic mounting, gateway
-  rewrites) — never guess a path. This is what the pentest hybrid handoff consumes to route a code-confirmed
-  finding straight to a live target (`HYBRID_HANDOFF_SPEC.md`); when absent, the handoff falls back to
-  correlating the param against the black-box surface map.
+  `{ method, path, param, in }`, resolved by the **Step 6.6 aggregator** from `recon/sink-inventory.json`
+  `entry_points`: match the finding's `source` (the param **name** + `file:line`) to an entry point's
+  `sources[] {name, at}`, then take `method`/`path`/`in` from that entry point and `param` = the source name.
+  `in` is the fixed enum **`query | path | header | cookie | json | form`** (same vocab code-recon writes and
+  the pentest normalizer produces — never `body`). Set it whenever the route is statically resolvable;
+  **omit it** when routing is dynamic (programmatic mounting, gateway rewrites) or no entry point matches —
+  never guess a path. This is what the pentest hybrid handoff consumes to route a code-confirmed finding
+  straight to a live target (`HYBRID_HANDOFF_SPEC.md`); when absent, the handoff falls back to correlating
+  the param against the black-box surface map.
 - **`confidence`** — `high` (complete, unambiguous code trace), `probable` (likely flaw, a branch/helper
   not fully inspected), `unconfirmed` (suspected, no complete path — must also appear in `coverage_gaps`).
   In hybrid mode a live corroboration may raise `probable`→`high`.

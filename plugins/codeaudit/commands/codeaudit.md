@@ -341,13 +341,22 @@ reports `complete`. Loop:
      uninspected helper/branch to `probable`, and anything lacking a complete path to `unconfirmed`
      (list the latter under `coverage_gaps`).
    - Gather each auditor's `_safe-*.md` into `tested_not_vulnerable`.
+1b. **Resolve each finding's live endpoint (hybrid handoff, voie A).** Read
+   `outputs/{engagement}/recon/sink-inventory.json` `entry_points`. For every **request-reachable** finding,
+   match its `source` (the param **name** + `file:line`) against an entry point's `sources[] {name, at}`;
+   on a match, set `endpoint { method, path, param, in }` on the finding — taking `method`/`path`/`in` from
+   the matched entry point and `param` = the source name. **Omit `endpoint`** when no entry point matches or
+   the route is dynamic (no `path`) — never guess. `in` uses the fixed enum `query|path|header|cookie|json|form`.
+   This is what lets the pentest handoff route a code-confirmed finding straight to a live target; when
+   absent it falls back to param correlation. (Non-request classes — secrets/crypto/deps/config — get no endpoint.)
 2. Present a findings summary to the operator via AskUserQuestion before writing the final report (total;
    critical/high/medium/low/info counts; confidence breakdown; top 3; coverage gaps). Confirm: "Write the
    final report now?"
 3. On confirmation, produce the deliverables **exactly per** `plugins/codeaudit/skills/code-audit/reference/REPORT_CONTRACT.md`:
    - `outputs/{engagement}/codeaudit-report.json` — fixed schema (engagement/repo/commit/target_url
-     metadata, findings[] with file:line/source/sink/slot/confidence/owasp, summary counts,
-     tested_not_vulnerable, coverage_gaps, and the audit `depth`). `coverage_gaps` lists anything left
+     metadata, findings[] with file:line/source/sink/slot/confidence/owasp **and `endpoint` when resolved
+     in step 1b**, summary counts, tested_not_vulnerable, coverage_gaps, and the audit `depth`).
+     `coverage_gaps` lists anything left
      unconfirmed (e.g. a class with no scanner installed) — there is no time-based de-scoping.
    - `outputs/{engagement}/report.md` — REQUIRED consolidated human report from the fixed template.
    - Keep per-finding markdown under `findings/finding-*/` as the depth layer.

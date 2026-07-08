@@ -13,7 +13,7 @@ outputs/{engagement}/
 ├── recon/                          # code-recon baseline (the foundation)
 │   ├── attack-surface.md           # entry points, sources, sinks, trust boundaries
 │   ├── architecture.md             # stack, frameworks, data flows, security mechanisms
-│   └── sink-inventory.json         # machine-readable sink list by class, with file:line
+│   └── sink-inventory.json         # machine-readable: sinks by class (file:line) + entry_points[] (route↔source map for endpoint resolution)
 ├── plan/
 │   ├── deployment-plan.json        # which auditors, against which components
 │   └── audit-plan.md               # human narrative of the plan
@@ -62,9 +62,11 @@ outputs/{engagement}/
 `{file}:{line}`
 
 ## Source → Sink
-- **Source**: {param} (`{file}:{line}`)
+- **Source**: {param} in `{query|path|header|cookie|json|form}` (`{file}:{line}`)
 - **Path**: {hop → hop → sink}
 - **Sink**: {sink call} (`{file}:{line}`), slot `{slot_type}`
+- **Endpoint** (when resolvable): {METHOD} {path} — resolved from recon `entry_points` (the Step 6.6
+  aggregator copies this into `codeaudit-report.json` `endpoint` for the pentest hybrid handoff; omit if the route is dynamic)
 
 ## Why it is vulnerable
 {Plain-language: the tainted value reaches a {slot} slot with {no defense | wrong defense | defense

@@ -4,6 +4,22 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## codeaudit [0.1.3] — 2026-07-08
+
+### Fixed
+- **Voie A now actually produces `endpoint` (was orphaned in 0.1.2).** The `endpoint`-resolution instruction
+  lived only in the report contract, which the finding-authoring path never reached. Wired it to the real
+  actors: `entry_points[]` is now a **required** code-recon output (with a completion check), and the
+  **Step 6.6 aggregator** — the single writer of `codeaudit-report.json` `findings[]` — now reads
+  `entry_points` and resolves each request-reachable finding's `endpoint` (matching the source name+file:line
+  → entry point; `in`/`method`/`path` taken from it), adding `endpoint` to its field checklist. `OUTPUT_STRUCTURE`
+  and the description.md template updated to carry `endpoint` + the source `in`.
+- **Unified the `in` vocabulary** across code-recon, the report contract, and the pentest normalizer to the
+  fixed enum `query|path|header|cookie|json|form` (was `body` on the codeaudit side vs `json` on the pentest
+  side — same source yielded different `in` under voie A vs voie B). Pentest normalizer: Rails `params[:id]`
+  → `path`; a codeaudit-resolved `endpoint` now implies `externally_reachable` (a live-routed finding is no
+  longer buried when its source string can't be parsed).
+
 ## codeaudit [0.1.2] — 2026-07-08
 
 ### Added
