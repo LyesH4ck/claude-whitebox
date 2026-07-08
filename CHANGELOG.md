@@ -4,6 +4,28 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.0] — 2026-07-08
+
+### Added
+- **Hybrid handoff — feed a `codeaudit` white-box report into `/pentest:pentest` as prioritized
+  exploitation leads (MVP, voie B).** A new sub-phase **6.3.4** (hybrid mode, triggered when
+  `outputs/{engagement}/codeaudit-report.json` or `--codeaudit <path>` is present) runs a deterministic
+  normalizer (`codeaudit-handoff/codeaudit-leads.mjs`) that turns codeaudit findings into
+  `analysis/exploitation-leads.json`: it parses the HTTP param/context from each finding's `source`, uses
+  codeaudit's `endpoint` when present or correlates the param against the surface map, and ranks
+  externally-reachable/high-confidence/resolved leads first. The `pentester-orchestrator` plans those leads
+  **first** and passes each finding's `code_evidence` (source→sink, file:line, `slot_type`,
+  `witness_payload`) to the matching executor as a **`code_hint`** for targeted (not blind) payload
+  crafting. The report gains hybrid `provenance` (`static-only | live-only | both-confirmed`); a
+  code-confirmed lead that can't be reproduced live stays `probable` + coverage gap, never
+  `tested_not_vulnerable`. **Guardrail:** leads ADD to, never narrow, the black-box recon. Spec:
+  `docs/HYBRID_HANDOFF_SPEC.md`. (Voie A — codeaudit emitting per-finding endpoints — is a follow-up.)
+
+### Fixed
+- **`business-modeler` codeaudit path** — pointed the white-box enrichment at the real
+  `codeaudit-report.json` + `recon/` outputs instead of the non-existent `outputs/{engagement}/codeaudit/`
+  directory.
+
 ## [2.3.2] — 2026-07-08
 
 ### Fixed
