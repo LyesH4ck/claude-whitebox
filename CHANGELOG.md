@@ -4,6 +4,24 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.3.2] — 2026-07-08
+
+### Fixed
+- **Made the 2.3.1 SQLi additions actually work and stop crying wolf (code-review driven, verified end-to-end).**
+  - `sqli-detect` can now reach **nested / array JSON params**: pass the captured body as a `--body` template
+    and target a path with `--param` (`rowGroupCols[0].id`). Previously `buildReq` built a flat single-key
+    body, so the marquee ag-grid identifier vector was unreachable.
+  - **Baseline subtraction** for the `error-based` and `query-disclosure` signals (same discipline as the
+    quote/boolean/numeric signals): a DB error or SQL-looking snippet already present on the baseline is a
+    property of the endpoint, not the parameter, and no longer fires — kills false positives on benign HTML
+    (`<select>…</select>`, "from … where" prose) and on always-500 endpoints.
+  - Tightened ORM error signatures to **error-shaped** patterns (not bare package names), tightened the
+    query-disclosure regex to a real statement/Hibernate-alias shape, and bounded regex input.
+  - Added a real **`structural-breakout`** differential signal (a breakout payload that changes a stable
+    baseline) and a structured **`leaked_query`** output field feeding exploitation.
+  - Reconciled the `injection-tester` reporting rule with Phase 4: a DB/ORM-error finding's `poc.py` asserts
+    the reproducible error/disclosure (a valid executable PoC), so it is reportable without data extraction.
+
 ## [2.3.1] — 2026-07-08
 
 ### Changed
