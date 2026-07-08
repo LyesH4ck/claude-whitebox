@@ -311,14 +311,22 @@ reports `complete`. Loop:
    deeper analysis, or it discovered new sources/second-order flows), re-dispatch it (or a focused
    follow-up) on the remaining items. Repeat until it reports `complete`. This is convergence on full
    coverage, not budget-spending.
-3. **Follow-up waves** (single parallel `Task` message), drawn from the plan's `escalation_plan`, only
+3. **Run every planned wave.** The plan's `waves[]` may contain more than one wave of auditors — the
+   planner orders classes by sink density but intends *every* wave to run (see audit-planner: "every
+   wave still runs"). Once the current wave's auditors all report `complete`, dispatch the next wave in
+   `deployment-plan.json` `waves[]` using the same parallel-`Task` pattern as Step 6.4.2, then resume
+   this loop for it. The audit is **not** complete until every wave in the plan has been dispatched and
+   its auditors have reported `complete`. Log
+   `phase":"audit","action":"deploy-auditors","count":<N>,"wave":<W>` at each wave dispatch.
+4. **Follow-up waves** (single parallel `Task` message), drawn from the plan's `escalation_plan`, only
    for genuine coverage/quality gains:
    - re-trace `probable` findings whose helpers/branches were not fully inspected → aim to raise to `high`;
    - **hybrid mode**: corroborate top injection/SSRF/XSS findings with a single benign witness request
      against `target_url`;
    - cover any newly-discovered sources or second-order flows surfaced during tracing.
-4. **Stop when scope is exhausted** — every enumerated source traced across every selected class with
-   surface, all `probable` items either confirmed or noted. This is the normal exit. Log
+5. **Stop when scope is exhausted** — every enumerated source traced across every selected class with
+   surface across **every planned wave**, all `probable` items either confirmed or noted. This is the
+   normal exit. Log
    `phase":"audit","action":"auditors-complete","findings_count":<N>,"result":"scope-exhausted"`.
    Do not manufacture additional work once coverage is complete.
 

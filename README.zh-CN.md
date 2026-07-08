@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    一个为 Claude Code 打造的完整渗透测试框架 —— 15 个 agent、6 个 skill 协调器、63 个攻击类别。
+    一个为 Claude Code 打造的完整渗透测试框架 —— 18 个 agent、6 个 skill 协调器、64 个攻击类别。
     <br />
     结构化、人工介入（human-in-the-loop）、以证据为驱动。
   </p>
@@ -19,8 +19,8 @@
       <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
-    <img src="https://img.shields.io/badge/agents-15-0EA5E9?style=flat-square" alt="15 agents" />
-    <img src="https://img.shields.io/badge/attack_categories-63-EF4444?style=flat-square" alt="63 attack categories" />
+    <img src="https://img.shields.io/badge/pentest_agents-18-0EA5E9?style=flat-square" alt="18 pentest agents" />
+    <img src="https://img.shields.io/badge/attack_categories-64-EF4444?style=flat-square" alt="64 attack categories" />
     <img src="https://img.shields.io/badge/authorized_use_only-red?style=flat-square" alt="Authorized use only" />
   </p>
   <p align="center">
@@ -42,11 +42,13 @@
 
 **`pentest`** 插件为 Claude 提供结构化的渗透测试能力。它不是一个脚本或扫描器 —— 而是一个 **agent 协调框架**：`/pentest:pentest` 命令在主会话中协调整个任务 —— 它执行侦察、向规划器（planner）agent 请求部署计划，然后并行部署专门的执行器（executor）agent（每个都遵循严格的 4 阶段工作流），将时间预算用于升级（escalation），并要求在任何主动利用（exploitation）开始前获得操作员批准。每一项发现都附带可运行的 PoC、捕获的 HTTP 证据，以及一张 Playwright 截图。
 
+**`codeaudit`** 插件是其白盒对应物：一个静态源代码安全审计框架。`/codeaudit:codeaudit` 命令掌控整个流程 —— `code-recon` 基线、通过 `audit-planner` 规划，然后在 **10 个 OWASP 漏洞领域**（注入、XSS、认证、访问控制、SSRF、密钥、加密、依赖、配置、日志）上并行派发 **12 个专门的审计 agent**。它读取源代码并追踪每一条 source→sink 路径；默认为静态模式，并提供可选的*混合*模式，用单次良性的 live 请求来佐证代码发现。
+
 **核心原则：**
 - 在每个升级节点都保持人工介入 —— 未经你的确认，Claude 无法进入利用阶段
 - 证据优先 —— 不存在理论性发现，只有经过验证、附带 `poc.py` 和 `poc_output.txt` 的 PoC
 - 结构化输出 —— 每次任务都会将机器可读的 JSON + markdown 分析写入 `outputs/{engagement}/`
-- 覆盖广度 —— 11 个攻击领域、63 个子类别、引用 25+ 个安全工具
+- 覆盖广度 —— 11 个攻击领域、64 个子类别、引用 25+ 个安全工具
 
 ---
 
@@ -72,6 +74,12 @@
 对于服务端测试（nmap、sqlmap、gobuster、Metasploit 等），插件可以连接到一个远程的 Kali Linux REST API。如果没有它，agent 会回退到本地通过 Bash 可用的工具。
 
 **配置：** 在一台你的机器可以访问到的 Kali Linux 主机上部署 [MCP-Kali-Server](https://github.com/Wh0am123/MCP-Kali-Server)，然后在 Claude Code 中运行 `/pentest:pentest-kali` 进行连接并保存配置。服务器 URL 和工具可用性会写入 `.pentest-mks.json`，并在任务启动时自动读取。
+
+### 可选：OAST 服务器（带外测试）
+
+为确认**盲注 / 带外漏洞** —— 盲 SSRF、盲/带外 SQLi、盲 OS 命令注入、存储型/盲 XSS、XXE 带外以及 Log4Shell 类 RCE —— `pentest` 插件可以驱动一个自托管的 [interactsh](https://github.com/projectdiscovery/interactsh) 协作者（collaborator）服务器。目标被诱导回连到一个你所控制的服务器；一次被记录下来的 DNS/HTTP 交互即是服务端执行的确定性证据。OAST 是一项**可选能力** —— 若未配置，agent 会跳过带外测试，行为与之前完全一致（不会捏造任何盲注发现）。
+
+**配置：** 搭建你自己的 interactsh 服务器（使用你自己的域名可规避公共协作者上的 WAF 封锁），然后在 Claude Code 中运行 `/pentest:pentest-oast`。该命令会执行一次实时自检（注册 → 触发 → 关联），并将服务器 URL/token 写入 `.pentest-oast.json`。随后 `oast` skill 会与主 skill 一同挂载，使注入、XSS、CVE 及执行器 agent 分配唯一 payload 并关联回连命中。优先使用 DNS 和 HTTP 回连；HTTPS 捕获为尽力而为（best-effort）。
 
 ---
 
@@ -227,13 +235,14 @@
 
 ## 会话状态文件
 
-会话配置持久化在项目根目录的小型 JSON 文件中，将准备与启动解耦 —— 你可以独立地定义范围（以及 pentest 的攻击画像和 Kali 连接），然后在准备就绪时启动。**`pentest`** 插件使用三个：
+会话配置持久化在项目根目录的小型 JSON 文件中，将准备与启动解耦 —— 你可以独立地定义范围（以及 pentest 的攻击画像和 Kali/OAST 连接），然后在准备就绪时启动。**`pentest`** 插件使用以下这些：
 
 | 文件 | 写入者 | 用途 |
 |------|-----------|---------|
 | `.pentest-scope.json` | `/pentest:pentest-scope`、`/pentest:pentest` | 目标、任务名称、范围外、认证、timing（时间预算/配额）、彻底程度、output_formats，以及 `status: pending\|active` |
 | `.pentest-attacks.json` | `/pentest:pentest-attacks`、`/pentest:pentest` | 攻击模式和带 skill/executor 映射的所选类别，以及 `status: pending\|active` |
 | `.pentest-mks.json` | `/pentest:pentest-kali` | Kali 服务器 URL、核心工具可用性标志，以及 `status: active` |
+| `.pentest-oast.json` | `/pentest:pentest-oast` | 用于带外（盲注）检测的自托管 interactsh OAST 服务器 URL/token/域名，以及 `status: active` |
 
 **`codeaudit`** 插件采用相同模式，使用其自己的文件：
 
@@ -385,6 +394,20 @@ flowchart LR
 
 **后渗透** 仅当同时满足以下两点时才在配额循环中运行：已连接 Kali 服务器（`.pentest-mks.json` 活动），且至少有一项发现确认了 CVE 或 RCE。它绝不会被推测性地运行。
 
+---
+
+### /pentest:pentest-oast
+
+**用途：** 连接一个自托管的 [interactsh](https://github.com/projectdiscovery/interactsh) OAST 服务器以进行带外（盲注漏洞）检测，然后配置 agent 运行带外 payload 并关联回连命中。
+
+**流程：**
+1. 收集服务器 URL 和可选的认证 token
+2. 确认 `interactsh-client` 二进制文件存在
+3. 执行一次实时自检（注册 → 触发一次 DNS/HTTP 回连 → 关联命中），端到端验证连通性
+4. 写入 `.pentest-oast.json`，状态为 `status: active`
+
+一旦激活，`oast` skill 会与主 skill 一同挂载，使注入/XSS/CVE/执行器 agent 从共享池中分配唯一 payload 并检索交互流 —— 从而对盲 SSRF、盲/带外 SQLi、盲命令注入、存储型 XSS、XXE 带外和盲 RCE 进行确定性确认。若未配置 OAST，agent 会跳过带外测试并将其记为覆盖缺口。
+
 在每个执行器 agent 内部，**阶段 2（实验 —— 仅安全探测）** 与 **阶段 3（测试 —— 主动利用）** 之间存在第二道批准门。执行器会展示其候选向量并等待明确确认后才继续。
 
 ---
@@ -396,7 +419,7 @@ flowchart LR
 | Web 应用 | `web-application-mapping` → `common-appsec-patterns` | 从完整清点开始 |
 | REST / GraphQL API | `cve-testing` + `domain-assessment` | 无浏览器界面 |
 | 云基础设施 | `pentester-executor` → `attacks/cloud-containers/` | 无专用协调器 —— 通过执行器路由 |
-| 网络 / IP | `pentest` → `attacks/ip-infrastructure/` | 9 个子 skill（端口扫描、DNS、SMB、MITM…）|
+| 网络 / IP | `pentest` → `attacks/ip-infrastructure/` | 8 个子 skill（端口扫描、DNS、SMB、MITM…）|
 | 全范围 | 按序使用所有协调器 + `physical-social`（若有书面授权）| 确认已有书面授权 |
 | 聚焦认证 | `authenticating` | 直接使用 Playwright MCP —— 无子执行器 |
 
@@ -433,6 +456,13 @@ flowchart LR
 | `inventory-javascript-mapper` | 通过无头 Playwright 提取 SPA 路由：React Router、Vue Router、Angular 路由，以及静态扫描器看不见的 AJAX 端点。 | Playwright MCP, Bash, Read, Write |
 | `inventory-surface-analyzer` | 将四个清点 agent 的输出综合为统一的、按风险分级的攻击面报告 + 可执行的测试清单。只读 —— 不运行任何扫描。 | Read, Write |
 
+### 业务逻辑 Agent
+
+| Agent | 描述 | 工具 |
+|-------|-------------|-------|
+| `business-modeler` | 黑盒业务逻辑建模器。以交互驱动方式探索应用，提取它*看起来*在强制执行的规则，并仅根据可观测信号发出候选不变量（`invariants.json`）。只读 —— 在 `inventory-surface-analyzer` 之后、规划器之前运行。 | Playwright MCP, Bash, Read, Write |
+| `business-logic-tester` | 以工作流为先的测试器。读取 `invariants.json`，从领域通用的分类法生成滥用用例，执行**有状态的**多步序列，并用状态增量预言机（前/后 —— 200 从不构成证据）确认每一项发现。由 `common-appsec-patterns` 部署。 | Playwright MCP, Bash, Read, Write |
+
 ### 工具类
 
 | Agent | 描述 | 模型 |
@@ -449,7 +479,7 @@ flowchart LR
 | `common-appsec-patterns` | XSS、CSRF、SQLi/NoSQLi/CMDi、CSP 绕过、原型链污染 | 5 个专门测试器 |
 | `cve-testing` | 技术栈指纹识别、CVE 研究、PoC 适配、实时验证 | cve-tester |
 | `domain-assessment` | 子域名枚举、证书透明度、DNS 爆破、端口扫描 | domain-assessment |
-| `pentest` | 主攻击索引 —— 11 个领域、63 个子类别。将执行器路由到具体攻击子 skill | pentester-executor |
+| `pentest` | 主攻击索引 —— 11 个领域、64 个子类别。将执行器路由到具体攻击子 skill | pentester-executor |
 | `authenticating` | 注册/登录自动化、2FA/OTP 绕过、CAPTCHA 规避、OAuth 流程 | 直接使用 Playwright MCP（无子执行器）|
 
 ---
@@ -599,12 +629,13 @@ flowchart LR
 </details>
 
 <details>
-<summary><strong>核心技能（3）</strong> —— Burp Suite、方法论、报告</summary>
+<summary><strong>核心技能（4）</strong> —— Burp Suite、方法论、Param-Mine、报告</summary>
 
 | 子类别 | 覆盖范围 |
 |-------------|---------|
 | `burp-suite` | 代理设置、扫描器配置、扩展（Active Scan++、Turbo Intruder）|
 | `methodology` | PTES、OWASP WSTG、MITRE ATT&CK 映射、任务范围界定 |
+| `param-mine` | 参数级侦察 —— 挖掘隐藏/未声明的请求参数，避免遗漏已知端点上的注入 sink |
 | `reporting` | 发现模板、CVSS 评分、执行摘要、修复建议撰写 |
 
 </details>
@@ -683,7 +714,7 @@ claude-whitebox/
 │   └── pentest/
 │       ├── .claude-plugin/
 │       │   └── plugin.json          # 插件元数据（MIT）
-│       ├── agents/                  # 15 个 agent .md 文件
+│       ├── agents/                  # 18 个 agent .md 文件
 │       ├── docs/
 │       │   ├── CLAUDE.md            # agent 架构概览
 │       │   ├── WORKFLOWS.md         # 规划与批准工作流参考
@@ -697,10 +728,11 @@ claude-whitebox/
 │           ├── cve-testing/
 │           ├── domain-assessment/
 │           ├── mks/                 # Metasploit-Kali Server 工具偏好
+│           ├── oast/                # 带外（interactsh）检测指南
 │           ├── web-application-mapping/
 │           └── pentest/
 │               ├── SKILL.md         # 主攻击索引
-│               └── attacks/         # 11 个领域、63 个子类别
+│               └── attacks/         # 11 个领域、64 个子类别
 ├── LICENSE
 └── README.md
 ```

@@ -4,6 +4,81 @@ All notable changes to `claude-pentest` are documented here.
 
 ---
 
+## [Unreleased]
+
+Business-logic detection — the class of flaw that endpoint-level testing structurally misses (no injectable
+sink, a valid-looking `200` on every request).
+
+### Added
+- **Dedicated business-logic detection.** Two new agents split modeling from exploitation. `business-modeler`
+  is a read-only black-box modeler that explores the app (interaction-driven), extracts the rules it *appears*
+  to enforce from observable signals only (client-enforced constraints, the cross-identity differential, the
+  app's own rejection messages — never domain knowledge or code), and emits candidate invariants
+  (`invariants.json`). `business-logic-tester` reads those invariants and, per-invariant (not per-endpoint),
+  generates abuse cases from a domain-generic taxonomy, executes **stateful** multi-step sequences, and
+  confirms each finding with a **state-delta oracle** (before/after — a `200` is never proof). Covers
+  plan/role gating, workflow skip/replay, numeric/temporal/quota abuse, and idempotency/race hand-off, with a
+  Phase 2→3 write gate. `business-modeler` runs after `inventory-surface-analyzer` and before the planner; in
+  white-box/hybrid mode it also ingests `codeaudit` `code-recon` output. `business-logic-tester` is deployed by
+  the `common-appsec-patterns` coordinator.
+
+---
+
+## [2.3.0] — 2026-07-07
+
+Out-of-band detection, parameter-level recon, and adaptive authorization testing. Headline: blind
+vulnerabilities are now confirmable via a self-hosted OAST collaborator, recon inventories request parameters
+(not just endpoints) so injection sinks on known endpoints are no longer missed, and a multi-identity
+authorization engine adds first-class IDOR/BOLA/BFLA coverage. Also: a dedicated stealth Playwright MCP
+plugin, targeted single-scope launchers, and a full SQLi detection matrix.
+
+### Added
+- **OAST (out-of-band) blind-vulnerability confirmation.** A new `oast` skill and `/pentest:pentest-oast`
+  connect command drive a self-hosted [interactsh](https://github.com/projectdiscovery/interactsh) collaborator
+  server. The command runs a live self-test (register → trigger → correlate) and writes `.pentest-oast.json`;
+  a single long-lived client registers once, mints a payload pool, and streams decrypted interactions for the
+  whole engagement. The `injection`, `xss`, `cve`, and `pentester-executor` agents allocate unique payloads and
+  correlate callback hits to deterministically confirm blind SSRF, blind/OOB SQLi, blind OS-command injection,
+  stored/blind XSS, XXE OOB, and Log4Shell-class RCE. OAST is optional — if unconfigured, agents skip OOB
+  testing and record it as a coverage gap rather than fabricating findings. DNS/HTTP callbacks are preferred;
+  HTTPS capture is best-effort.
+- **Parameter-level reconnaissance (`param-mine`).** A new `essential-skills/param-mine` tool + wiring inventory
+  request *parameters*, not just endpoints, so injection sinks on already-known endpoints aren't missed
+  (post-mortem keystone). Paired with param-driven routing — every parameterized endpoint is now treated as an
+  injection candidate — and an exhaustive crawl that sweeps HTTP methods, nested params, and interaction depth.
+- **Adaptive multi-identity authorization testing.** A new `idor-bola-tester` agent and the deterministic
+  `authz-matrix` cross-identity replay engine cover IDOR/BOLA (API1), BFLA (API5), and BOPLA/mass-assignment
+  (API3) with an adaptive oracle (0/1/2/N accounts) and a strict `200 ≠ BOLA` verification bar. Adds an
+  `access-map` mode for per-identity reach diffing (BFLA/missing-auth triage) and a `/pentest:idor` targeted
+  launcher. Operator-authored `.pentest-identities.json` / `.pentest-authz-requests.json` root files supply
+  sessions and the request corpus.
+- **Targeted single-scope launchers.** `/pentest:xss` and `/pentest:sql` deploy the `xss-tester` /
+  `injection-tester` agent directly against one scope (no full engagement), each with a capability-aware recon
+  preflight that maps SPA routes so client-only views aren't missed.
+- **Full SQLi detection matrix (`sqli-detect`).** Quote-balance, boolean, numeric, error-based, and time-based
+  detection with anti-false-positive checks.
+- **Dedicated stealth Playwright MCP plugin.** A standalone `playwright` plugin ships the MCP server with
+  stealth-friendly defaults (real Chrome channel, headed, realistic UA/viewport, anti-automation flags) plus an
+  Option B full-stealth standalone probe for WAF-gated testing. It is a dependency of the pentest plugin's
+  client-side agents.
+- **Provider-specific cloud references** for AWS, Azure, GCP, Docker, and Kubernetes.
+
+### Changed
+- **Quantified-coverage honesty gate in the report.** The report step now mandates quantified coverage and
+  fails honesty checks that would let a run claim more surface than it actually tested.
+- **Model-tiered agents** — recon agents and the `codeaudit` deps/secrets auditors are tiered to lighter models
+  for cost/latency; injection finding IDs aligned across pentest/codeaudit.
+- **Phase 2→3 approval gate extended to the dedicated testers** (not just the general executor).
+
+### Fixed
+- Engagement directories the pipeline actually uses are now created up front.
+- Playwright MCP server start failure (`-32000` — `initScript` must be a file path) resolved; stealth /
+  bot-detection guidance corrected and de-siloed.
+- Path-traversal / LFI false negatives from shallow depth and split params fixed via an overshoot/depth-sweep
+  rule.
+
+---
+
 ## [2.2.6] — 2026-06-08
 
 Engagement-driven improvement pass. Headline: a re-architecture so the multi-agent design actually

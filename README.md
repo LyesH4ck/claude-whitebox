@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    A full penetration testing framework for Claude Code with Kali MCP integration containing 16 agents, 6 skill coordinators and 63 attack categories.
+    A full penetration testing framework for Claude Code with Kali MCP integration containing 18 agents, 6 skill coordinators and 64 attack categories.
     <br />
     Structured, human-in-the-loop, evidence-driven.
   </p>
@@ -19,8 +19,8 @@
       <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
-    <img src="https://img.shields.io/badge/agents-16-0EA5E9?style=flat-square" alt="16 agents" />
-    <img src="https://img.shields.io/badge/attack_categories-63-EF4444?style=flat-square" alt="63 attack categories" />
+    <img src="https://img.shields.io/badge/pentest_agents-18-0EA5E9?style=flat-square" alt="18 pentest agents" />
+    <img src="https://img.shields.io/badge/attack_categories-64-EF4444?style=flat-square" alt="64 attack categories" />
     <img src="https://img.shields.io/badge/authorized_use_only-red?style=flat-square" alt="Authorized use only" />
   </p>
   <p align="center">
@@ -40,11 +40,13 @@
 
 The **`pentest`** plugin gives Claude structured penetration testing capabilities. It is not a script or scanner, it is an **agent coordination framework**: the `/pentest:pentest` command coordinates the engagement from the main session — it runs reconnaissance, asks a planner agent for a deployment plan, then deploys specialized executor agents (each following a strict 4-phase workflow) in parallel, spending the time budget on escalation, and requiring operator approval before any active exploitation begins. Every finding ships with a working PoC, captured HTTP evidence, and a Playwright screenshot.
 
+The **`codeaudit`** plugin is the white-box counterpart: a static source-code security audit framework. The `/codeaudit:codeaudit` command owns the run — a `code-recon` baseline, planning via the `audit-planner`, then parallel dispatch of **12 specialized auditor agents** across **10 OWASP vulnerability domains** (injection, XSS, auth, access control, SSRF, secrets, crypto, dependencies, configuration, logging). It reads source and traces every source→sink path; static by default, with an optional *hybrid* mode that corroborates a code finding against a single benign live request.
+
 **Key principles:**
 - Human-in-the-loop at every escalation point — Claude cannot proceed to exploitation without your confirmation
 - Evidence-first — no theoretical findings, only verified PoCs with `poc.py` and `poc_output.txt`
 - Structured outputs — every engagement writes machine-readable JSON + markdown analysis to `outputs/{engagement}/`
-- Breadth — 11 attack domains, 63 sub-categories, 25+ security tools referenced
+- Breadth — 11 attack domains, 64 sub-categories, 25+ security tools referenced
 
 ---
 
@@ -70,6 +72,12 @@ The plugin installs into your project's `.claude/` directory. Once installed, al
 For server-side testing (nmap, sqlmap, gobuster, Metasploit, etc.), the plugin can connect to a remote Kali Linux REST API. Without it, agents fall back to whatever tools are available locally via Bash.
 
 **Setup:** Deploy [MCP-Kali-Server](https://github.com/Wh0am123/MCP-Kali-Server) on a Kali Linux host reachable from your machine, then run `/pentest:pentest-kali` in Claude Code to connect and save the configuration. The server URL and tool availability are written to `.pentest-mks.json` and picked up automatically at engagement launch.
+
+### Optional: OAST server (out-of-band testing)
+
+To confirm **blind / out-of-band vulnerabilities** — blind SSRF, blind/OOB SQLi, blind OS-command injection, stored/blind XSS, XXE OOB, and Log4Shell-class RCE — the `pentest` plugin can drive a self-hosted [interactsh](https://github.com/projectdiscovery/interactsh) collaborator server. The target is coerced into calling back to a server you control; a recorded DNS/HTTP interaction is deterministic proof of server-side execution. OAST is an **optional capability** — if it is not configured, agents skip OOB testing and behave exactly as before (no fabricated blind findings).
+
+**Setup:** Stand up your own interactsh server (using your own domain evades WAF blocklists on public collaborators), then run `/pentest:pentest-oast` in Claude Code. The command runs a live self-test (register → trigger → correlate) and writes the server URL/token to `.pentest-oast.json`. The `oast` skill is then mounted alongside the primary skill so injection, XSS, CVE, and executor agents allocate unique payloads and correlate callback hits. DNS and HTTP callbacks are preferred; HTTPS capture is best-effort.
 
 ---
 
@@ -151,6 +159,20 @@ When MKS is active, the time-budget loop runs **post-exploitation** if a CVE or 
 
 ---
 
+### /pentest:pentest-oast
+
+**Purpose:** Connect a self-hosted [interactsh](https://github.com/projectdiscovery/interactsh) OAST server for out-of-band (blind-vulnerability) detection, then configure agents to run OOB payloads and correlate callback hits.
+
+**Flow:**
+1. Collects the server URL and optional auth token
+2. Confirms the `interactsh-client` binary is present
+3. Runs a live self-test (register → trigger a DNS/HTTP callback → correlate the hit) to prove connectivity end-to-end
+4. Writes `.pentest-oast.json` with `status: active`
+
+Once active, the `oast` skill is mounted alongside the primary skill so injection/XSS/CVE/executor agents allocate unique payloads from a shared pool and grep the interactions stream — enabling deterministic confirmation of blind SSRF, blind/OOB SQLi, blind command injection, stored XSS, XXE OOB, and blind RCE. If OAST is not configured, agents skip OOB testing and note it as a coverage gap.
+
+---
+
 ### /pentest:pentest-exit
 
 **Purpose:** Structured session close — reads findings, flushes unsaved notes, outputs a severity-bucketed summary, resets session state, and lifts the isolation constraint.
@@ -225,13 +247,14 @@ When MKS is active, the time-budget loop runs **post-exploitation** if a CVE or 
 
 ## Session State Files
 
-Session configuration persists in small JSON files at the project root, decoupling preparation from launch — define scope (and, for pentest, the attack profile and Kali connection) independently, then launch when ready. The **`pentest`** plugin uses three:
+Session configuration persists in small JSON files at the project root, decoupling preparation from launch — define scope (and, for pentest, the attack profile and Kali/OAST connections) independently, then launch when ready. The **`pentest`** plugin uses these:
 
 | File | Written by | Purpose |
 |------|-----------|---------|
 | `.pentest-scope.json` | `/pentest:pentest-scope`, `/pentest:pentest` | Target, engagement name, out-of-scope, auth, timing (time budget/quota), thoroughness, output_formats, and `status: pending\|active` |
 | `.pentest-attacks.json` | `/pentest:pentest-attacks`, `/pentest:pentest` | Attack mode and selected categories with skill/executor mapping, and `status: pending\|active` |
 | `.pentest-mks.json` | `/pentest:pentest-kali` | Kali server URL, essential tool availability flags, and `status: active` |
+| `.pentest-oast.json` | `/pentest:pentest-oast` | Self-hosted interactsh OAST server URL/token/domain for out-of-band (blind) detection, and `status: active` |
 
 The **`codeaudit`** plugin uses the same pattern with its own files:
 
@@ -395,7 +418,7 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 | Web application | `web-application-mapping` → `common-appsec-patterns` | Start with full inventory |
 | REST / GraphQL API | `cve-testing` + `domain-assessment` | No browser surface |
 | Cloud infrastructure | `pentester-executor` → `attacks/cloud-containers/` | No dedicated coordinator — route through executor |
-| Network / IP | `pentest` → `attacks/ip-infrastructure/` | 9 sub-skills (port scanning, DNS, SMB, MITM…) |
+| Network / IP | `pentest` → `attacks/ip-infrastructure/` | 8 sub-skills (port scanning, DNS, SMB, MITM…) |
 | Full-scope | All coordinators in sequence + `physical-social` (if authorized in writing) | Confirm written authorization |
 | Authentication-focused | `authenticating` | Uses Playwright MCP directly — no sub-executor |
 
@@ -433,6 +456,13 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 | `inventory-javascript-mapper` | SPA route extraction via headless Playwright: React Router, Vue Router, Angular routes, AJAX endpoints invisible to static scanners. | Playwright MCP, Bash, Read, Write |
 | `inventory-surface-analyzer` | Synthesizes all four inventory agent outputs into a unified risk-tiered attack surface report + actionable testing checklist. Reads only — runs no scans. | Read, Write |
 
+### Business-Logic Agents
+
+| Agent | Description | Tools |
+|-------|-------------|-------|
+| `business-modeler` | Black-box business-logic modeler. Explores the app (interaction-driven), extracts the rules it *appears* to enforce, and emits candidate invariants (`invariants.json`) from observable signals only. Read-only — runs after `inventory-surface-analyzer`, before the planner. | Playwright MCP, Bash, Read, Write |
+| `business-logic-tester` | Workflow-first tester. Reads `invariants.json`, generates abuse cases from a domain-generic taxonomy, executes **stateful** multi-step sequences, and confirms each finding with a state-delta oracle (before/after — a 200 is never proof). Deployed by `common-appsec-patterns`. | Playwright MCP, Bash, Read, Write |
+
 ### Utility
 
 | Agent | Description | Model |
@@ -449,7 +479,7 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 | `common-appsec-patterns` | XSS, CSRF, SQLi/NoSQLi/CMDi, CSP bypass, prototype pollution | 5 specialized testers |
 | `cve-testing` | Tech stack fingerprinting, CVE research, PoC adaptation, live validation | cve-tester |
 | `domain-assessment` | Subdomain enumeration, cert transparency, DNS brute-force, port scanning | domain-assessment |
-| `pentest` | Master attack index — 11 domains, 63 sub-categories. Routes executor to specific attack sub-skills | pentester-executor |
+| `pentest` | Master attack index — 11 domains, 64 sub-categories. Routes executor to specific attack sub-skills | pentester-executor |
 | `authenticating` | Signup/login automation, 2FA/OTP bypass, CAPTCHA evasion, OAuth flows | Direct Playwright MCP (no sub-executor) |
 
 ---
@@ -599,12 +629,13 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 </details>
 
 <details>
-<summary><strong>Essential Skills (3)</strong> — Burp Suite, Methodology, Reporting</summary>
+<summary><strong>Essential Skills (4)</strong> — Burp Suite, Methodology, Param-Mine, Reporting</summary>
 
 | Sub-category | Coverage |
 |-------------|---------|
 | `burp-suite` | Proxy setup, scanner configuration, extensions (Active Scan++, Turbo Intruder) |
 | `methodology` | PTES, OWASP WSTG, MITRE ATT&CK mapping, engagement scoping |
+| `param-mine` | Parameter-level recon — mines hidden/undeclared request parameters so injection sinks on known endpoints aren't missed |
 | `reporting` | Finding templates, CVSS scoring, executive summary, remediation writing |
 
 </details>
@@ -683,7 +714,7 @@ claude-whitebox/
 │   └── pentest/
 │       ├── .claude-plugin/
 │       │   └── plugin.json          # Plugin metadata (MIT)
-│       ├── agents/                  # 15 agent .md files
+│       ├── agents/                  # 18 agent .md files
 │       ├── docs/
 │       │   ├── CLAUDE.md            # Agent architecture overview
 │       │   ├── WORKFLOWS.md         # Planning & approval workflow reference
@@ -697,10 +728,11 @@ claude-whitebox/
 │           ├── cve-testing/
 │           ├── domain-assessment/
 │           ├── mks/                 # Metasploit-Kali Server tool preferences
+│           ├── oast/                # Out-of-band (interactsh) OOB detection guide
 │           ├── web-application-mapping/
 │           └── pentest/
 │               ├── SKILL.md         # Main attack index
-│               └── attacks/         # 11 domains, 63 sub-categories
+│               └── attacks/         # 11 domains, 64 sub-categories
 ├── LICENSE
 └── README.md
 ```
