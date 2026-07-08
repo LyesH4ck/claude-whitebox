@@ -56,6 +56,7 @@ A run is **incomplete** if `report.md` does not exist.
       "trace": ["userController.ts:42", "listService.ts:88", "userRepo.ts:130"],
       "slot_type": "SQL-keyword",
       "externally_reachable": true,
+      "endpoint": { "method": "GET", "path": "/api/users", "param": "sort", "in": "query" },
       "evidence": "findings/finding-001/description.md",
       "witness_payload": "?sort=id--"
     }
@@ -75,7 +76,14 @@ A run is **incomplete** if `report.md` does not exist.
 
 - **`findings[]`** — required keys: `id`, `title`, `severity`, `confidence`, `status`, `vuln_class`,
   `owasp`, `location` (file + line), `source`, `sink`. Optional: `cwe`, `cvss`, `trace`, `slot_type`,
-  `externally_reachable`, `witness_payload`, `evidence`.
+  `externally_reachable`, `endpoint`, `witness_payload`, `evidence`.
+- **`endpoint`** (optional, request-reachable findings only) — the live HTTP binding
+  `{ method, path, param, in }`, **resolved from `recon/sink-inventory.json` `entry_points`** by matching the
+  finding's `source` (its `in`+`name`+`file:line`) to the entry point that exposes it. Set it whenever the
+  route is statically resolvable; **omit it** when routing is dynamic (programmatic mounting, gateway
+  rewrites) — never guess a path. This is what the pentest hybrid handoff consumes to route a code-confirmed
+  finding straight to a live target (`HYBRID_HANDOFF_SPEC.md`); when absent, the handoff falls back to
+  correlating the param against the black-box surface map.
 - **`confidence`** — `high` (complete, unambiguous code trace), `probable` (likely flaw, a branch/helper
   not fully inspected), `unconfirmed` (suspected, no complete path — must also appear in `coverage_gaps`).
   In hybrid mode a live corroboration may raise `probable`→`high`.

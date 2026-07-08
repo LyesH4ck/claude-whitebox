@@ -4,6 +4,17 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## codeaudit [0.1.2] — 2026-07-08
+
+### Added
+- **Hybrid handoff, voie A — codeaudit now resolves the live endpoint per finding.** `code-recon` emits an
+  `entry_points[]` route↔source map in `sink-inventory.json` (method + path + handler + each source's
+  `{in, name, at}`), and the `codeaudit-report.json` finding schema gains an optional
+  `endpoint { method, path, param, in }`, resolved from that map by matching the finding's `source` (omitted
+  when routing is dynamic). The pentest hybrid handoff consumes it directly
+  (`endpoint_resolution:"codeaudit"`) → far fewer `unresolved` leads; falls back to param correlation
+  (voie B) when absent. See `plugins/pentest/docs/HYBRID_HANDOFF_SPEC.md`.
+
 ## [2.4.1] — 2026-07-08
 
 ### Fixed

@@ -45,10 +45,15 @@ You receive from the orchestrator: `repo` path, `engagement` name, `out_of_scope
 Find every network-reachable entry point and the untrusted inputs it exposes:
 - routes / controllers / handlers / resolvers (REST, GraphQL, RPC, WebSocket), webhooks, file uploads,
   message-queue consumers, scheduled/admin endpoints exposed via routes.
-- For each, list the **sources** (params, body fields, headers, cookies, path params) with `file:line`.
+- For each, capture the **live HTTP binding** from the route registry — the **method + path** and the
+  handler `file:line` — and list the **sources** it exposes, each as `{in, name, at file:line}` (`in` =
+  query / path / body / header / cookie / form). This route↔source binding is what lets a downstream
+  finding name its live endpoint (the white-box → pentest handoff, `HYBRID_HANDOFF_SPEC.md`).
 - Catalog API schema files (OpenAPI/Swagger, GraphQL SDL) and copy them under `recon/schemas/` if present.
 
 Use Grep/Glob aggressively; read the route registry and middleware to know what is authenticated vs public.
+When the routing is **dynamic** (programmatic mounting, gateway rewrites) and a path cannot be resolved
+statically, record the entry point without a `path` — do not guess (the handoff falls back to correlation).
 
 ### Phase 3 — Inventory the sinks (per selected class)
 
@@ -86,6 +91,11 @@ Write three deliverables (create dirs with `mkdir -p` first):
    {
      "languages": ["typescript"],
      "files_in_scope": 412,
+     "entry_points": [
+       { "method": "GET", "path": "/api/users", "handler": "listUsers (src/api/userController.ts:40)",
+         "auth": "authenticated",
+         "sources": [ { "in": "query", "name": "sort", "at": "src/api/userController.ts:42" } ] }
+     ],
      "sinks": {
        "injection": [{ "file": "src/db/userRepo.ts", "line": 130, "api": "template-literal SQL", "feeds": "req.query.sort" }],
        "xss": [],
