@@ -4,6 +4,20 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.2] + codeaudit [0.1.4] — 2026-07-08
+
+### Fixed
+- **Hybrid handoff, final review pass.**
+  - **Deliverability:** bumped **pentest 2.4.1→2.4.2** — the shared normalizer (`codeaudit-leads.mjs`) lives
+    in the pentest plugin, so a codeaudit-only bump would not re-cache it on `/plugin marketplace update`.
+  - **`in` enum enforced on output:** a resolved `endpoint.in` is now constrained to
+    `query|path|header|cookie|json|form` (`unknown` no longer escapes into it; falls back to `query`).
+  - **Fewer mislabels:** Spring `@RequestHeader` → `header` (was grouped as `path`); Rails `params[:x]`
+    defaults to `query`, with `:id`-shaped names → `path` (was blanket `path`).
+  - **codeaudit 0.1.3→0.1.4 — resolution made robust:** Step 6.6's endpoint match now keys on the source
+    `file:line` (from the `source` string, not the sink `location`), omits on ambiguous/dynamic matches, and
+    the `source` field rule now **requires** the `(file:line)` so the resolution key always exists.
+
 ## codeaudit [0.1.3] — 2026-07-08
 
 ### Fixed

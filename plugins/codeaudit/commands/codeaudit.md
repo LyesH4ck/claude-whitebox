@@ -343,12 +343,17 @@ reports `complete`. Loop:
    - Gather each auditor's `_safe-*.md` into `tested_not_vulnerable`.
 1b. **Resolve each finding's live endpoint (hybrid handoff, voie A).** Read
    `outputs/{engagement}/recon/sink-inventory.json` `entry_points`. For every **request-reachable** finding,
-   match its `source` (the param **name** + `file:line`) against an entry point's `sources[] {name, at}`;
-   on a match, set `endpoint { method, path, param, in }` on the finding — taking `method`/`path`/`in` from
-   the matched entry point and `param` = the source name. **Omit `endpoint`** when no entry point matches or
-   the route is dynamic (no `path`) — never guess. `in` uses the fixed enum `query|path|header|cookie|json|form`.
-   This is what lets the pentest handoff route a code-confirmed finding straight to a live target; when
-   absent it falls back to param correlation. (Non-request classes — secrets/crypto/deps/config — get no endpoint.)
+   take the param **name** and the **source `file:line`** from the finding's `source` string (strip the
+   surrounding parens; use the *source* location embedded in `source`, **not** the finding's top-level
+   `location`, which is the *sink*). Match that `(name, source file:line)` against an entry point's
+   `sources[] {name, at}` (`at` is the bare `file:line`). On a unique match, set
+   `endpoint { method, path, param, in }` — `method`/`path`/`in` from the matched entry point, `param` = the
+   source name; `in` uses the fixed enum `query|path|header|cookie|json|form`. **Omit `endpoint`** when: no
+   entry point matches, the route is dynamic (entry point has no `path`), or the param name matches **more
+   than one** entry point and the source `file:line` can't disambiguate — never guess a path. (Non-request
+   classes — secrets/crypto/deps/config/logging — get no endpoint.) When absent, the pentest handoff falls
+   back to param correlation. To make this resolvable, findings **must** record the source with its
+   `file:line` (see REPORT_CONTRACT `source` rule).
 2. Present a findings summary to the operator via AskUserQuestion before writing the final report (total;
    critical/high/medium/low/info counts; confidence breakdown; top 3; coverage gaps). Confirm: "Write the
    final report now?"

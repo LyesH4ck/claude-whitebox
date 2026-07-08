@@ -77,6 +77,9 @@ A run is **incomplete** if `report.md` does not exist.
 - **`findings[]`** — required keys: `id`, `title`, `severity`, `confidence`, `status`, `vuln_class`,
   `owasp`, `location` (file + line), `source`, `sink`. Optional: `cwe`, `cvss`, `trace`, `slot_type`,
   `externally_reachable`, `endpoint`, `witness_payload`, `evidence`.
+- **`source`** — the tainted input as `expr (file:line)` and the `file:line` is **required** (it is the
+  entry-point-resolution key for `endpoint`, and is the *source* read site, distinct from the top-level
+  `location` which is the *sink*). E.g. `"req.query.sort (src/api/userController.ts:42)"`.
 - **`endpoint`** (optional, request-reachable findings only) — the live HTTP binding
   `{ method, path, param, in }`, resolved by the **Step 6.6 aggregator** from `recon/sink-inventory.json`
   `entry_points`: match the finding's `source` (the param **name** + `file:line`) to an entry point's
