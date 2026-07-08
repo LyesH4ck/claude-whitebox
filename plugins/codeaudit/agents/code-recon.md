@@ -45,10 +45,16 @@ You receive from the orchestrator: `repo` path, `engagement` name, `out_of_scope
 Find every network-reachable entry point and the untrusted inputs it exposes:
 - routes / controllers / handlers / resolvers (REST, GraphQL, RPC, WebSocket), webhooks, file uploads,
   message-queue consumers, scheduled/admin endpoints exposed via routes.
-- For each, list the **sources** (params, body fields, headers, cookies, path params) with `file:line`.
+- For each, capture the **live HTTP binding** from the route registry — the **method + path** and the
+  handler `file:line` — and list the **sources** it exposes, each as `{in, name, at file:line}`. **`in` is a
+  fixed enum: `query | path | header | cookie | json | form`** (`json`/`form` = the two request-body
+  encodings; never `body`). This route↔source binding is a **REQUIRED** output — it is what lets a
+  downstream finding name its live endpoint (the white-box → pentest handoff, `HYBRID_HANDOFF_SPEC.md`).
 - Catalog API schema files (OpenAPI/Swagger, GraphQL SDL) and copy them under `recon/schemas/` if present.
 
 Use Grep/Glob aggressively; read the route registry and middleware to know what is authenticated vs public.
+When the routing is **dynamic** (programmatic mounting, gateway rewrites) and a path cannot be resolved
+statically, record the entry point without a `path` — do not guess (the handoff falls back to correlation).
 
 ### Phase 3 — Inventory the sinks (per selected class)
 
@@ -86,6 +92,11 @@ Write three deliverables (create dirs with `mkdir -p` first):
    {
      "languages": ["typescript"],
      "files_in_scope": 412,
+     "entry_points": [
+       { "method": "GET", "path": "/api/users", "handler": "listUsers (src/api/userController.ts:40)",
+         "auth": "authenticated",
+         "sources": [ { "in": "query", "name": "sort", "at": "src/api/userController.ts:42" } ] }
+     ],
      "sinks": {
        "injection": [{ "file": "src/db/userRepo.ts", "line": 130, "api": "template-literal SQL", "feeds": "req.query.sort" }],
        "xss": [],
@@ -105,6 +116,12 @@ Write three deliverables (create dirs with `mkdir -p` first):
    }
    ```
 
+   **`entry_points` is REQUIRED (not optional).** Populate it for **every statically-resolvable route** —
+   it is the route↔source map the hybrid handoff resolves live endpoints from. A route whose path cannot be
+   resolved statically (dynamic mounting / gateway rewrite) is recorded **without** a `path` (never guessed).
+   If the app genuinely exposes no HTTP routes (pure library / CLI / queue-only), write `"entry_points": []`
+   and say so in the completion summary — an empty array is a deliberate statement, not an omission.
+
    **Coverage warning (important).** If your sweeps surface an OWASP category with real surface that is
    **not** in the selected `classes` (e.g. token-handling/logging present but `logging` unselected, or
    deserialization sinks found but `injection` unselected), list it under `uncovered_relevant_categories`
@@ -115,6 +132,7 @@ Append progress to `outputs/{engagement}/activity/code-recon.log` (NDJSON) at ea
 
 ## Completion
 
-When all three baseline files are written and the log records `phase":"emit","result":"complete"`,
-announce **CODE RECON COMPLETE** with a one-line summary (sources found, sinks found per class) and
-stop. Do not output long recaps — the deliverables carry the detail.
+When all three baseline files are written (with `entry_points` populated — or an explicit `[]`) and the log
+records `phase":"emit","result":"complete"`, announce **CODE RECON COMPLETE** with a one-line summary
+(sources found, **entry points mapped**, sinks found per class) and stop. Do not output long recaps — the
+deliverables carry the detail.

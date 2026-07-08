@@ -311,14 +311,22 @@ reports `complete`. Loop:
    deeper analysis, or it discovered new sources/second-order flows), re-dispatch it (or a focused
    follow-up) on the remaining items. Repeat until it reports `complete`. This is convergence on full
    coverage, not budget-spending.
-3. **Follow-up waves** (single parallel `Task` message), drawn from the plan's `escalation_plan`, only
+3. **Run every planned wave.** The plan's `waves[]` may contain more than one wave of auditors — the
+   planner orders classes by sink density but intends *every* wave to run (see audit-planner: "every
+   wave still runs"). Once the current wave's auditors all report `complete`, dispatch the next wave in
+   `deployment-plan.json` `waves[]` using the same parallel-`Task` pattern as Step 6.4.2, then resume
+   this loop for it. The audit is **not** complete until every wave in the plan has been dispatched and
+   its auditors have reported `complete`. Log
+   `phase":"audit","action":"deploy-auditors","count":<N>,"wave":<W>` at each wave dispatch.
+4. **Follow-up waves** (single parallel `Task` message), drawn from the plan's `escalation_plan`, only
    for genuine coverage/quality gains:
    - re-trace `probable` findings whose helpers/branches were not fully inspected → aim to raise to `high`;
    - **hybrid mode**: corroborate top injection/SSRF/XSS findings with a single benign witness request
      against `target_url`;
    - cover any newly-discovered sources or second-order flows surfaced during tracing.
-4. **Stop when scope is exhausted** — every enumerated source traced across every selected class with
-   surface, all `probable` items either confirmed or noted. This is the normal exit. Log
+5. **Stop when scope is exhausted** — every enumerated source traced across every selected class with
+   surface across **every planned wave**, all `probable` items either confirmed or noted. This is the
+   normal exit. Log
    `phase":"audit","action":"auditors-complete","findings_count":<N>,"result":"scope-exhausted"`.
    Do not manufacture additional work once coverage is complete.
 
@@ -333,13 +341,27 @@ reports `complete`. Loop:
      uninspected helper/branch to `probable`, and anything lacking a complete path to `unconfirmed`
      (list the latter under `coverage_gaps`).
    - Gather each auditor's `_safe-*.md` into `tested_not_vulnerable`.
+1b. **Resolve each finding's live endpoint (hybrid handoff, voie A).** Read
+   `outputs/{engagement}/recon/sink-inventory.json` `entry_points`. For every **request-reachable** finding,
+   take the param **name** and the **source `file:line`** from the finding's `source` string (strip the
+   surrounding parens; use the *source* location embedded in `source`, **not** the finding's top-level
+   `location`, which is the *sink*). Match that `(name, source file:line)` against an entry point's
+   `sources[] {name, at}` (`at` is the bare `file:line`). On a unique match, set
+   `endpoint { method, path, param, in }` — `method`/`path`/`in` from the matched entry point, `param` = the
+   source name; `in` uses the fixed enum `query|path|header|cookie|json|form`. **Omit `endpoint`** when: no
+   entry point matches, the route is dynamic (entry point has no `path`), or the param name matches **more
+   than one** entry point and the source `file:line` can't disambiguate — never guess a path. (Non-request
+   classes — secrets/crypto/deps/config/logging — get no endpoint.) When absent, the pentest handoff falls
+   back to param correlation. To make this resolvable, findings **must** record the source with its
+   `file:line` (see REPORT_CONTRACT `source` rule).
 2. Present a findings summary to the operator via AskUserQuestion before writing the final report (total;
    critical/high/medium/low/info counts; confidence breakdown; top 3; coverage gaps). Confirm: "Write the
    final report now?"
 3. On confirmation, produce the deliverables **exactly per** `plugins/codeaudit/skills/code-audit/reference/REPORT_CONTRACT.md`:
    - `outputs/{engagement}/codeaudit-report.json` — fixed schema (engagement/repo/commit/target_url
-     metadata, findings[] with file:line/source/sink/slot/confidence/owasp, summary counts,
-     tested_not_vulnerable, coverage_gaps, and the audit `depth`). `coverage_gaps` lists anything left
+     metadata, findings[] with file:line/source/sink/slot/confidence/owasp **and `endpoint` when resolved
+     in step 1b**, summary counts, tested_not_vulnerable, coverage_gaps, and the audit `depth`).
+     `coverage_gaps` lists anything left
      unconfirmed (e.g. a class with no scanner installed) — there is no time-based de-scoping.
    - `outputs/{engagement}/report.md` — REQUIRED consolidated human report from the fixed template.
    - Keep per-finding markdown under `findings/finding-*/` as the depth layer.

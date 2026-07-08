@@ -158,6 +158,6 @@ Missing tools degrade gracefully: the affected agent reports a coverage gap inst
 ## Attribution & license
 
 MIT-licensed. The `pentest` framework is the original work of
-[Stickman230](https://github.com/Stickman230) (`claude-pentest`); this distribution is maintained by
+[Stickman230](https://github.com/Stickman230); this distribution is maintained by
 [Christophe Bailleux](https://github.com/LyesH4ck), who authors the `codeaudit` plugin. The upstream
 copyright notice is retained in [`LICENSE`](./LICENSE) as MIT requires.

@@ -22,11 +22,15 @@
     {
       "name": "pentest",
       "source": "./plugins/pentest",
-      "description": "Full penetration testing framework - 63 attack categories across 11 domains covering OWASP, injection, authentication, cloud, and more",
-      "version": "2.2.6",
+      "description": "Full penetration testing framework - 64 attack categories across 11 domains covering OWASP, injection, authentication, cloud, and more",
+      "version": "2.4.2",
       "author": {
         "name": "Stickman230",
         "url": "https://github.com/Stickman230"
+      },
+      "maintainer": {
+        "name": "Christophe Bailleux",
+        "url": "https://github.com/LyesH4ck"
       },
       "category": "security",
       "strict": false
@@ -35,7 +39,7 @@
       "name": "codeaudit",
       "source": "./plugins/codeaudit",
       "description": "White-box source code security audit - static source-to-sink analysis across 10 vulnerability domains with optional live correlation",
-      "version": "0.1.0",
+      "version": "0.1.4",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"

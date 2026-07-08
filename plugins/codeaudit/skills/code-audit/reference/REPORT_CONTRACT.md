@@ -56,6 +56,7 @@ A run is **incomplete** if `report.md` does not exist.
       "trace": ["userController.ts:42", "listService.ts:88", "userRepo.ts:130"],
       "slot_type": "SQL-keyword",
       "externally_reachable": true,
+      "endpoint": { "method": "GET", "path": "/api/users", "param": "sort", "in": "query" },
       "evidence": "findings/finding-001/description.md",
       "witness_payload": "?sort=id--"
     }
@@ -75,7 +76,20 @@ A run is **incomplete** if `report.md` does not exist.
 
 - **`findings[]`** — required keys: `id`, `title`, `severity`, `confidence`, `status`, `vuln_class`,
   `owasp`, `location` (file + line), `source`, `sink`. Optional: `cwe`, `cvss`, `trace`, `slot_type`,
-  `externally_reachable`, `witness_payload`, `evidence`.
+  `externally_reachable`, `endpoint`, `witness_payload`, `evidence`.
+- **`source`** — the tainted input as `expr (file:line)` and the `file:line` is **required** (it is the
+  entry-point-resolution key for `endpoint`, and is the *source* read site, distinct from the top-level
+  `location` which is the *sink*). E.g. `"req.query.sort (src/api/userController.ts:42)"`.
+- **`endpoint`** (optional, request-reachable findings only) — the live HTTP binding
+  `{ method, path, param, in }`, resolved by the **Step 6.6 aggregator** from `recon/sink-inventory.json`
+  `entry_points`: match the finding's `source` (the param **name** + `file:line`) to an entry point's
+  `sources[] {name, at}`, then take `method`/`path`/`in` from that entry point and `param` = the source name.
+  `in` is the fixed enum **`query | path | header | cookie | json | form`** (same vocab code-recon writes and
+  the pentest normalizer produces — never `body`). Set it whenever the route is statically resolvable;
+  **omit it** when routing is dynamic (programmatic mounting, gateway rewrites) or no entry point matches —
+  never guess a path. This is what the pentest hybrid handoff consumes to route a code-confirmed finding
+  straight to a live target (`HYBRID_HANDOFF_SPEC.md`); when absent, the handoff falls back to correlating
+  the param against the black-box surface map.
 - **`confidence`** — `high` (complete, unambiguous code trace), `probable` (likely flaw, a branch/helper
   not fully inspected), `unconfirmed` (suspected, no complete path — must also appear in `coverage_gaps`).
   In hybrid mode a live corroboration may raise `probable`→`high`.

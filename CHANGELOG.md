@@ -1,6 +1,190 @@
 # Changelog
 
-All notable changes to `claude-pentest` are documented here.
+All notable changes to `claude-whitebox` are documented here.
+
+---
+
+## [2.4.2] + codeaudit [0.1.4] — 2026-07-08
+
+### Fixed
+- **Hybrid handoff, final review pass.**
+  - **Deliverability:** bumped **pentest 2.4.1→2.4.2** — the shared normalizer (`codeaudit-leads.mjs`) lives
+    in the pentest plugin, so a codeaudit-only bump would not re-cache it on `/plugin marketplace update`.
+  - **`in` enum enforced on output:** a resolved `endpoint.in` is now constrained to
+    `query|path|header|cookie|json|form` (`unknown` no longer escapes into it; falls back to `query`).
+  - **Fewer mislabels:** Spring `@RequestHeader` → `header` (was grouped as `path`); Rails `params[:x]`
+    defaults to `query`, with `:id`-shaped names → `path` (was blanket `path`).
+  - **codeaudit 0.1.3→0.1.4 — resolution made robust:** Step 6.6's endpoint match now keys on the source
+    `file:line` (from the `source` string, not the sink `location`), omits on ambiguous/dynamic matches, and
+    the `source` field rule now **requires** the `(file:line)` so the resolution key always exists.
+
+## codeaudit [0.1.3] — 2026-07-08
+
+### Fixed
+- **Voie A now actually produces `endpoint` (was orphaned in 0.1.2).** The `endpoint`-resolution instruction
+  lived only in the report contract, which the finding-authoring path never reached. Wired it to the real
+  actors: `entry_points[]` is now a **required** code-recon output (with a completion check), and the
+  **Step 6.6 aggregator** — the single writer of `codeaudit-report.json` `findings[]` — now reads
+  `entry_points` and resolves each request-reachable finding's `endpoint` (matching the source name+file:line
+  → entry point; `in`/`method`/`path` taken from it), adding `endpoint` to its field checklist. `OUTPUT_STRUCTURE`
+  and the description.md template updated to carry `endpoint` + the source `in`.
+- **Unified the `in` vocabulary** across code-recon, the report contract, and the pentest normalizer to the
+  fixed enum `query|path|header|cookie|json|form` (was `body` on the codeaudit side vs `json` on the pentest
+  side — same source yielded different `in` under voie A vs voie B). Pentest normalizer: Rails `params[:id]`
+  → `path`; a codeaudit-resolved `endpoint` now implies `externally_reachable` (a live-routed finding is no
+  longer buried when its source string can't be parsed).
+
+## codeaudit [0.1.2] — 2026-07-08
+
+### Added
+- **Hybrid handoff, voie A — codeaudit now resolves the live endpoint per finding.** `code-recon` emits an
+  `entry_points[]` route↔source map in `sink-inventory.json` (method + path + handler + each source's
+  `{in, name, at}`), and the `codeaudit-report.json` finding schema gains an optional
+  `endpoint { method, path, param, in }`, resolved from that map by matching the finding's `source` (omitted
+  when routing is dynamic). The pentest hybrid handoff consumes it directly
+  (`endpoint_resolution:"codeaudit"`) → far fewer `unresolved` leads; falls back to param correlation
+  (voie B) when absent. See `plugins/pentest/docs/HYBRID_HANDOFF_SPEC.md`.
+
+## [2.4.1] — 2026-07-08
+
+### Fixed
+- **Hardened the hybrid-handoff normalizer (code-review driven, re-verified end-to-end).**
+  - `codeaudit-leads.mjs` `source` parser now handles **bracket notation** (`req.headers['x-api-key']`,
+    `request.args['id']`), **whole-object bindings** (`req.body` → mass-assignment/deser, no garbage token),
+    **Spring attribute forms** (`@RequestParam(value="q")` → `q`, not `value`), and **paren-less locations**
+    (no longer captures a line number as the param).
+  - Correlation now falls back to the **leaf** of a dotted param (`filter.keyword` → `keyword`), so nested
+    body params resolve against the flat surface-map params.
+  - `externally_reachable` is computed conservatively, and **non-request-reachable classes**
+    (secrets/crypto/deps/config/logging) are segregated under `non_routable` instead of being stamped
+    reachable and promoted as top-priority leads.
+  - `commands/pentest.md`: fixed the business-modeler dispatch path (was still the phantom `codeaudit/`
+    dir) and corrected the Step 6.3.4 data-flow note (the modeler reads the codeaudit report directly for a
+    different extraction than the leads). `pentester-orchestrator.md`: a lead is routed only with a resolved
+    endpoint; a reachable-but-unresolved lead is a coverage gap, not a blind deployment.
+
+## [2.4.0] — 2026-07-08
+
+### Added
+- **Hybrid handoff — feed a `codeaudit` white-box report into `/pentest:pentest` as prioritized
+  exploitation leads (MVP, voie B).** A new sub-phase **6.3.4** (hybrid mode, triggered when
+  `outputs/{engagement}/codeaudit-report.json` or `--codeaudit <path>` is present) runs a deterministic
+  normalizer (`codeaudit-handoff/codeaudit-leads.mjs`) that turns codeaudit findings into
+  `analysis/exploitation-leads.json`: it parses the HTTP param/context from each finding's `source`, uses
+  codeaudit's `endpoint` when present or correlates the param against the surface map, and ranks
+  externally-reachable/high-confidence/resolved leads first. The `pentester-orchestrator` plans those leads
+  **first** and passes each finding's `code_evidence` (source→sink, file:line, `slot_type`,
+  `witness_payload`) to the matching executor as a **`code_hint`** for targeted (not blind) payload
+  crafting. The report gains hybrid `provenance` (`static-only | live-only | both-confirmed`); a
+  code-confirmed lead that can't be reproduced live stays `probable` + coverage gap, never
+  `tested_not_vulnerable`. **Guardrail:** leads ADD to, never narrow, the black-box recon. Spec:
+  `docs/HYBRID_HANDOFF_SPEC.md`. (Voie A — codeaudit emitting per-finding endpoints — is a follow-up.)
+
+### Fixed
+- **`business-modeler` codeaudit path** — pointed the white-box enrichment at the real
+  `codeaudit-report.json` + `recon/` outputs instead of the non-existent `outputs/{engagement}/codeaudit/`
+  directory.
+
+## [2.3.2] — 2026-07-08
+
+### Fixed
+- **Made the 2.3.1 SQLi additions actually work and stop crying wolf (code-review driven, verified end-to-end).**
+  - `sqli-detect` can now reach **nested / array JSON params**: pass the captured body as a `--body` template
+    and target a path with `--param` (`rowGroupCols[0].id`). Previously `buildReq` built a flat single-key
+    body, so the marquee ag-grid identifier vector was unreachable.
+  - **Baseline subtraction** for the `error-based` and `query-disclosure` signals (same discipline as the
+    quote/boolean/numeric signals): a DB error or SQL-looking snippet already present on the baseline is a
+    property of the endpoint, not the parameter, and no longer fires — kills false positives on benign HTML
+    (`<select>…</select>`, "from … where" prose) and on always-500 endpoints.
+  - Tightened ORM error signatures to **error-shaped** patterns (not bare package names), tightened the
+    query-disclosure regex to a real statement/Hibernate-alias shape, and bounded regex input.
+  - Added a real **`structural-breakout`** differential signal (a breakout payload that changes a stable
+    baseline) and a structured **`leaked_query`** output field feeding exploitation.
+  - Reconciled the `injection-tester` reporting rule with Phase 4: a DB/ORM-error finding's `poc.py` asserts
+    the reproducible error/disclosure (a valid executable PoC), so it is reportable without data extraction.
+
+## [2.3.1] — 2026-07-08
+
+### Changed
+- **SQLi detection now catches ORM-wrapped errors and identifier-context injection.** `sqli-detect` gained
+  (1) ORM/framework error signatures — Hibernate/JPA `SQLGrammarException` / `could not extract ResultSet`,
+  Spring `BadSqlGrammarException`, JDBC, Django, Rails — so a database error wrapped by the ORM is no longer
+  missed; (2) **structural / identifier-context breakout** probes (`":<>`, `'":<>`, `"}`, backtick) that
+  reach column / `GROUP BY` / `ORDER BY` fields (e.g. ag-grid `rowGroupCols`/`sortModel`) which value-context
+  quotes cannot; (3) **query-disclosure** detection — an error body echoing a generated SQL statement
+  (Hibernate prints the query) is flagged as a high signal and CWE-209 disclosure.
+- **A reachable DB/ORM error is never `tested_not_vulnerable`.** `injection-tester` and `REPORT_CONTRACT`
+  now require any recognized DBMS/ORM error or query-disclosure to be reported as at least an
+  informational/`probable` finding + coverage gap, even when sqlmap and manual value-context payloads fail —
+  automated exploitation failure ≠ not vulnerable, and a leaked query reveals the columns to craft the
+  injection.
+
+## [2.3.0] — 2026-07-07
+
+Business-logic detection, out-of-band confirmation, parameter-level recon, and adaptive authorization
+testing. Headline: a whole class of logic flaws that endpoint-level testing structurally misses (no
+injectable sink, a valid-looking `200` on every request) is now modeled and tested; blind vulnerabilities
+are confirmable via a self-hosted OAST collaborator; recon inventories request parameters (not just
+endpoints) so injection sinks on known endpoints are no longer missed; and a multi-identity authorization
+engine adds first-class IDOR/BOLA/BFLA coverage. Also: a dedicated stealth Playwright MCP plugin, targeted
+single-scope launchers, and a full SQLi detection matrix. (Bundled `codeaudit` plugin bumped to **0.1.1** —
+auditor dispatch now runs **every planned wave**, not just wave 1.)
+
+### Added
+- **Dedicated business-logic detection.** Two new agents split modeling from exploitation. `business-modeler`
+  is a read-only black-box modeler that explores the app (interaction-driven), extracts the rules it *appears*
+  to enforce from observable signals only (client-enforced constraints, the cross-identity differential, the
+  app's own rejection messages — never domain knowledge or code), and emits candidate invariants
+  (`invariants.json`). `business-logic-tester` reads those invariants and, per-invariant (not per-endpoint),
+  generates abuse cases from a domain-generic taxonomy, executes **stateful** multi-step sequences, and
+  confirms each finding with a **state-delta oracle** (before/after — a `200` is never proof). Covers
+  plan/role gating, workflow skip/replay, numeric/temporal/quota abuse, and idempotency/race hand-off, with a
+  Phase 2→3 write gate. `business-modeler` runs after `inventory-surface-analyzer` and before the planner; in
+  white-box/hybrid mode it also ingests `codeaudit` `code-recon` output. `business-logic-tester` is deployed by
+  the `common-appsec-patterns` coordinator.
+- **OAST (out-of-band) blind-vulnerability confirmation.** A new `oast` skill and `/pentest:pentest-oast`
+  connect command drive a self-hosted [interactsh](https://github.com/projectdiscovery/interactsh) collaborator
+  server. The command runs a live self-test (register → trigger → correlate) and writes `.pentest-oast.json`;
+  a single long-lived client registers once, mints a payload pool, and streams decrypted interactions for the
+  whole engagement. The `injection`, `xss`, `cve`, and `pentester-executor` agents allocate unique payloads and
+  correlate callback hits to deterministically confirm blind SSRF, blind/OOB SQLi, blind OS-command injection,
+  stored/blind XSS, XXE OOB, and Log4Shell-class RCE. OAST is optional — if unconfigured, agents skip OOB
+  testing and record it as a coverage gap rather than fabricating findings. DNS/HTTP callbacks are preferred;
+  HTTPS capture is best-effort.
+- **Parameter-level reconnaissance (`param-mine`).** A new `essential-skills/param-mine` tool + wiring inventory
+  request *parameters*, not just endpoints, so injection sinks on already-known endpoints aren't missed
+  (post-mortem keystone). Paired with param-driven routing — every parameterized endpoint is now treated as an
+  injection candidate — and an exhaustive crawl that sweeps HTTP methods, nested params, and interaction depth.
+- **Adaptive multi-identity authorization testing.** A new `idor-bola-tester` agent and the deterministic
+  `authz-matrix` cross-identity replay engine cover IDOR/BOLA (API1), BFLA (API5), and BOPLA/mass-assignment
+  (API3) with an adaptive oracle (0/1/2/N accounts) and a strict `200 ≠ BOLA` verification bar. Adds an
+  `access-map` mode for per-identity reach diffing (BFLA/missing-auth triage) and a `/pentest:idor` targeted
+  launcher. Operator-authored `.pentest-identities.json` / `.pentest-authz-requests.json` root files supply
+  sessions and the request corpus.
+- **Targeted single-scope launchers.** `/pentest:xss` and `/pentest:sql` deploy the `xss-tester` /
+  `injection-tester` agent directly against one scope (no full engagement), each with a capability-aware recon
+  preflight that maps SPA routes so client-only views aren't missed.
+- **Full SQLi detection matrix (`sqli-detect`).** Quote-balance, boolean, numeric, error-based, and time-based
+  detection with anti-false-positive checks.
+- **Dedicated stealth Playwright MCP plugin.** A standalone `playwright` plugin ships the MCP server with
+  stealth-friendly defaults (real Chrome channel, headed, realistic UA/viewport, anti-automation flags) plus an
+  Option B full-stealth standalone probe for WAF-gated testing. It is a dependency of the pentest plugin's
+  client-side agents.
+- **Provider-specific cloud references** for AWS, Azure, GCP, Docker, and Kubernetes.
+
+### Changed
+- **Quantified-coverage honesty gate in the report.** The report step now mandates quantified coverage and
+  fails honesty checks that would let a run claim more surface than it actually tested.
+- **Model-tiered agents** — recon agents and the `codeaudit` deps/secrets auditors are tiered to lighter models
+  for cost/latency; injection finding IDs aligned across pentest/codeaudit.
+- **Phase 2→3 approval gate extended to the dedicated testers** (not just the general executor).
+
+### Fixed
+- Engagement directories the pipeline actually uses are now created up front.
+- Playwright MCP server start failure (`-32000` — `initScript` must be a file path) resolved; stealth /
+  bot-detection guidance corrected and de-siloed.
+- Path-traversal / LFI false negatives from shallow depth and split params fixed via an overshoot/depth-sweep
+  rule.
 
 ---
 
@@ -121,7 +305,7 @@ Third audit pass — full file-by-file read of every agent, skill, reference doc
 Second audit pass — full re-audit of every command, agent, skill, reference doc, and the README.
 
 ### Fixes
-- **Install command** — README corrected to `/plugin install pentest@claude-pentest`. The plugin is named `pentest`, so the previous `claude-pentest@claude-pentest` would not resolve and blocked new installs
+- **Install command** — README corrected to `/plugin install pentest@claude-whitebox`. The plugin is named `pentest`, so the previous `claude-whitebox@claude-whitebox` would not resolve and blocked new installs
 - **Attack-category counts** standardized to **63 categories across 11 domains** in `plugin.json`, `marketplace.json`, the README, the main `pentest` skill, `ATTACK_INDEX.md`, and the orchestrator. Three figures had disagreed — "100+" (inflated), "9 categories/50+" (undercount that miscounted its own list), and "63". Also fixed the README's offsetting per-domain errors (injection was missing `file-inclusion`; ip-infrastructure wrongly counted the non-attack `reference/` folder)
 - **Fictional agent mappings** in `ATTACK_INDEX.md` replaced — "SQL Injection Discovery Agent", "XSS Discovery Agent", "SSRF Discovery Agent", etc. now name the real agents (`injection-tester`, `xss-tester`, `csrf-tester`, `csp-bypass-tester`, `prototype-pollution-tester`, `pentester-executor`, `authenticating` skill)
 - **Ghost slash-commands removed** — the `pentest` skill's "Integration" list (`/authenticating`, `/ai-threat-testing`, …) is now a "Related Skills" list of real skill names (no leading slash), with the nonexistent `/ai-threat-testing` noted as web-LLM content under API Security; the `authenticating` skill's "Commands" section and its README's fabricated `require('.claude/skills/authenticating')` programmatic API were replaced with an accurate "this is a skill, not a slash command or library" description

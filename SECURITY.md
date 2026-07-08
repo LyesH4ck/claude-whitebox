@@ -2,7 +2,7 @@
 
 ## Intended Use
 
-claude-pentest is a Claude Code plugin for **authorized penetration testing only**.
+claude-whitebox is a Claude Code plugin for **authorized penetration testing only**.
 
 Users are responsible for ensuring they have explicit written authorization before testing any system. Unauthorized use against systems you do not own or have permission to test is illegal in most jurisdictions.
 

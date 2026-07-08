@@ -10,6 +10,9 @@ plugins/*/skills/*/outputs/*
 .pentest-*.json
 .codeaudit-*.json
 
+# Playwright MCP scratch output — browser console/network logs from live targets (leaks real client hostnames)
+/.playwright-mcp/
+
 # Local OAST test lab — deliberately vulnerable, never commit or deploy
 /oast-lab/
 

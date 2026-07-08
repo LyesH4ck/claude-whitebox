@@ -11,7 +11,7 @@ and skills.
 
 ## Install
 
-This plugin lives in the `claude-pentest` marketplace alongside `pentest`. After adding the marketplace,
+This plugin lives in the `claude-whitebox` marketplace alongside `pentest`. After adding the marketplace,
 install `codeaudit`.
 
 ## Use
