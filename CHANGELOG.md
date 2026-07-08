@@ -4,10 +4,16 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
-## [Unreleased]
+## [2.3.0] — 2026-07-07
 
-Business-logic detection — the class of flaw that endpoint-level testing structurally misses (no injectable
-sink, a valid-looking `200` on every request).
+Business-logic detection, out-of-band confirmation, parameter-level recon, and adaptive authorization
+testing. Headline: a whole class of logic flaws that endpoint-level testing structurally misses (no
+injectable sink, a valid-looking `200` on every request) is now modeled and tested; blind vulnerabilities
+are confirmable via a self-hosted OAST collaborator; recon inventories request parameters (not just
+endpoints) so injection sinks on known endpoints are no longer missed; and a multi-identity authorization
+engine adds first-class IDOR/BOLA/BFLA coverage. Also: a dedicated stealth Playwright MCP plugin, targeted
+single-scope launchers, and a full SQLi detection matrix. (Bundled `codeaudit` plugin bumped to **0.1.1** —
+auditor dispatch now runs **every planned wave**, not just wave 1.)
 
 ### Added
 - **Dedicated business-logic detection.** Two new agents split modeling from exploitation. `business-modeler`
@@ -21,18 +27,6 @@ sink, a valid-looking `200` on every request).
   Phase 2→3 write gate. `business-modeler` runs after `inventory-surface-analyzer` and before the planner; in
   white-box/hybrid mode it also ingests `codeaudit` `code-recon` output. `business-logic-tester` is deployed by
   the `common-appsec-patterns` coordinator.
-
----
-
-## [2.3.0] — 2026-07-07
-
-Out-of-band detection, parameter-level recon, and adaptive authorization testing. Headline: blind
-vulnerabilities are now confirmable via a self-hosted OAST collaborator, recon inventories request parameters
-(not just endpoints) so injection sinks on known endpoints are no longer missed, and a multi-identity
-authorization engine adds first-class IDOR/BOLA/BFLA coverage. Also: a dedicated stealth Playwright MCP
-plugin, targeted single-scope launchers, and a full SQLi detection matrix.
-
-### Added
 - **OAST (out-of-band) blind-vulnerability confirmation.** A new `oast` skill and `/pentest:pentest-oast`
   connect command drive a self-hosted [interactsh](https://github.com/projectdiscovery/interactsh) collaborator
   server. The command runs a live self-test (register → trigger → correlate) and writes `.pentest-oast.json`;
