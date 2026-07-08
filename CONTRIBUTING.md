@@ -1,4 +1,4 @@
-# Contributing to claude-pentest
+# Contributing to claude-whitebox
 
 Thank you for your interest in contributing. This project is a Claude Code plugin for authorized penetration testing workflows.
 
@@ -33,7 +33,7 @@ Contributions are welcome in these areas:
 
 ### New attack skill
 
-Place under `claude-pentest/plugins/pentest/skills/pentest/attacks/<category>/<technique>/`:
+Place under `claude-whitebox/plugins/pentest/skills/pentest/attacks/<category>/<technique>/`:
 
 ```
 <technique>/
@@ -71,7 +71,7 @@ How to fix this vulnerability.
 
 ## Agent Definitions
 
-Agent files live in `claude-pentest/plugins/pentest/agents/`. They are markdown files with a YAML frontmatter block. Keep agent descriptions focused on a single attack domain.
+Agent files live in `claude-whitebox/plugins/pentest/agents/`. They are markdown files with a YAML frontmatter block. Keep agent descriptions focused on a single attack domain.
 
 ## Code (Python tools)
 

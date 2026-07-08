@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `claude-pentest` are documented here.
+All notable changes to `claude-whitebox` are documented here.
 
 ---
 
@@ -196,7 +196,7 @@ Third audit pass — full file-by-file read of every agent, skill, reference doc
 Second audit pass — full re-audit of every command, agent, skill, reference doc, and the README.
 
 ### Fixes
-- **Install command** — README corrected to `/plugin install pentest@claude-pentest`. The plugin is named `pentest`, so the previous `claude-pentest@claude-pentest` would not resolve and blocked new installs
+- **Install command** — README corrected to `/plugin install pentest@claude-whitebox`. The plugin is named `pentest`, so the previous `claude-whitebox@claude-whitebox` would not resolve and blocked new installs
 - **Attack-category counts** standardized to **63 categories across 11 domains** in `plugin.json`, `marketplace.json`, the README, the main `pentest` skill, `ATTACK_INDEX.md`, and the orchestrator. Three figures had disagreed — "100+" (inflated), "9 categories/50+" (undercount that miscounted its own list), and "63". Also fixed the README's offsetting per-domain errors (injection was missing `file-inclusion`; ip-infrastructure wrongly counted the non-attack `reference/` folder)
 - **Fictional agent mappings** in `ATTACK_INDEX.md` replaced — "SQL Injection Discovery Agent", "XSS Discovery Agent", "SSRF Discovery Agent", etc. now name the real agents (`injection-tester`, `xss-tester`, `csrf-tester`, `csp-bypass-tester`, `prototype-pollution-tester`, `pentester-executor`, `authenticating` skill)
 - **Ghost slash-commands removed** — the `pentest` skill's "Integration" list (`/authenticating`, `/ai-threat-testing`, …) is now a "Related Skills" list of real skill names (no leading slash), with the nonexistent `/ai-threat-testing` noted as web-LLM content under API Security; the `authenticating` skill's "Commands" section and its README's fabricated `require('.claude/skills/authenticating')` programmatic API were replaced with an accurate "this is a skill, not a slash command or library" description
