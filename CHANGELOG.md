@@ -4,6 +4,24 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.1] — 2026-07-08
+
+### Fixed
+- **Hardened the hybrid-handoff normalizer (code-review driven, re-verified end-to-end).**
+  - `codeaudit-leads.mjs` `source` parser now handles **bracket notation** (`req.headers['x-api-key']`,
+    `request.args['id']`), **whole-object bindings** (`req.body` → mass-assignment/deser, no garbage token),
+    **Spring attribute forms** (`@RequestParam(value="q")` → `q`, not `value`), and **paren-less locations**
+    (no longer captures a line number as the param).
+  - Correlation now falls back to the **leaf** of a dotted param (`filter.keyword` → `keyword`), so nested
+    body params resolve against the flat surface-map params.
+  - `externally_reachable` is computed conservatively, and **non-request-reachable classes**
+    (secrets/crypto/deps/config/logging) are segregated under `non_routable` instead of being stamped
+    reachable and promoted as top-priority leads.
+  - `commands/pentest.md`: fixed the business-modeler dispatch path (was still the phantom `codeaudit/`
+    dir) and corrected the Step 6.3.4 data-flow note (the modeler reads the codeaudit report directly for a
+    different extraction than the leads). `pentester-orchestrator.md`: a lead is routed only with a resolved
+    endpoint; a reachable-but-unresolved lead is a coverage gap, not a blind deployment.
+
 ## [2.4.0] — 2026-07-08
 
 ### Added
