@@ -4,6 +4,22 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.3.1] — 2026-07-08
+
+### Changed
+- **SQLi detection now catches ORM-wrapped errors and identifier-context injection.** `sqli-detect` gained
+  (1) ORM/framework error signatures — Hibernate/JPA `SQLGrammarException` / `could not extract ResultSet`,
+  Spring `BadSqlGrammarException`, JDBC, Django, Rails — so a database error wrapped by the ORM is no longer
+  missed; (2) **structural / identifier-context breakout** probes (`":<>`, `'":<>`, `"}`, backtick) that
+  reach column / `GROUP BY` / `ORDER BY` fields (e.g. ag-grid `rowGroupCols`/`sortModel`) which value-context
+  quotes cannot; (3) **query-disclosure** detection — an error body echoing a generated SQL statement
+  (Hibernate prints the query) is flagged as a high signal and CWE-209 disclosure.
+- **A reachable DB/ORM error is never `tested_not_vulnerable`.** `injection-tester` and `REPORT_CONTRACT`
+  now require any recognized DBMS/ORM error or query-disclosure to be reported as at least an
+  informational/`probable` finding + coverage gap, even when sqlmap and manual value-context payloads fail —
+  automated exploitation failure ≠ not vulnerable, and a leaked query reveals the columns to craft the
+  injection.
+
 ## [2.3.0] — 2026-07-07
 
 Business-logic detection, out-of-band confirmation, parameter-level recon, and adaptive authorization
