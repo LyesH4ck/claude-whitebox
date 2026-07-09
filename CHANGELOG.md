@@ -4,6 +4,29 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.12] — 2026-07-09
+
+### Added
+- **Normalizer contract validation — `codeaudit-leads.mjs` now emits `warnings[]`.** A finding missing
+  `id`/`vuln_class`/`source`, a `source` without `(file:line)`, an `endpoint.in` outside the enum, or an
+  `owasp` not in `Axx:YYYY` form is surfaced as a warning (findings are still processed best-effort) instead
+  of being silently coerced — making the one machine-read boundary from codeaudit auditable. On a real report
+  this immediately flags the findings whose prose `source` lacks a `(file:line)` resolution key. +2 tests (24).
+
+### Fixed
+- **`injection-tester` now loads `param-inventory.json` in Phase 1 recon.** Phase 2 mandates the injection
+  matrix over "every parameter from `param-inventory.json`", but Phase 1 only read `api-endpoints.json` — so
+  nested body params (`filterModel.keyword`, `sortModel[].colId`, `startRow`) were never enumerated by the
+  agent that tests them (a silent false negative on exactly the sinks the param-inventory exists to surface).
+  Phase 1 now reads `param-inventory.json` (+ `crawl-endpoints.json`) and builds the test corpus as their
+  union; an empty inventory is recorded as a coverage gap, not "no params".
+
+### Docs
+- **REPORT_CONTRACT: deterministic lead→finding merge.** Documented the `endpoint` object→string flattening
+  (`{method,path}` → `"METHOD /path"`, keeping `param`/`in` in evidence) and the `owasp` full-form rule, so
+  the static→live merge is reproducible instead of an ad-hoc per-run transform.
+- **README FR + zh-CN**: added the `/pentest:recon` and `/pentest:ssrf` command sections (were English-only).
+
 ## [2.4.11] + playwright [0.2.1] — 2026-07-09
 
 ### Changed

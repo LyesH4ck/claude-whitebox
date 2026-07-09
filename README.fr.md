@@ -194,6 +194,14 @@ Une fois actif, le skill `oast` est monté aux côtés du skill principal pour q
 
 ---
 
+### /pentest:recon
+
+**But :** reconnaissance autonome — exécute tout le web-application-mapping (catalogue logiciel, scan de répertoires, découverte d'API, mapping JS/SPA avec **capture des POST de données interaction-driven**, synthèse de surface) puis **s'arrête**. Écrit la baseline de recon réutilisable (`inventory/*.json`, `analysis/attack-surface.md`, `recon/recon-manifest.json`) pour tester ensuite chaque brique séparément — chaque commande ciblée la réutilise via son preflight.
+
+**Déroulé :** cible + porte d'autorisation → choix de session (mapper la surface authentifiée vs public seul) → pré-vol (joignabilité + driver navigateur) → déploie les 5 agents d'inventaire (dont la capture de grille `crawl.mjs` + le param-mining) → `inventory-surface-analyzer` écrit la surface + `recon-manifest.json` → résumé + passage de relais vers `/pentest:sql|xss|idor|ssrf`.
+
+---
+
 ### /pentest:idor
 
 **But :** test IDOR/BOLA/BFLA/BOPLA ciblé sur un seul périmètre — déploie directement l'agent `idor-bola-tester` (sans recon/planificateur/boucle de quota). S'adapte au nombre d'identités fournies (0/1/2/N) et plafonne le verdict selon la force de l'oracle (`200 ≠ BOLA`).
@@ -220,6 +228,14 @@ Une fois actif, le skill `oast` est monté aux côtés du skill principal pour q
 **But :** test d'injection SQL/NoSQL ciblé sur un seul périmètre — déploie directement l'agent `injection-tester` (sqlmap + curl), sans engagement complet. SQLi + NoSQLi (operator injection) + injection de commande OS, avec un preflight de recon capability-aware.
 
 **Déroulé :** cible + porte d'autorisation → auth optionnelle + paramètres + type de DB → preflight de recon (découverte api/paramètres) → confirmation du plan → déploie `injection-tester` → résumé + déclaration de couverture de surface.
+
+---
+
+### /pentest:ssrf
+
+**But :** test SSRF ciblé sur un seul périmètre — déploie directement l'agent `pentester-executor` (spécialisé SSRF), sans engagement complet. Trace les paramètres URL/host/chemin et les fonctionnalités d'import-par-URL vers les requêtes sortantes côté serveur ; **confirme la SSRF aveugle en out-of-band via OAST** et vérifie l'atteignabilité cloud-metadata/interne. Barre de vérité : un 200 n'est pas une SSRF — la preuve est un callback émis par le serveur, une réponse interne/metadata, ou un différentiel deny-vs-fetch.
+
+**Déroulé :** cible + porte d'autorisation → collaborateur OAST (canal primaire de confirmation aveugle) → preflight de recon (découverte api/paramètres, params URL-shaped) → confirmation du plan → déploie `pentester-executor` (SSRF) → résumé + déclaration de couverture de surface.
 
 ---
 

@@ -180,6 +180,14 @@
 
 ---
 
+### /pentest:recon
+
+**用途：** 独立侦察 —— 执行完整的 web 应用映射（软件目录、目录扫描、API 发现、带**交互驱动数据 POST 捕获**的 JS/SPA 路由映射、表面综合）然后**停止**。写出可复用的侦察基线（`inventory/*.json`、`analysis/attack-surface.md`、`recon/recon-manifest.json`），以便随后单独测试每个模块 —— 每个定向命令都通过其侦察 preflight 复用它。
+
+**流程：** 解析目标 + 授权门 → 会话选择（映射已认证表面 vs 仅公开）→ 预检（可达性 + 浏览器驱动）→ 部署 5 个清单 agent（含 `crawl.mjs` 网格捕获 + 参数挖掘）→ `inventory-surface-analyzer` 写出表面 + `recon-manifest.json` → 汇总 + 交接给 `/pentest:sql|xss|idor|ssrf`。
+
+---
+
 ### /pentest:idor
 
 **用途：** 针对单一范围的 IDOR/BOLA/BFLA/BOPLA 定向测试 —— 直接部署 `idor-bola-tester` agent（无侦察/规划器/配额循环）。根据你提供的身份数量自适应（0/1/2/N），并按 oracle 强度对结论设置上限（`200 ≠ BOLA`）。
@@ -206,6 +214,14 @@
 **用途：** 针对单一范围的 SQL/NoSQL 注入定向测试 —— 直接部署 `injection-tester` agent（sqlmap + curl），无需完整任务。SQLi + NoSQLi（运算符注入）+ OS 命令注入，配合 capability-aware 侦察 preflight。
 
 **流程：** 解析目标 + 授权门 → 可选认证 + 参数 + 数据库类型 → 侦察 preflight（api/参数发现）→ 计划确认 → 部署 `injection-tester` → 汇总 + 表面覆盖声明。
+
+---
+
+### /pentest:ssrf
+
+**用途：** 针对单一范围的 SSRF 定向测试 —— 直接部署 `pentester-executor` agent（SSRF 专用），无需完整任务。将 URL/host/路径参数与 URL 导入功能追踪到服务端出站请求；**通过 OAST 在带外确认盲 SSRF**，并检查云元数据/内部可达性。判定门槛：200 不等于 SSRF —— 证据是服务端发出的回调、内部/元数据响应，或 deny-vs-fetch 差分。
+
+**流程：** 解析目标 + 授权门 → OAST 协作者（盲确认的主通道）→ 侦察 preflight（api/参数发现，URL 形态参数）→ 计划确认 → 部署 `pentester-executor`（SSRF）→ 汇总 + 表面覆盖声明。
 
 ---
 
