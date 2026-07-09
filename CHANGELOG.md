@@ -4,6 +4,35 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.6] — 2026-07-09
+
+### Fixed
+- **`authenticating` Python tools hardened — 9 code-review findings + a stdlib test suite.**
+  `password_generator.py`:
+  - **CSPRNG.** All password material now comes from `secrets.SystemRandom()` (os.urandom-backed), not the
+    predictable Mersenne-Twister `random` module — this is account-credential generation.
+  - **`'character'` no longer forces a special char.** The hint scan matched the bare substring `'character'`,
+    present in almost every "N characters" length hint, so it set `require_special=True` unconditionally and
+    broke signup on sites that forbid specials. Now matches `special char` / `symbol` / `punctuation`.
+  - **Length is clamped and validated.** An incoherent hint (min parsed above max) no longer overshoots max;
+    a requested length shorter than the required character classes now raises `ValueError` instead of
+    silently emitting a longer password (negative `remaining` → empty range).
+  - **Consistent defaults.** `analyze_requirements` now defaults `require_upper/lower/digits` to `True`,
+    matching `generate()`'s fallbacks and the convenience wrapper (was `False`, so the two paths disagreed).
+
+  `credential_manager.py`:
+  - **Atomic, private writes.** Saves go through `mkstemp` (created `0600` before any plaintext) + `os.replace`
+    — closing the world-readable window of the old "open 'w' then chmod" and making writes crash-safe.
+  - **Corrupt store is preserved, not silently wiped.** A JSON-decode error used to return `{}`, so the next
+    save truncated real data; now the bad file is renamed `.corrupt` and a `ValueError` is raised.
+  - **Reads no longer rewrite the file.** `get_credential` gained `mark_used=False` (opt-in) so a pure
+    read/export stops rewriting the plaintext store on every lookup, and it now returns a `deepcopy` rather
+    than a live alias into the in-memory store.
+  - **`.gitignore` anchored to the store's own directory** (was always the CWD) and skipped outside a git
+    work tree, so the ignore rule protects the real path and unrelated dirs aren't littered.
+  - **Timezone-aware timestamps** via a `_utcnow()` helper (deprecated naive `datetime.utcnow()` removed).
+  - Added `test_auth_tools.py` (stdlib `unittest`, 14 cases) covering every fix above.
+
 ## [2.4.5] — 2026-07-09
 
 ### Fixed
