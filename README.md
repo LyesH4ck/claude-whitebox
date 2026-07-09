@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    A full penetration testing framework for Claude Code with Kali MCP integration containing 18 agents, 6 skill coordinators and 64 attack categories.
+    White-box source-code audit + black-box penetration testing for Claude Code — 12 codeaudit auditors across 10 OWASP domains, and an 18-agent pentest framework with 64 attack categories and Kali MCP integration.
     <br />
     Structured, human-in-the-loop, evidence-driven.
   </p>
@@ -19,6 +19,8 @@
       <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
+    <img src="https://img.shields.io/badge/codeaudit_auditors-12-8B5CF6?style=flat-square" alt="12 codeaudit auditors" />
+    <img src="https://img.shields.io/badge/OWASP_domains-10-8B5CF6?style=flat-square" alt="10 OWASP domains" />
     <img src="https://img.shields.io/badge/pentest_agents-18-0EA5E9?style=flat-square" alt="18 pentest agents" />
     <img src="https://img.shields.io/badge/attack_categories-64-EF4444?style=flat-square" alt="64 attack categories" />
     <img src="https://img.shields.io/badge/authorized_use_only-red?style=flat-square" alt="Authorized use only" />

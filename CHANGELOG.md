@@ -4,6 +4,21 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.8] — 2026-07-09
+
+### Docs
+- **INSTALL.md now says 64 attack categories** (was a stale 63) — matches the READMEs, `plugin.json`,
+  `marketplace.json`, `SKILL.md`, and `ATTACK_INDEX.md`.
+- **All three READMEs now describe both plugins above the fold.** The tagline and badges advertised only the
+  pentest framework (18 agents / 64 categories), rendering the namesake white-box `codeaudit` plugin
+  invisible on a repo literally called `claude-whitebox`. Broadened the EN/FR/zh-CN taglines to "white-box
+  source-code audit + black-box penetration testing" and added `codeaudit` badges (12 auditors / 10 OWASP
+  domains) alongside the pentest ones.
+- **Reconciled the "Essential Skills (4)" count with the 5 on-disk subdirs.** The `64` per-domain breakdown
+  still sums correctly (Essential Skills = the 4 attack-relevant helpers); `SKILL.md` and `ATTACK_INDEX.md`
+  now note explicitly that `codeaudit-handoff` and `playwright-automation` are non-attack helpers excluded
+  from the 64, so the headline count is verifiable against the tree.
+
 ## [2.4.7] + codeaudit [0.1.5] — 2026-07-09
 
 ### Fixed

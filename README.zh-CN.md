@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    一个为 Claude Code 打造的完整渗透测试框架 —— 18 个 agent、6 个 skill 协调器、64 个攻击类别。
+    为 Claude Code 打造的白盒源码审计 + 黑盒渗透测试 —— 12 个 codeaudit 审计 agent 覆盖 10 个 OWASP 领域，以及一个包含 18 个 agent、64 个攻击类别的渗透测试框架（集成 Kali MCP）。
     <br />
     结构化、人工介入（human-in-the-loop）、以证据为驱动。
   </p>
@@ -19,6 +19,8 @@
       <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
+    <img src="https://img.shields.io/badge/codeaudit_auditors-12-8B5CF6?style=flat-square" alt="12 codeaudit auditors" />
+    <img src="https://img.shields.io/badge/OWASP_domains-10-8B5CF6?style=flat-square" alt="10 OWASP domains" />
     <img src="https://img.shields.io/badge/pentest_agents-18-0EA5E9?style=flat-square" alt="18 pentest agents" />
     <img src="https://img.shields.io/badge/attack_categories-64-EF4444?style=flat-square" alt="64 attack categories" />
     <img src="https://img.shields.io/badge/authorized_use_only-red?style=flat-square" alt="Authorized use only" />

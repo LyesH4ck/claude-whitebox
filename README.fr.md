@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    Un framework complet de tests d'intrusion pour Claude Code — 18 agents, 6 coordinateurs de skills, 64 catégories d'attaques.
+    Audit de code white-box + tests d'intrusion black-box pour Claude Code — 12 auditeurs codeaudit sur 10 domaines OWASP, et un framework pentest de 18 agents couvrant 64 catégories d'attaques avec intégration Kali MCP.
     <br />
     Structuré, avec intervention humaine (human-in-the-loop), guidé par les preuves.
   </p>
@@ -19,6 +19,8 @@
       <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
+    <img src="https://img.shields.io/badge/codeaudit_auditors-12-8B5CF6?style=flat-square" alt="12 codeaudit auditors" />
+    <img src="https://img.shields.io/badge/OWASP_domains-10-8B5CF6?style=flat-square" alt="10 OWASP domains" />
     <img src="https://img.shields.io/badge/pentest_agents-18-0EA5E9?style=flat-square" alt="18 pentest agents" />
     <img src="https://img.shields.io/badge/attack_categories-64-EF4444?style=flat-square" alt="64 attack categories" />
     <img src="https://img.shields.io/badge/authorized_use_only-red?style=flat-square" alt="Authorized use only" />
