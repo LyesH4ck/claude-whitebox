@@ -4,6 +4,32 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.7] + codeaudit [0.1.5] — 2026-07-09
+
+### Fixed
+- **Unified the generic-executor / planner agent IDs to kebab-case (dispatch consistency).** The two agents
+  shipped a spaced Title-Case frontmatter `name:` (`Pentester Executor` / `Pentester Orchestrator`) while the
+  filenames, the 28 other agents, and ~77 references (incl. `.pentest-attacks.json`, the Skill Coordinator
+  Map, and the deployment-plan schema instruction) used kebab `pentester-executor` / `pentester-orchestrator`
+  — an id that matched no registered agent. Renamed both frontmatter names to kebab and converted every
+  remaining spaced reference across 8 files (H1 titles kept Title-Case, per the `xss-tester` convention), so
+  a single identifier now flows config → coordinator map → deployment-plan `agent` → `Task` dispatch.
+- **Fixed recon-inventory path drift in the targeted-test commands.** `/pentest:idor`, `/pentest:sql`, and
+  `/pentest:xss` told the preflight to infer coverage from `outputs/{engagement}/recon/inventory/*.json`, but
+  the inventory agents write to `outputs/{engagement}/inventory/*.json` (recon-manifest.json stays under
+  `recon/`). The fallback globbed a never-populated directory and always concluded "no inventory", forcing
+  needless re-recon. Corrected to `inventory/*.json`.
+- **codeaudit 0.1.4→0.1.5 — `audit-planner` description no longer advertises "time allocation"**, which the
+  audit workflow explicitly does not use ("completeness, not budget — no timer"). Now "in what order, by
+  sink density", aligned with the completeness model.
+
+### Added
+- **Playwright-MCP browser-driver preflight (`pentest.md` Step 6.2).** The seven client-side agents depend on
+  the `playwright` plugin's `mcp__plugin_playwright_playwright__*` tools, a dependency stated only in prose.
+  The engagement preflight now verifies the MCP is reachable and, if not, warns loudly, sets
+  `playwright_active=false`, and records a coverage gap — so a missing browser driver fails loud instead of
+  silently degrading DOM/stored-XSS, CSP, prototype-pollution, and JS-route mapping to curl-only.
+
 ## [2.4.6] — 2026-07-09
 
 ### Fixed

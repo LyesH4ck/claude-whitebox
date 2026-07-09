@@ -1,6 +1,6 @@
 ---
 name: audit-planner
-description: Code-audit PLANNER. Reads the code-recon baseline and the selected vuln classes, then returns a structured deployment plan (which auditor agents to deploy against which components, in what order, with time allocation). Does NOT deploy auditors — the /codeaudit:codeaudit command owns dispatch, monitoring, aggregation, and reporting.
+description: Code-audit PLANNER. Reads the code-recon baseline and the selected vuln classes, then returns a structured deployment plan (which auditor agents to deploy against which components and in what order, by sink density). Does NOT deploy auditors — the /codeaudit:codeaudit command owns dispatch, monitoring, aggregation, and reporting.
 color: red
 tools: [Read, Write, Bash, Glob, Grep]
 ---
