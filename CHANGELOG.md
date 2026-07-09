@@ -4,6 +4,22 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.13] — 2026-07-09
+
+### Added
+- **`burp-import` — use an authenticated Burp deep crawl as a recon source.** New
+  `essential-skills/burp-import/burp-import.mjs` parses a Burp "Save items" XML export (base64 on or off) into
+  the plugin's recon inventory — `endpoints[]` grouped by `(host, method, path)`, one variant per operation
+  body-signature (same URL with different `filterModel`/`sortModel` = distinct surfaces; pagination collapses),
+  flattened query+body `params`, and a `param_inventory` slice that drops into `inventory/param-inventory.json`.
+  An authenticated Burp crawl is often a richer *observed* surface than a headless pass (it already solved auth
+  and captured real POST bodies), so this makes it a drop-in source every targeted command reuses.
+  - Dedup signature mirrors `stealth/crawl.mjs`, so Burp + browser-crawl sources merge cleanly; scope is a
+    host-suffix allow-list (multi-host); static assets are skipped by default (`--assets` to include them).
+  - Wired into `/pentest:recon` (new Step 4b): import if available, and **complement** — still run the JS
+    mapper's static bundle extraction for routes declared in JS but never navigated (which even a deep Burp
+    crawl won't have hit). Proven by `burp-import.test.mjs` (2 cases).
+
 ## [2.4.12] — 2026-07-09
 
 ### Added
