@@ -4,6 +4,15 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.14] — 2026-07-09
+
+### Changed
+- **`/pentest:recon` now ASKS for a Burp deep-crawl export (Step 4b).** Previously the Burp-import path was
+  documented but not prompted; recon now offers "do you have a Burp Save-items XML export?" and, given a path,
+  runs `burp-import.mjs` and merges the result into the inventory (still running the static bundle extraction
+  as a complement). Validated on a real 40 MB authenticated export (321 items → the ag-grid data POSTs and
+  their body params, in 0.2 s).
+
 ## [2.4.13] — 2026-07-09
 
 ### Added
