@@ -4,6 +4,29 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.4] — 2026-07-09
+
+### Fixed
+- **XSS/CMDi detection discipline — closed four false-positive/negative gaps where the codified PoC or probe
+  contradicted the repo's own "confirm, don't assume" rule.**
+  - **XSS reflected PoC no longer confirms on substring reflection (false positive).** `xss-tester`'s `poc.py`
+    asserted only `'onerror=alert' in r.text` — a safely HTML-encoded reflection (`&lt;img … onerror=alert…&gt;`)
+    still contains that substring and was reported `VULNERABLE`. The PoC now asserts the payload reflects
+    **UN-encoded** in an executable context (raw markup present AND its `html.escape()` form absent); a new
+    Critical Rule states an encoded reflection is `tested_not_vulnerable`, with the Playwright console-alert +
+    screenshot as ground truth.
+  - **CMDi no longer confirmed on a single un-baselined timing (false-positive RCE).** Both the Phase-2 probe
+    and `poc.py` required only one ~5s response (jitter / slow backend fake it). They now require a
+    **baselined, scaling differential** — `sleep 0` control vs `sleep 5` stable over repeats, and `sleep 10`
+    tracking ~2×. A bare time-blip with no scaling and no OAST hit is `probable`, not `confirmed`; the Critical
+    Rule and the OAST/DNS callback (preferred, deterministic) are aligned to this.
+  - **CMDi OOB probe now uses the real OAST payload.** The Phase-2 out-of-band probe referenced an undefined
+    `BURP_COLLABORATOR_HOST` (dead since the OAST integration); it now allocates a unique `$PAYLOAD` from the
+    OAST pool and correlates the callback in `oast/interactions.jsonl`.
+  - **DOM-XSS curl-on-fragment check removed (false negative).** A `curl "…/#<img …>"` can never observe the
+    payload — the `#…` fragment is not sent to the server. Replaced with the Playwright
+    `browser_navigate(#payload)` + `browser_console_messages()` path.
+
 ## [2.4.3] — 2026-07-09
 
 ### Fixed
