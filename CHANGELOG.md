@@ -4,6 +4,36 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.9] + playwright [0.2.0] — 2026-07-09
+
+### Added
+- **`playwright/stealth/crawl.mjs` — interaction-driven recon crawler that fixes the "missed POST" gap.**
+  A link/GET-only crawler and the `@playwright/mcp` `browser_network_requests()` summary both miss the data
+  XHR/fetch traffic of modern SPAs (server-side ag-grid / datatables that fetch rows by POST with the grid
+  state in the body). The new harness:
+  - **Interaction-driven** — clicks in-scope SPA router-links (not `goto`) and exercises grids (scroll → load
+    blocks, sort, filter, expand groups) so render-time POSTs actually fire.
+  - **Body-level, all-frames capture** — context-level capture of every method WITH request bodies, on the
+    main frame and iframes (fixes the frame-drop that lost micro-frontend traffic — `probe.mjs`'s in-page hook
+    only ever read the top frame).
+  - **Operation-signature dedup** — same URL with different `filterModel`/`sortModel`/`rowGroupCols` bodies is
+    kept as distinct variants; volatile paging (`startRow`/`offset`/…) collapses, so a grid yields real test
+    surfaces instead of one URL-deduped endpoint or 500 pagination dupes.
+  - **Multi-host scope** — keeps any request whose TARGET host is in scope even when the page Origin is a
+    different host/TLD (`--scope` is a domain-suffix allow-list, not the page origin). Carries an authenticated
+    session via `--state` (Playwright storageState) so data POSTs don't 401 and get dropped.
+  - Emits `crawl-endpoints.json` (endpoints grouped by host/method/path, one variant per body signature, with
+    bodies + frames + flattened params) plus a `param_inventory` slice that drops into `param-inventory.json`.
+  - Proven end-to-end by `crawl.test.mjs` (local ag-grid-SSRM fixture): 1 URL-deduped endpoint → 4 distinct
+    operation variants, pagination collapsed, bodies captured, iframe request seen.
+- `newStealthContext` gained additive `storageState` / `viewport` options (auth session + real viewport).
+
+### Changed
+- **`inventory-javascript-mapper` Phase 3 now routes server-side grids through `crawl.mjs`.** New step 1c
+  documents that `browser_network_requests()` does not return POST bodies or iframe traffic, and mandates the
+  owned crawl harness for grid views — merging its variant-level endpoints + `param_inventory` into the
+  inventory so the previously-missed POST surfaces reach injection/BOLA testing.
+
 ## [2.4.8] — 2026-07-09
 
 ### Docs

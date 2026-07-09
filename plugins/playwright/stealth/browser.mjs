@@ -24,14 +24,18 @@ export async function launch({ headless = true, proxy = null } = {}) {
   });
 }
 
-export async function newStealthContext(browser, { userAgent, insecure = true, extraHeaders } = {}) {
+export async function newStealthContext(
+  browser,
+  { userAgent, insecure = true, extraHeaders, storageState, viewport } = {}
+) {
   const ctx = await browser.newContext({
     userAgent: userAgent || DEFAULT_UA,
-    viewport: { width: 1366, height: 900 },
+    viewport: viewport || { width: 1366, height: 900 },   // a REAL viewport — virtualized grids need one to request rows
     locale: 'en-US',
     timezoneId: 'America/New_York',
     ignoreHTTPSErrors: !!insecure,
     extraHTTPHeaders: extraHeaders || undefined,
+    storageState: storageState || undefined,               // carry an authenticated session (Playwright storageState JSON)
   });
   await ctx.addInitScript({ content: INIT_SCRIPT });
   return ctx;
