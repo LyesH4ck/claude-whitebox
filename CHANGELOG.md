@@ -4,6 +4,30 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.5] — 2026-07-09
+
+### Fixed
+- **NoSQLi auth-bypass no longer confirmed on a bare HTTP 200.** `injection-tester`'s Phase-2 rule was
+  "HTTP 200 with successful login response → NoSQLi confirmed", but many login APIs return 200 with an error
+  body on failed auth. Now requires a **3-way differential** — wrong-creds baseline vs operator injection vs
+  valid-creds baseline — confirming only when the injection yields the SAME authenticated artifact
+  (`Set-Cookie` session / JWT / 302 into the app) as valid creds that the wrong-creds baseline does NOT.
+  Pulls the Phase-4 `'token' in r.text` bar forward into the confirmation language.
+- **Handoff correlator (voie B) now tolerates all three `params` shapes.** Recon producers emit `params`
+  three ways — flat name array `["id"]` (surface-map / web-app), object array `[{name,in,sample}]`
+  (param-inventory), and object keyed by location `{"path":["id"],"query":["fields"]}` (api-endpoints).
+  `codeaudit-leads.mjs`'s `correlate` only handled the flat array: the object array made every `String(x)`
+  become `"[object Object]"` (silent no-match) and the location-keyed object **threw** (dropped the finding
+  to `malformed`). A new `paramNames()` normalizes any shape to a flat name list before matching. +4
+  regression tests (22 total, all passing).
+
+### Docs
+- **`surface-map.json` is now a first-class recon contract (Format 6 in `RECONNAISSANCE_OUTPUT.md`).** It was
+  the single most load-bearing recon artifact for the white-box→black-box handoff (`--surface`) and the Step
+  6.7 coverage math, yet its schema lived only in the `inventory-surface-analyzer` prompt. Added its full
+  shape plus a `params`-shapes reconciliation table (canonical = the `[{name,in,sample}]` object array;
+  surface-map flattens to names by design) so producers and consumers code against one documented contract.
+
 ## [2.4.4] — 2026-07-09
 
 ### Fixed
