@@ -192,6 +192,14 @@ Once active, the `oast` skill is mounted alongside the primary skill so injectio
 
 ---
 
+### /pentest:recon
+
+**Purpose:** Standalone reconnaissance — runs the full web-application-mapping (software catalog, directory scan, API discovery, JS/SPA route mapping with **interaction-driven data-POST capture**, surface synthesis) and **stops**. Writes the reusable recon baseline (`inventory/*.json`, `analysis/attack-surface.md`, `recon/recon-manifest.json`) so you can then unit-test each brick separately — each targeted command reuses it via its recon preflight.
+
+**Flow:** resolve target + authorization gate → auth/session choice (map authenticated surface vs public-only) → pre-flight (reachability + browser driver) → deploy the 5 inventory agents (incl. the `crawl.mjs` grid capture + param mining) → `inventory-surface-analyzer` writes the surface + `recon-manifest.json` → summary + hand-off to `/pentest:sql|xss|idor|ssrf`.
+
+---
+
 ### /pentest:idor
 
 **Purpose:** Targeted IDOR/BOLA/BFLA/BOPLA test on a single scope — deploys the `idor-bola-tester` agent directly (no recon/planner/quota loop). Adapts to however many identities you supply (0/1/2/N) and gates the verdict on the oracle strength (`200 ≠ BOLA`).
@@ -218,6 +226,14 @@ Once active, the `oast` skill is mounted alongside the primary skill so injectio
 **Purpose:** Targeted SQL/NoSQL injection test on a single scope — deploys the `injection-tester` agent (sqlmap + curl) directly (no full engagement). SQLi + NoSQLi operator injection + OS command injection, with a capability-aware recon preflight.
 
 **Flow:** resolve target + authorization gate → optional auth + parameters + DB type → recon preflight (api/param discovery) → plan confirmation → deploy `injection-tester` → summary + surface-coverage declaration.
+
+---
+
+### /pentest:ssrf
+
+**Purpose:** Targeted SSRF test on a single scope — deploys the `pentester-executor` agent (specialized for SSRF) directly (no full engagement). Traces URL/host/path params and URL-import features to server-side outbound requests; **confirms blind SSRF out-of-band via OAST** and checks cloud-metadata/internal reachability. Verdict bar: a 200 is not SSRF — proof is a server-issued callback, an internal/metadata response, or a deny-vs-fetch differential.
+
+**Flow:** resolve target + authorization gate → OAST collaborator (primary blind-confirm channel) → recon preflight (api/param discovery, URL-shaped params) → plan confirmation → deploy `pentester-executor` (SSRF) → summary + surface-coverage declaration.
 
 ---
 

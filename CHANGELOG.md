@@ -4,6 +4,23 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.10] — 2026-07-09
+
+### Added
+- **`/pentest:recon` — standalone reconnaissance command.** Runs the full web-application-mapping (software
+  catalog, directory scan, API discovery, JS/SPA route mapping incl. the interaction-driven `crawl.mjs`
+  grid capture, param mining, surface synthesis) and **stops** — no planner, no exploitation. Writes the
+  reusable recon baseline (`inventory/*.json`, `analysis/attack-surface.md`, `recon/recon-manifest.json`,
+  `inventory/surface-map.json`, `inventory/param-inventory.json`) that the targeted-test commands reuse via
+  their recon preflight. Handles the authenticated-vs-public surface choice up front (so the data POSTs behind
+  login are actually mapped). This makes "run recon once, then unit-test each brick" a first-class workflow.
+- **`/pentest:ssrf` — targeted SSRF launcher**, completing the per-brick unit-test set
+  (`/pentest:sql|xss|idor|ssrf`). Deploys `pentester-executor` specialized for SSRF with a URL/host/param
+  recon preflight and OAST as the primary blind-confirmation channel; enforces the "a 200 is not SSRF"
+  verdict bar (server-issued callback / internal-metadata response / deny-vs-fetch differential).
+- Docs: `CLAUDE.md` command count 9→11, and README command reference updated with both commands (the intended
+  loop — `/pentest:recon` once, then `sql → xss → idor → ssrf` against that baseline).
+
 ## [2.4.9] + playwright [0.2.0] — 2026-07-09
 
 ### Added
