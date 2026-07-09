@@ -4,6 +4,18 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.15] — 2026-07-09
+
+### Added
+- **`burp-import` now mines the JS bundles too — the export carries two recon sources.** Beyond the observed
+  request surface, it extracts routes from the **JS bundle response bodies** (Layer-A: URL-like path literals,
+  dynamic segments → `{param}`) into `static_routes[]`. The `.js` in a Burp export are captured *authenticated*,
+  so this recovers API routes declared in code but never navigated (`observed_live:false`) — usually the
+  highest-value undiscovered surface (many with `{param}` → IDOR/BOLA candidates). `--bundles <dir>` dumps the
+  authenticated bundles for the js-mapper's deeper pass; `--no-mine-js` skips mining. On a real 40 MB export:
+  234 bundles → **251 new API routes** the crawl never saw (e.g. `/api/documents/{param}/esign/sign`,
+  `/api/lead/{leadId}/collateral`). `.js` are no longer lumped into the skipped-assets bucket. +1 test assertion.
+
 ## [2.4.14] — 2026-07-09
 
 ### Changed
