@@ -4,6 +4,20 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.16] — 2026-07-09
+
+### Fixed
+- **Session Freshness Gate — stop silently reusing an expired session.** `/pentest:recon` Step 3 used to
+  reuse a stored `.pentest-identities.json` identity **without asking or checking it**, so an engagement could
+  run "green" while actually mapping/testing **unauthenticated** (every authed endpoint 401s → false
+  negatives). New `essential-skills/methodology/session-check.md` defines the gate: **show** the session,
+  **probe** a witness authenticated request (vs the unauth baseline), and offer **use / refresh / replace** —
+  refusing to test authenticated on a STALE session unless the operator explicitly overrides (then it's a
+  recorded coverage gap). Wired into `/pentest:recon` and all four bricks (`/pentest:sql|xss|idor|ssrf`); for
+  `/pentest:idor` the gate runs **per identity** (a stale identity poisons the authz matrix — a `401` reads as
+  "access denied" and hides a real BOLA). Pasted sessions are now stamped with an `added` timestamp so the
+  gate can show their age.
+
 ## [2.4.15] — 2026-07-09
 
 ### Added
