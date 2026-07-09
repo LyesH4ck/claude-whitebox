@@ -88,10 +88,11 @@ captures them:
 
 ```bash
 node crawl.mjs --url "https://app.target/route" \
-  --scope target.id,target.systems \   # in-scope host suffixes (include every micro-frontend host)
-  [--state auth.json]                  # Playwright storageState with the authenticated session
+  --scope target.id,target.systems \             # in-scope host suffixes (include every micro-frontend host)
+  --cookie "sess=…; csrf=…" \                     # paste your session Cookie directly (or --header "Authorization: Bearer …",
+                                                  # or --state auth.json for a Playwright storageState) — else data POSTs 401
   [--proxy http://127.0.0.1:8080] [--scroll 6] [--no-grid] [--max-views 12] [--viewport 1280x800]
-  --out outputs/ENG/inventory          # writes crawl-endpoints.json (endpoints[] + a param_inventory slice)
+  --out outputs/ENG/inventory                     # writes crawl-endpoints.json (endpoints[] + a param_inventory slice)
 ```
 
 Output (one JSON object): `endpoints[]` grouped by `(host, method, path)`, each with `variants[]`

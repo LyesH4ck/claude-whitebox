@@ -4,6 +4,26 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.11] + playwright [0.2.1] — 2026-07-09
+
+### Changed
+- **One shared session config, set up once and reused by every brick.** `/pentest:recon` now offers a direct
+  **"paste a session cookie / token now"** option (writing `.pentest-identities.json`), and `/pentest:sql`,
+  `/pentest:xss`, `/pentest:ssrf` read that same shared config (offering the paste path when it is missing) —
+  so you configure the session once, at recon time, and every targeted test reuses it. `/pentest:idor` already
+  wrote `.pentest-identities.json`; it now states it is the shared store. (Previously `/pentest:recon` only
+  pointed at the `authenticating` skill, and sql/xss read auth ad hoc from `.pentest-scope.json` — inconsistent.)
+
+### Added
+- **`crawl.mjs --cookie "<Cookie>"` / `--header "K: V"`** — paste a session directly instead of exporting a
+  Playwright `storageState`; applied across all in-scope hosts/frames so the app session is sent even from a
+  micro-frontend origin. `/pentest:recon` forwards the pasted session to the crawler.
+
+### Fixed
+- **`--no-grid` / `--no-headless` now actually work.** `crawl.mjs` and `probe.mjs` were missing
+  `allowNegative: true` on `parseArgs`, so the documented negated boolean flags errored with
+  `Unknown option '--no-…'`.
+
 ## [2.4.10] — 2026-07-09
 
 ### Added
