@@ -4,6 +4,32 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.3] — 2026-07-09
+
+### Fixed
+- **Hybrid handoff normalizer (`codeaudit-leads.mjs`) hardened — 4 review findings + the mandated e2e test.**
+  The report is `UNTRUSTED DATA`; these close the gaps where a malformed or free-text report could crash the
+  handoff or fabricate a misleading lead.
+  - **No longer crashes on a bad `findings[]` element.** A `null` / non-object entry (hand-edited, truncated,
+    trailing comma) used to throw an uncaught `TypeError` and produce **no** `exploitation-leads.json` at all —
+    every valid lead in the same report was lost. Now such an element is skipped and counted in
+    `totals.malformed` (never a silent drop), and the whole per-finding body is wrapped so one bad finding is
+    counted, never fatal — the `{ok:true}` + leads contract always holds.
+  - **No phantom `externally_reachable` leads.** The loose free-text fallback that grabs a trailing identifier
+    from any `source` string is now flagged `low_confidence` and **no longer implies reachability** — only a
+    resolved endpoint, a recognized framework accessor, or a whole-object binding does. Garbage/prose `source`
+    text can no longer be promoted to a high-priority exploitation target.
+  - **`in` enum honored on every field.** The top-level `lead.in` is now passed through `canonIn()` (was raw),
+    and the fallback returns `in: null` instead of the out-of-enum string `'unknown'` — the lead's `in` is now
+    always `query|path|header|cookie|json|form` or `null`, consistent with `endpoint.in`.
+  - **`body.<field>` / `data.<field>` sources now parse as `json`.** code-recon's own "feeds" shorthand
+    (e.g. `body.url`) previously fell through to the fallback and lost its injection location; two `\b`-guarded
+    patterns now map it to `in: json` (the `\b` protects `formData.` / `metadata.`).
+- **Added the end-to-end fixture test mandated by `HYBRID_HANDOFF_SPEC.md` §8 ("leçon SQLi").**
+  `codeaudit-leads.test.mjs` (zero-dep, Node 18+, `node --test`) runs the real normalizer as a subprocess over
+  synthetic reports: voie A / voie B resolution, per-framework accessor parsing, whole-object binding,
+  non-routable classes, and a regression case for each of the four fixes above. 18 cases, all passing.
+
 ## [2.4.2] + codeaudit [0.1.4] — 2026-07-08
 
 ### Fixed
