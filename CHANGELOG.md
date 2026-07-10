@@ -4,7 +4,82 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
-## [2.4.26] — 2026-07-10
+## [2.4.31] — 2026-07-10
+
+### Fixed
+- **Wired the orphaned deep KB for the generalist-executor attacks (audit #3).** These comprehensive docs were
+  named off-convention (not `*-quickstart`/`*-cheat-sheet`) and listed nowhere, so nothing reached them. Rather
+  than load them into every sweep, added a **"deep reference" pointer in each sibling cheat-sheet** (which
+  `pentester-executor` already reads by convention) → the deep doc, to be read at Phase-3 escalation:
+  - `jwt-cheat-sheet.md` → `jwt_attack_techniques.md` + `portswigger_jwt_labs.md`
+  - `http-request-smuggling-cheat-sheet.md` → `http-request-smuggling.md`
+  - `api-testing-cheat-sheet.md` → `api-testing-comprehensive-guide.md`
+  - `pentester-executor` Phase 2 now tells the agent to follow a cheat-sheet's deep-reference pointer when
+    escalating (don't stop at cheat-sheet payloads for a non-trivial exploit).
+- **Demoted `jwt_security_resources.md`** to a passive reference appendix (OWASP docs / advisories / tooling
+  reading list) — superseded for exploitation by the two JWT technique/labs docs; explicitly kept OUT of the
+  exploitation loop.
+- Audit note: the `*-cheat-sheet` docs for ssrf/xxe/path-traversal/oauth/deserialization/race-conditions/web-llm
+  were NOT orphaned — `pentester-executor` reaches them via its `quickstart.md`/`cheat-sheet.md` naming
+  convention (an earlier over-flag, corrected).
+
+### Fixed
+- **Sibling-agent KB under-use (audit follow-up to the injection-tester fix).** Same pattern as 2.4.29, found
+  across the tester agents:
+  - **`xss-tester` never read `dom-based-vulnerabilities-complete.md`** (3249 lines — the largest doc in the
+    repo, in its own DOM domain: source→sink map, PortSwigger DOM-XSS labs, Web Messages/`postMessage`, DOM
+    Clobbering, prototype-pollution→XSS gadgets, advanced sink escalation). Now wired in as the DEEP reference,
+    read at the DOM-XSS handling step (not wholesale during the sweep) so a non-trivial sink is exploited, not
+    just confirmed with a quickstart payload.
+  - **`prototype-pollution-tester` never read `prototype-pollution-cheat-sheet.md`** (1133 lines — exploitation
+    payloads, gadget chains, bypass, per-library sinks). Now read once pollution is confirmed, to turn
+    `Object.prototype` control into real impact (XSS/RCE via a gadget) instead of stopping at "pollution confirmed".
+  - Audit note: the tool-path axis is clean (the `../skills/` bug was isolated to injection-tester +
+    inventory-javascript-mapper, already fixed); `idor-bola-tester` correctly mandates its `run.mjs` backbone.
+    Remaining orphaned comprehensive docs (`http-request-smuggling.md`, the JWT suite, `api-testing-comprehensive-guide.md`)
+    are tracked separately — wire-or-archive decision pending.
+
+### Fixed
+- **`injection-tester` never consulted the SQLi knowledge base — only the quickstart + `sqli-detect.mjs`.** The
+  comprehensive **`sql-injection.md`** (3038 lines: 18 worked PortSwigger labs + extraction techniques — UNION
+  data-from-other-tables, schema/data enumeration, blind conditional/time retrieval, OOB exfil, second-order,
+  stacked queries, filter-bypass) and **`payloads/blind.md`** were never referenced by the agent, so its
+  exploitation was capped at what the detector alone surfaced. Now the agent is pointed at `sql-injection.md`
+  as the DEEP exploitation reference (read the matching section during Phase 3 escalation, not wholesale during
+  the sweep) and at `payloads/blind.md` for blind time/boolean/OOB payloads — with an explicit "`sqli-detect.mjs`
+  DETECTS; these docs tell you how to EXTRACT" note. Complements the 2.4.27 CONFIRMED ≠ DONE escalation.
+
+### Added
+- **`sqli-detect.mjs` — unquoted numeric-context boolean for EVERY param.** The bare `<orig> AND 1=1` /
+  `<orig> AND 1=2` differential is now sent for string params too (was numeric-only), catching a value that
+  lands in an unquoted / identifier SQL context where the quoted payloads never break. (`num_expr_eq` arithmetic
+  stays numeric-only.)
+- **`sqli-detect.mjs --time-bypass` — heavy 15s WAF-evasion time payloads (opt-in).** Adds a stacked-subquery
+  polyglot `(select(0)from(select(sleep(15)))v)…`, the keyword-avoiding `if(now()=sysdate(),sleep(15),0)` and
+  `4*if(…)`, and XOR-wrapped single/double-quote context breaks `0'XOR(…)XOR'Z` / `0"XOR(…)XOR"Z`. A clean ~15s
+  delay over a fast baseline is flagged `time-based` positive. **Short-circuits on the first confirming delay**
+  (no DB hammering) and uses a >15s per-probe timeout so the sleep isn't aborted. Off by default (heavier on the
+  DB); the `injection-tester` invokes it for WAF/filtered targets. New tests cover the bare-AND pass and the
+  gated bypass detection.
+
+---
+
+## [2.4.27] — 2026-07-10
+
+### Fixed
+- **`injection-tester` under-executed SQLi (two root causes, from a live `/pentest:sql` miss).**
+  1. **Broken tool path → silent hand-rolling.** Phase 2 referenced `sqli-detect.mjs` via `../skills/…`, which
+     does not resolve from the engagement CWD, so the agent silently fell back to improvised `curl` probes —
+     losing the identifier-context breakouts (`":<>` / `'":<>`) and the `queryLeak` detector, which downgrades a
+     full query/schema disclosure to a bare "differential". Now the agent **resolves the tool robustly** (repo
+     checkout, else the newest installed cache) and running `sqli-detect.mjs` on every parameter is **MANDATORY**
+     — hand-rolled probes are explicitly not a substitute. Same broken `../skills/…` path fixed for
+     `param-mine.mjs` in `inventory-javascript-mapper`.
+  2. **"CONFIRMED = done" bias.** A controlled differential + sqlmap failing to build an oracle is the *expected*
+     outcome in an identifier/`ORDER BY`/Hibernate context — not the finish line. Added an explicit **query &
+     schema disclosure escalation** (force the ORM to re-emit its generated SQL via the structural breakouts,
+     read the leaked schema + tenant clause, escalate against the revealed identifiers) and a **CONFIRMED ≠ DONE**
+     critical rule, so the agent pursues disclosure instead of closing at "confirmed".
 
 ### Added
 - **`/pentest:crud` — standalone launcher for the AI-piloted write-crawler.** Relaunch the CRUD crawl on its own
