@@ -70,41 +70,8 @@ const guard = 400;
 const timeout = +a.timeout;
 const viewport = a.viewport ? { width: +a.viewport.split('x')[0], height: +a.viewport.split('x')[1] } : undefined;
 
-// ── operation fingerprint — keeps filter/sort/group variants, collapses pagination ──────────────────────
-const VOLATILE = new Set(['startrow', 'endrow', 'offset', 'page', 'pagesize', 'limit', 'cursor', 'skip', 'take', 'from', 'size', '_', 't', 'timestamp', 'ts']);
-const DISC = new Set(['colid', 'field', 'filtertype', 'type', 'operator', 'sort', 'aggfunc']);
-const skeleton = (v) => Array.isArray(v) ? '[' + (v.length ? skeleton(v[0]) : '') + ']'
-  : (v && typeof v === 'object') ? '{' + Object.keys(v).sort().map((k) => k + ':' + skeleton(v[k])).join(',') + '}'
-  : typeof v;
-function salient(v, key, acc) {
-  if (Array.isArray(v)) { for (const e of v) salient(e, key, acc); return; }
-  if (v && typeof v === 'object') {
-    const keys = Object.keys(v).filter((k) => !VOLATILE.has(k.toLowerCase()));
-    if (key && /filter|group|pivot/i.test(key) && keys.length) acc.add(key.toLowerCase() + ':{' + keys.map((k) => k.toLowerCase()).sort().join(',') + '}');
-    for (const k of Object.keys(v)) salient(v[k], k, acc);
-    return;
-  }
-  if (key && DISC.has(key.toLowerCase()) && !VOLATILE.has(key.toLowerCase())) acc.add(key.toLowerCase() + '=' + String(v).slice(0, 40));
-}
-function bodySignature(method, pth, postData, query) {
-  let shape = '', sal = '';
-  if (postData) {
-    try { const j = JSON.parse(postData); shape = skeleton(j); const acc = new Set(); salient(j, '', acc); sal = [...acc].sort().join('|'); }
-    catch { shape = postData.split('&').map((kv) => kv.split('=')[0]).filter((k) => !VOLATILE.has(k.toLowerCase())).sort().join('&'); }
-  }
-  // fold non-volatile QUERY keys too — GET-based grids carry filter/sort in the query, not a body (else all
-  // GET operations to the same path collapse to one signature).
-  let q = '';
-  if (query) { try { q = [...new URLSearchParams(query).keys()].filter((k) => !VOLATILE.has(k.toLowerCase())).sort().join(','); } catch { /* skip */ } }
-  return `${method} ${pth} ${shape} ${sal} ${q}`;
-}
-// flatten a JSON body / query into dotted leaf param names (arrays → [])
-function flattenParams(v, prefix, out) {
-  if (Array.isArray(v)) { if (v.length) flattenParams(v[0], prefix + '[]', out); else if (prefix) out.add(prefix + '[]'); return; }
-  if (v && typeof v === 'object') { for (const k of Object.keys(v)) flattenParams(v[k], prefix ? prefix + '.' + k : k, out); return; }
-  if (prefix) out.add(prefix);
-}
-const normPath = (p) => p.replace(/\/\d+(?=\/|$)/g, '/{id}').replace(/\/[0-9a-f]{8,}(?=\/|$)/gi, '/{id}');
+// ── operation fingerprint + param helpers — shared canonical kernel (drift-tested against the pentest copy) ──
+import { bodySignature, flattenParams, normPath } from './op-signature.mjs';
 
 const { launch, newStealthContext } = await import('./browser.mjs');
 const emitOut = { ok: true, start_url: a.url, scope: SCOPE };

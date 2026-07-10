@@ -4,6 +4,18 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.22] + playwright [0.2.3] — 2026-07-10
+
+### Changed
+- **Extracted the duplicated operation-signature/param kernel into a canonical `op-signature.mjs`** (the last
+  code-review cleanup finding). `bodySignature` / `flattenParams` / `normPath` (+ private
+  `VOLATILE`/`DISC`/`skeleton`/`salient`) were copied byte-for-byte in `crawl.mjs` and `burp-import.mjs`, and
+  re-implemented as `leaves()` in `crud-merge.mjs` — a silent-drift hazard: a one-sided edit would make the same
+  request hash differently across recon sources and double-count in the surface-analyzer union. Now one
+  canonical module (`essential-skills/op-signature/`) imported by burp-import + crud-merge, and vendored
+  byte-identical for `crawl.mjs` (cross-plugin imports aren't portable across the versioned cache dirs), guarded
+  by a **drift test** that fails if the two copies diverge. Behavior unchanged; all suites green.
+
 ## [2.4.21] + playwright [0.2.2] — 2026-07-10
 
 ### Fixed
