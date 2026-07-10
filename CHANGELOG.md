@@ -4,6 +4,33 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.24] + playwright [0.2.5] — 2026-07-10
+
+### Added
+- **`crawl-write.mjs` — gated interactive WRITE-mode exerciser** (the deterministic backbone of the
+  `crud-exerciser` agent). It drives an authenticated app, **navigates breadth-first following the links it
+  finds** (create-labelled first, then any in-scope internal link, up to `--max-views`; never a logout/delete
+  link), discovers CREATE forms on every page, fills each field with marker-compliant, field-typed values,
+  submits, and captures the real write request (method/host/path/body) + the created object `{id}`, with a
+  one-shot validation retry. It emits `crud-exercise.json` straight into
+  the existing pipeline — `crud-merge.mjs` then DERIVES the `{id}`-bearing GET/PUT/DELETE BOLA corpus and the
+  injection body-field seeds, so **captured writes flow into `idor-bola-tester` / `injection-tester`**.
+  - **Safety:** state-mutating, so it is double-armed — default is `--dry-run` (discovers/previews, submits
+    NOTHING); it submits ONLY with both `--submit` and a non-empty `--marker` (every created value carries the
+    marker); it only ever clicks a form's own create/save control and NEVER a delete/remove/bulk/reset control;
+    CREATE only, capped per form. Honors the operator proxy.
+  - `crud-exerciser` Phase 3 now uses it as the primary path (dry-run preview → armed run), keeping the MCP
+    browser only as a fallback for exotic forms (wizards, rich editors, non-`<form>` widgets).
+- Test suite `crawl-write.test.mjs` (real-browser stub app): dry-run submits nothing, armed run captures the
+  marker POST + created id, unmarked submit refused, destructive-only control never clicked, a deep form
+  reached only via a non-create link is found and submitted while the logout link is skipped, validation retry.
+
+### Changed
+- **CI now provisions the browser** — installs the stealth-probe deps + Chromium before `node --test`, so the
+  browser-driven crawler suites (`crawl`, `crawl-write`) run in CI too.
+
+---
+
 ## [2.4.23] + playwright [0.2.4] — 2026-07-10
 
 ### Added

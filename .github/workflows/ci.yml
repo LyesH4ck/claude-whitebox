@@ -16,7 +16,13 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Node tool tests (.mjs, zero-dependency)
+      - name: Install stealth-probe deps (for the browser-driven crawler tests)
+        run: cd plugins/playwright/stealth && npm install
+
+      - name: Install Chromium for Playwright
+        run: cd plugins/playwright/stealth && npx playwright install --with-deps chromium
+
+      - name: Node tool tests (.mjs — zero-dep tools + browser-driven crawlers)
         run: node --test $(find plugins -name '*.test.mjs' -not -path '*/node_modules/*')
 
       - name: Set up Python
