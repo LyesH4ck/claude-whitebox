@@ -4,6 +4,22 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.26] — 2026-07-10
+
+### Added
+- **`/pentest:crud` — standalone launcher for the AI-piloted write-crawler.** Relaunch the CRUD crawl on its own
+  (like `/pentest:idor|sql|xss|ssrf`) to test it. It deploys the **`crud-exerciser` agent**, which drives the
+  Playwright MCP browser intelligently (reasoning about links/forms) with **`crawl-write.mjs` as its deterministic
+  backbone**, to crawl the authenticated app, discover CREATE forms, and (armed) capture the write requests +
+  created `{id}`s as BOLA/injection seeds via `crud-merge.mjs`. **It runs the crawler ONLY — no recon, no planner,
+  no other agent** (an earlier draft's recon-preflight made it trigger `/pentest:recon`; removed — the crawler
+  self-navigates, and the agent's recon ingest is now optional). **Hard-gated by `environment` +
+  `rules_of_engagement`** and **defaults to dry-run** (discover + preview, submit nothing); it submits only when
+  the RoE authorizes state-change and the operator confirms. Wired into the `/pentest:recon` hand-off and the docs
+  command inventory (11 → 12).
+
+---
+
 ## [2.4.24] + playwright [0.2.5] — 2026-07-10
 
 ### Added
