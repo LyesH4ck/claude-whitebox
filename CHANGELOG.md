@@ -4,7 +4,24 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
-## [2.4.30] — 2026-07-10
+## [2.4.31] — 2026-07-10
+
+### Fixed
+- **Wired the orphaned deep KB for the generalist-executor attacks (audit #3).** These comprehensive docs were
+  named off-convention (not `*-quickstart`/`*-cheat-sheet`) and listed nowhere, so nothing reached them. Rather
+  than load them into every sweep, added a **"deep reference" pointer in each sibling cheat-sheet** (which
+  `pentester-executor` already reads by convention) → the deep doc, to be read at Phase-3 escalation:
+  - `jwt-cheat-sheet.md` → `jwt_attack_techniques.md` + `portswigger_jwt_labs.md`
+  - `http-request-smuggling-cheat-sheet.md` → `http-request-smuggling.md`
+  - `api-testing-cheat-sheet.md` → `api-testing-comprehensive-guide.md`
+  - `pentester-executor` Phase 2 now tells the agent to follow a cheat-sheet's deep-reference pointer when
+    escalating (don't stop at cheat-sheet payloads for a non-trivial exploit).
+- **Demoted `jwt_security_resources.md`** to a passive reference appendix (OWASP docs / advisories / tooling
+  reading list) — superseded for exploitation by the two JWT technique/labs docs; explicitly kept OUT of the
+  exploitation loop.
+- Audit note: the `*-cheat-sheet` docs for ssrf/xxe/path-traversal/oauth/deserialization/race-conditions/web-llm
+  were NOT orphaned — `pentester-executor` reaches them via its `quickstart.md`/`cheat-sheet.md` naming
+  convention (an earlier over-flag, corrected).
 
 ### Fixed
 - **Sibling-agent KB under-use (audit follow-up to the injection-tester fix).** Same pattern as 2.4.29, found
