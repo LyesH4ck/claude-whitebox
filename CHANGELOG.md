@@ -4,6 +4,23 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.28] — 2026-07-10
+
+### Added
+- **`sqli-detect.mjs` — unquoted numeric-context boolean for EVERY param.** The bare `<orig> AND 1=1` /
+  `<orig> AND 1=2` differential is now sent for string params too (was numeric-only), catching a value that
+  lands in an unquoted / identifier SQL context where the quoted payloads never break. (`num_expr_eq` arithmetic
+  stays numeric-only.)
+- **`sqli-detect.mjs --time-bypass` — heavy 15s WAF-evasion time payloads (opt-in).** Adds a stacked-subquery
+  polyglot `(select(0)from(select(sleep(15)))v)…`, the keyword-avoiding `if(now()=sysdate(),sleep(15),0)` and
+  `4*if(…)`, and XOR-wrapped single/double-quote context breaks `0'XOR(…)XOR'Z` / `0"XOR(…)XOR"Z`. A clean ~15s
+  delay over a fast baseline is flagged `time-based` positive. **Short-circuits on the first confirming delay**
+  (no DB hammering) and uses a >15s per-probe timeout so the sleep isn't aborted. Off by default (heavier on the
+  DB); the `injection-tester` invokes it for WAF/filtered targets. New tests cover the bare-AND pass and the
+  gated bypass detection.
+
+---
+
 ## [2.4.27] — 2026-07-10
 
 ### Fixed
