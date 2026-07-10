@@ -12,6 +12,13 @@
 //   • CREATE only (1 object/form, capped). Modify/Delete are DERIVED downstream, never performed here.
 // Authorization (environment/RoE) is the caller's gate — see the crud-exerciser agent Phase 0.
 //
+// WIDGET/TYPEAHEAD DISCOVERY (--widgets, default ON, READ-ONLY — safe even in dry-run): custom dropdowns
+// (`<div role=combobox>`, mat-select, …) and searchable typeaheads are INVISIBLE to native-`<select>` scraping,
+// yet they hide injectable params: typing in a typeahead fires `?keyword=…`, selecting an option echoes its
+// value into `?name=…`. This pass opens add-dialogs + custom dropdowns, types a probe, and selects a few
+// options — capturing those option-driven data endpoints/params into `widget-param-inventory.json` (feeds
+// `/pentest:sql`). It only reads (search/select never submit the form), so it runs regardless of --submit.
+//
 // Usage:
 //   node crawl-write.mjs --url https://app/ [--cookie "sess=…"|--header "Authorization: Bearer …"|--state s.json]
 //     --marker PENTEST-run7 --submit           # ARM: actually create marker-tagged objects
@@ -45,6 +52,9 @@ try {
     timeout:  { type: 'string', default: '30000' },
     'max-forms': { type: 'string', default: '6' },
     'max-views': { type: 'string', default: '15' },   // pages to visit while following links looking for forms
+    widgets:  { type: 'boolean', default: true },     // read-only: exercise custom dropdowns/typeaheads for param discovery
+    'max-widgets': { type: 'string', default: '10' },
+    'max-options': { type: 'string', default: '3' },  // option values to select per dropdown (each may echo a param)
     submit:   { type: 'boolean', default: false },   // ARM: without it, dry-run (no submit)
     'dry-run':{ type: 'boolean', default: false },   // force dry-run even if --submit
     headless: { type: 'boolean', default: true },
@@ -147,6 +157,23 @@ try {
   if (a.cookie) extraHeaders.Cookie = a.cookie;
   for (const h of (a.header || [])) { const i = h.indexOf(':'); if (i > 0) extraHeaders[h.slice(0, i).trim()] = h.slice(i + 1).trim(); }
   const ctx = await newStealthContext(browser, { insecure: a.insecure, viewport, storageState: a.state || undefined, extraHeaders: Object.keys(extraHeaders).length ? extraHeaders : undefined });
+
+  // Read-only data-request capture (for widget/typeahead param discovery): record in-scope XHR/fetch with their
+  // query params, deduped. A dropdown search (?keyword=…) or an option selection (?name=…) becomes an
+  // inventoried, testable parameter here — the surface a native-<select> scrape and a path-crawl both miss.
+  const captured = [];
+  const seenReq = new Set();
+  ctx.on('request', (req) => {
+    try {
+      if (!['xhr', 'fetch'].includes(req.resourceType())) return;
+      const u = new URL(req.url());
+      if (!inScope(u.hostname.toLowerCase())) return;
+      const key = req.method() + ' ' + u.host + u.pathname + u.search;
+      if (seenReq.has(key)) return; seenReq.add(key);
+      captured.push({ method: req.method(), host: u.hostname, path: u.pathname, query: u.search });
+    } catch { /* ignore */ }
+  });
+
   const page = await ctx.newPage();
   await page.goto(a.url, { waitUntil: 'domcontentloaded', timeout }).catch(() => {});
   await settle(page);
@@ -156,6 +183,8 @@ try {
   // by --max-views (pages) and --max-forms (forms). Never follows a logout/delete link (would kill the session).
   const maxForms = +a['max-forms'];
   const maxViews = +a['max-views'];
+  const MAX_WIDGETS = +a['max-widgets'];
+  const MAX_OPTIONS = +a['max-options'];
   let processedForms = 0;
   const visited = new Set();
   const pagesVisited = [];
@@ -166,6 +195,7 @@ try {
     visited.add(key);
     pagesVisited.push(page.url());
     await processFormsOnPage(page);
+    await enumerateWidgets(page);   // read-only: custom dropdowns / typeaheads → option-driven param discovery
   };
 
   await visitAndExercise();                              // start page
@@ -179,7 +209,23 @@ try {
     } catch { /* stale/blocked link — keep going */ }
   }
 
-  emitOut.totals = { pages_visited: pagesVisited.length, forms_processed: processedForms, created: actions.length, dry_run_intents: intents.length };
+  // ── widget/typeahead discovery → param inventory (query params on the captured data endpoints) ──
+  const epMap = new Map();
+  for (const r of captured) {
+    const k = `${r.host} ${r.method} ${r.path}`;
+    if (!epMap.has(k)) epMap.set(k, { host: r.host, method: r.method, path: r.path, params: new Set() });
+    if (r.query) for (const key of new URLSearchParams(r.query).keys()) epMap.get(k).params.add(key);
+  }
+  const discovered = [...epMap.values()].map((e) => ({ host: e.host, method: e.method, path: e.path, params: [...e.params] }));
+  const paramInv = discovered.filter((e) => e.params.length)
+    .map((e) => ({ endpoint: e.path, method: e.method, host: e.host, params: e.params.map((name) => ({ name, in: 'query', sample: null })) }));
+
+  emitOut.totals = { pages_visited: pagesVisited.length, forms_processed: processedForms, created: actions.length,
+    dry_run_intents: intents.length, data_endpoints: discovered.length, param_endpoints: paramInv.length };
+  emitOut.discovered_endpoints = discovered;
+  emitOut.param_inventory = paramInv;
+  // discovery output is written even in dry-run (read-only) — it feeds /pentest:sql etc.
+  if (a.out && paramInv.length) { await mkdir(a.out, { recursive: true }); await writeFile(path.join(a.out, 'widget-param-inventory.json'), JSON.stringify(paramInv, null, 2)); }
 
   async function processFormsOnPage(pg) {
     const n = await pg.locator('form').count().catch(() => 0);
@@ -264,6 +310,60 @@ try {
       if (label && CREATE_HINT.test(label) && !DESTRUCTIVE.test(label)) return b;
     }
     return null;
+  }
+
+  // ── READ-ONLY widget/typeahead enumeration (param discovery — never submits a form) ──────────────────────
+  async function enumerateWidgets(pg) {
+    if (!a.widgets) return;
+    await openAddDialogs(pg);   // reveal add-dialogs (widgets live inside them), via buttons not just links
+    const SEL = '[role="combobox"], [aria-haspopup="listbox"], mat-select, [class*="select"][class*="trigger"]';
+    const wn = Math.min(await pg.locator(SEL).count().catch(() => 0), MAX_WIDGETS);
+    for (let i = 0; i < wn; i++) {
+      const t = pg.locator(SEL).nth(i);
+      try {
+        if (!(await t.isVisible().catch(() => false))) continue;
+        await t.click({ timeout: 1500 });
+        await settle(pg);
+        // 1) typeahead: a search input revealed in the open overlay → type a probe (captures ?keyword=…)
+        const search = pg.locator('.cdk-overlay-container input, [role="listbox"] input, [role="dialog"] input[placeholder*="search" i], input[placeholder*="find" i], input[placeholder*="search" i]').first();
+        if ((await search.count().catch(() => 0)) && (await search.isVisible().catch(() => false))) {
+          await search.pressSequentially('a', { timeout: 1500 }).catch(() => {});
+          await settle(pg);
+        }
+        // 2) options: selecting one may echo its value into a query param (captures ?name=<option>…)
+        const OPT = '[role="option"], [role="listbox"] li, .mat-option, [role="listbox"] [role="option"]';
+        const on = Math.min(await pg.locator(OPT).count().catch(() => 0), MAX_OPTIONS);
+        for (let j = 0; j < on; j++) {
+          try {
+            const opt = pg.locator(OPT).nth(j);
+            if (!(await opt.isVisible().catch(() => false))) continue;
+            await opt.click({ timeout: 1500 });
+            await settle(pg);
+            await t.click({ timeout: 1000 }).catch(() => {});   // reopen for the next option
+            await settle(pg);
+          } catch { /* option not clickable */ }
+        }
+        await pg.keyboard.press('Escape').catch(() => {});   // close overlay so the next widget is reachable
+      } catch { /* widget not interactable — skip */ }
+    }
+  }
+  async function openAddDialogs(pg) {
+    const btns = pg.locator('button, [role="button"]');
+    const n = Math.min(await btns.count().catch(() => 0), 15);
+    let opened = 0;
+    for (let i = 0; i < n && opened < 2; i++) {
+      const b = btns.nth(i);
+      const label = ((await b.textContent().catch(() => '')) || (await b.getAttribute('aria-label').catch(() => '')) || '').trim();
+      if (!label || !CREATE_HINT.test(label) || DESTRUCTIVE.test(label)) continue;
+      // NEVER click a button inside a <form> — that is a form control (likely the submit), not a dialog
+      // opener. This keeps the widget pass READ-ONLY (a form's own submit is only ever clicked by processForm).
+      if (await b.evaluate((el) => !!el.closest('form')).catch(() => true)) continue;
+      try {
+        await b.click({ timeout: 1500 });
+        await settle(pg);
+        if (await pg.locator('[role="dialog"], .cdk-overlay-container, .modal, mat-dialog-container').count().catch(() => 0)) opened++;
+      } catch { /* button not clickable */ }
+    }
   }
 } catch (e) {
   emitOut.ok = false; emitOut.error = String((e && e.message) || e);

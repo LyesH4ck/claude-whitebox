@@ -160,3 +160,57 @@ test('a validation error triggers a retry that then succeeds', async () => {
   assert.equal(out.actions[0].created.id, '77', 'id captured after the retry');
   assert.equal(out.actions[0].response_status, 201);
 });
+
+// Reproduces the real-world Vue pattern (app.demo-achilles.id /transaction sale +add): a custom dropdown
+// (role=combobox, NOT a native <select>) inside an add-dialog, hiding a searchable typeahead. Typing fires
+// ?keyword=…, selecting an option echoes its value into ?name=… — both invisible to native-<select> scraping
+// and path-crawl. Asserts the read-only widget pass discovers those endpoints/params.
+const widgetPage = () => page(`
+  <button id="addbtn">Add item</button>
+  <div id="dlg" role="dialog" style="display:none">
+    <div id="combo" role="combobox" tabindex="0">Select an item</div>
+    <div id="lb" role="listbox" style="display:none">
+      <input id="search" placeholder="Search items by name">
+      <div role="option" data-v="PENTEST-run4-inv-a1-MOD">PENTEST-run4-inv-a1-MOD</div>
+      <div role="option" data-v="beta-widget">beta-widget</div>
+    </div>
+  </div>
+  <script>
+    document.getElementById('addbtn').addEventListener('click', () => { document.getElementById('dlg').style.display='block'; });
+    document.getElementById('combo').addEventListener('click', () => { document.getElementById('lb').style.display='block'; });
+    document.getElementById('search').addEventListener('input', (e) => { fetch('/api/search?limit=10&keyword=' + encodeURIComponent(e.target.value)); });
+    document.querySelectorAll('[role=option]').forEach(o => o.addEventListener('click', () => {
+      fetch('/transaction/api/v1/inventories?limit=10&page=1&name=' + encodeURIComponent(o.getAttribute('data-v')));
+      document.getElementById('lb').style.display='none';
+    }));
+  </script>`);
+
+function startWidgetServer() {
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/') return html(res, widgetPage());
+    if (u.pathname === '/api/search' || u.pathname === '/transaction/api/v1/inventories') {
+      res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('[]');
+    }
+    res.writeHead(404); res.end('nope');
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('read-only widget pass: custom combobox typeahead → ?keyword and option select → ?name are inventoried', async () => {
+  const server = await startWidgetServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    // dry-run (default) — no --submit; the widget pass is read-only
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--max-widgets', '5', '--max-options', '2'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    const inv = out.param_inventory || [];
+    const search = inv.find((e) => e.endpoint === '/api/search');
+    assert.ok(search && search.params.some((p) => p.name === 'keyword'), `typeahead ?keyword captured (got ${JSON.stringify(inv)})`);
+    const items = inv.find((e) => e.endpoint === '/transaction/api/v1/inventories');
+    assert.ok(items && items.params.some((p) => p.name === 'name'), 'option-select ?name captured');
+  } finally { server.close(); }
+});

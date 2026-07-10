@@ -4,6 +4,25 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.32] + playwright [0.2.6] — 2026-07-10
+
+### Added
+- **`crawl-write.mjs` — read-only custom-dropdown / typeahead param discovery (`--widgets`, default ON).**
+  Confirmed on a live target (a Vue `+add` dialog): the app's dropdowns are custom `<div role=combobox>`
+  widgets, NOT native `<select>`, and they hide injectable params — typing in the buyer typeahead fires
+  `GET /api/v1/vendor?…&keyword=…`, and picking an inventory item echoes its value into
+  `GET /api/v1/inventories?…&name=<value>`. A path-crawl, a native-`<select>` scrape, AND a first-option pick
+  all miss these. The new pass opens add-dialogs (via buttons, not just links) + ARIA/custom dropdowns, types a
+  probe into any revealed search input, and selects a few options — capturing the option-driven data endpoints
+  into `widget-param-inventory.json` (merged into `param-inventory.json` → fuzzed by `injection-tester`).
+  - **READ-ONLY** (search/select never submit a form; it never clicks a button inside a `<form>`), so it runs
+    even in dry-run and under a no-mutation RoE. Bounded by `--max-widgets` / `--max-options`.
+  - `crud-exerciser` Phase 3 documents the pass + an MCP fallback for non-ARIA custom widgets.
+  - Test `crawl-write.test.mjs`: a stub reproducing the Vue combobox→typeahead→`?keyword` /
+    option-select→`?name` pattern; asserts both are inventoried.
+
+---
+
 ## [2.4.31] — 2026-07-10
 
 ### Fixed
