@@ -4,7 +4,23 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
-## [2.4.29] — 2026-07-10
+## [2.4.30] — 2026-07-10
+
+### Fixed
+- **Sibling-agent KB under-use (audit follow-up to the injection-tester fix).** Same pattern as 2.4.29, found
+  across the tester agents:
+  - **`xss-tester` never read `dom-based-vulnerabilities-complete.md`** (3249 lines — the largest doc in the
+    repo, in its own DOM domain: source→sink map, PortSwigger DOM-XSS labs, Web Messages/`postMessage`, DOM
+    Clobbering, prototype-pollution→XSS gadgets, advanced sink escalation). Now wired in as the DEEP reference,
+    read at the DOM-XSS handling step (not wholesale during the sweep) so a non-trivial sink is exploited, not
+    just confirmed with a quickstart payload.
+  - **`prototype-pollution-tester` never read `prototype-pollution-cheat-sheet.md`** (1133 lines — exploitation
+    payloads, gadget chains, bypass, per-library sinks). Now read once pollution is confirmed, to turn
+    `Object.prototype` control into real impact (XSS/RCE via a gadget) instead of stopping at "pollution confirmed".
+  - Audit note: the tool-path axis is clean (the `../skills/` bug was isolated to injection-tester +
+    inventory-javascript-mapper, already fixed); `idor-bola-tester` correctly mandates its `run.mjs` backbone.
+    Remaining orphaned comprehensive docs (`http-request-smuggling.md`, the JWT suite, `api-testing-comprehensive-guide.md`)
+    are tracked separately — wire-or-archive decision pending.
 
 ### Fixed
 - **`injection-tester` never consulted the SQLi knowledge base — only the quickstart + `sqli-detect.mjs`.** The
