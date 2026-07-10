@@ -4,6 +4,19 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.18] — 2026-07-10
+
+### Added
+- **`burp-import` Layer B — HTTP method inference for JS-mined routes.** The routes mined from JS bundles were
+  all `method: UNKNOWN` (Layer A = path only), so they were indistinguishable reads-vs-writes and unroutable to
+  the testers. Layer B infers the method from the **call-site** (verb call `.post(`/`.delete(`, XHR
+  `.open("POST",…)`, config object `fetch(url,{method:"X"})` / `axios({method})`) and extracts `{id}` path
+  params → `bola_candidate`. On the real 40 MB export this surfaced **38 write routes and 90 BOLA candidates
+  statically** — e.g. `PATCH /accounts/{id}/billing-info`, `DELETE /api/v1/documents/{id}`,
+  `POST /api/documents/{id}/esign/sign` — so the write attack surface is known **without exercising it** (the
+  coverage backstop to `crud-exerciser`'s depth). `static_routes[]` now carry `methods[]`, `id_params[]`,
+  `bola_candidate`, `write`, `confidence`; sorted writes/BOLA-first. +Layer B test assertions.
+
 ## [2.4.17] — 2026-07-10
 
 ### Added
