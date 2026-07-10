@@ -4,7 +4,22 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
-## [2.4.26] — 2026-07-10
+## [2.4.27] — 2026-07-10
+
+### Fixed
+- **`injection-tester` under-executed SQLi (two root causes, from a live `/pentest:sql` miss).**
+  1. **Broken tool path → silent hand-rolling.** Phase 2 referenced `sqli-detect.mjs` via `../skills/…`, which
+     does not resolve from the engagement CWD, so the agent silently fell back to improvised `curl` probes —
+     losing the identifier-context breakouts (`":<>` / `'":<>`) and the `queryLeak` detector, which downgrades a
+     full query/schema disclosure to a bare "differential". Now the agent **resolves the tool robustly** (repo
+     checkout, else the newest installed cache) and running `sqli-detect.mjs` on every parameter is **MANDATORY**
+     — hand-rolled probes are explicitly not a substitute. Same broken `../skills/…` path fixed for
+     `param-mine.mjs` in `inventory-javascript-mapper`.
+  2. **"CONFIRMED = done" bias.** A controlled differential + sqlmap failing to build an oracle is the *expected*
+     outcome in an identifier/`ORDER BY`/Hibernate context — not the finish line. Added an explicit **query &
+     schema disclosure escalation** (force the ORM to re-emit its generated SQL via the structural breakouts,
+     read the leaked schema + tenant clause, escalate against the revealed identifiers) and a **CONFIRMED ≠ DONE**
+     critical rule, so the agent pursues disclosure instead of closing at "confirmed".
 
 ### Added
 - **`/pentest:crud` — standalone launcher for the AI-piloted write-crawler.** Relaunch the CRUD crawl on its own
