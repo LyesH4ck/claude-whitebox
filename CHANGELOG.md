@@ -4,6 +4,27 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.17] — 2026-07-10
+
+### Added
+- **`crud-exerciser` agent — authorized interactive capture of the write surface** (the missing recon piece for
+  create/edit functionality). Read-only crawling and JS-bundle mining discover *paths* but not the real write
+  requests — those only exist when the action is performed. This new **state-changing, hard-gated** agent drives
+  create/edit forms with the operator's session (generic — it *uses the app*), capturing the real write requests
+  (method/host/body) and the **created object `{id}`s** as SEEDS for the testers. It is SETUP only — it does not
+  judge BOLA (`200 ≠ BOLA` stays the tester's oracle).
+  - **Hard gate:** deployed by `/pentest:recon` (new Step 6b) only when `rules_of_engagement` authorizes
+    state-change. Action level by `environment`: `staging`/`demo`/`dev` → create + modify; `prod`/unset →
+    create-only or skip. Creates **only marker-tagged** objects, **never touches another principal's data**, and
+    **leaves objects marked** for operator verification (no auto-cleanup, per `crud/created-objects.json`); audits
+    every state-changing action.
+  - **`crud-merge.mjs`** (deterministic, tested) turns `crud-exercise.json` into the tester seeds: the BOLA
+    corpus `.pentest-authz-requests.json` (the create + the derived `{id}`-bearing GET/PUT/DELETE, owner-tagged,
+    split-host absolute URLs, auth stripped for `run.mjs` identity injection) and the write-body fields into
+    `param-inventory.json` for `injection-tester`. The existing `idor-bola-tester` (multi-identity oracle +
+    creation playbook) consumes it unchanged — no new BOLA brick needed.
+  - Docs: pentest agent count 18→19; `/pentest:recon` Step 6b; ATTACK_INDEX helper note.
+
 ## [2.4.16] — 2026-07-09
 
 ### Fixed
