@@ -4,6 +4,18 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.20] — 2026-07-10
+
+### Changed
+- **Unified the `static-routes.json` schema across the two static extractors.** The `inventory-javascript-mapper`
+  Phase 3.5 output now uses the **same shape as `burp-import`'s `static_routes[]`**: `methods[]` (array, was a
+  singular `method:"UNKNOWN"`), plus `write`, **`base_unresolved`** (the `${base}` var Layer C couldn't resolve
+  — a host-less lead), `host`, `id_params`, `bola_candidate`, and a 3-tier `confidence` (method+host → high).
+  Layer C guidance aligned to the conservative base→host resolution (only unambiguous + in-scope, never a
+  first-wins global map that invents wrong hosts). `inventory-surface-analyzer` now merges the static sources
+  by `(host, normalized_path)`, unioning `methods[]` and carrying `write`/`base_unresolved` — so the JS-mined
+  write surface (from either the js-mapper or burp-import) flows to the testers as one consistent pool.
+
 ## [2.4.19] — 2026-07-10
 
 ### Added
