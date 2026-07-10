@@ -62,8 +62,10 @@ if (!a.url) { emit({ ok: false, error: 'missing --url' }); process.exit(2); }
 const startHost = new URL(a.url).hostname;   // hostname, NOT host — scope must ignore the port
 // registrable domain — public-suffix-aware so `app.x.co.uk` → `x.co.uk`, not `co.uk` (a last-2-labels default
 // would let `evil.co.uk` pass in-scope). Pass --scope to override.
-const MULTI_SUFFIX = /\.(co|com|net|org|gov|edu|ac|or|ne|go)\.[a-z]{2,3}$/i;
+const MULTI_SUFFIX = /\.(co|com|net|org|gov|edu|ac|or|ne|go)\.[a-z]{2}$/i;   // 2-letter ccTLD tail only (co.uk…), not go.com
 const defaultScope = (MULTI_SUFFIX.test(startHost) ? startHost.split('.').slice(-3) : startHost.split('.').slice(-2)).join('.');
+const ASSET_EXT = /\.(css|map|png|jpe?g|gif|svg|ico|woff2?|ttf|eot|webp|mp4|pdf|zip|gz|js|mjs)(\?|$)/i;   // keep assets out of the injection corpus
+const safeDecode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };   // parity with burp-import's form-key parsing
 const SCOPE = (a.scope ? a.scope.split(',') : [defaultScope]).map((s) => s.trim().toLowerCase()).filter(Boolean);
 const inScope = (host) => SCOPE.some((s) => host === s || host.endsWith('.' + s));
 const guard = 400;
@@ -138,7 +140,7 @@ try {
     const v = e.variants.get(sig); v.count++; if (r.status != null) v.statuses.add(r.status);
     // params: query keys (in:query) + JSON body leaves (in:json)
     if (r.query) for (const k of new URLSearchParams(r.query).keys()) e.params.add('query:' + k);
-    if (r.post_data) { try { const j = JSON.parse(r.post_data); const s = new Set(); flattenParams(j, '', s); for (const p of s) e.params.add('json:' + p); } catch { for (const kv of r.post_data.split('&')) if (kv.split('=')[0]) e.params.add('form:' + kv.split('=')[0]); } }
+    if (r.post_data) { try { const j = JSON.parse(r.post_data); const s = new Set(); flattenParams(j, '', s); for (const p of s) e.params.add('json:' + p); } catch { for (const kv of r.post_data.split('&')) if (kv.split('=')[0]) e.params.add('form:' + safeDecode(kv.split('=')[0])); } }
   }
 
   const endpointList = [...endpoints.values()].map((e) => ({
@@ -153,7 +155,7 @@ try {
   const paramInventory = endpointList.map((e) => ({
     endpoint: e.path, method: e.method,
     params: e.params.map((p) => { const [loc, ...rest] = p.split(':'); return { name: rest.join(':'), in: loc, sample: null }; }),
-  })).filter((e) => e.params.length);
+  })).filter((e) => e.params.length && !ASSET_EXT.test(e.path));   // don't fuzz cache-busted static assets
 
   const postLike = endpointList.filter((e) => e.method !== 'GET' && e.method !== 'HEAD');
   Object.assign(emitOut, {

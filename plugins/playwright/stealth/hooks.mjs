@@ -46,6 +46,10 @@ export const INIT_SCRIPT = `
   if (W) {
     const P = function (u, p) { try { push({ kind: 'ws', url: String(u) }); } catch {} return new W(u, p); };
     P.prototype = W.prototype;
+    // Copy the static ready-state constants (OPEN/CONNECTING/CLOSING/CLOSED) — without them
+    // window.WebSocket.OPEN is undefined, so app code doing ws.readyState === WebSocket.OPEN breaks
+    // and the wrapper is trivially fingerprintable.
+    for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) P[k] = W[k];
     window.WebSocket = P;
   }
 })();

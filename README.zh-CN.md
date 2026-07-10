@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    为 Claude Code 打造的白盒源码审计 + 黑盒渗透测试 —— 12 个 codeaudit 审计 agent 覆盖 10 个 OWASP 领域，以及一个包含 18 个 agent、64 个攻击类别的渗透测试框架（集成 Kali MCP）。
+    为 Claude Code 打造的白盒源码审计 + 黑盒渗透测试 —— 10 个 codeaudit 审计 agent 覆盖 10 个 OWASP 领域，以及一个包含 19 个 agent、64 个攻击类别的渗透测试框架（集成 Kali MCP）。
     <br />
     结构化、人工介入（human-in-the-loop）、以证据为驱动。
   </p>
@@ -19,9 +19,9 @@
       <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
-    <img src="https://img.shields.io/badge/codeaudit_auditors-12-8B5CF6?style=flat-square" alt="12 codeaudit auditors" />
+    <img src="https://img.shields.io/badge/codeaudit_auditors-10-8B5CF6?style=flat-square" alt="10 codeaudit auditors" />
     <img src="https://img.shields.io/badge/OWASP_domains-10-8B5CF6?style=flat-square" alt="10 OWASP domains" />
-    <img src="https://img.shields.io/badge/pentest_agents-18-0EA5E9?style=flat-square" alt="18 pentest agents" />
+    <img src="https://img.shields.io/badge/pentest_agents-19-0EA5E9?style=flat-square" alt="19 pentest agents" />
     <img src="https://img.shields.io/badge/attack_categories-64-EF4444?style=flat-square" alt="64 attack categories" />
     <img src="https://img.shields.io/badge/authorized_use_only-red?style=flat-square" alt="Authorized use only" />
   </p>
@@ -44,7 +44,7 @@
 
 **`pentest`** 插件为 Claude 提供结构化的渗透测试能力。它不是一个脚本或扫描器 —— 而是一个 **agent 协调框架**：`/pentest:pentest` 命令在主会话中协调整个任务 —— 它执行侦察、向规划器（planner）agent 请求部署计划，然后并行部署专门的执行器（executor）agent（每个都遵循严格的 4 阶段工作流），将时间预算用于升级（escalation），并要求在任何主动利用（exploitation）开始前获得操作员批准。每一项发现都附带可运行的 PoC、捕获的 HTTP 证据，以及一张 Playwright 截图。
 
-**`codeaudit`** 插件是其白盒对应物：一个静态源代码安全审计框架。`/codeaudit:codeaudit` 命令掌控整个流程 —— `code-recon` 基线、通过 `audit-planner` 规划，然后在 **10 个 OWASP 漏洞领域**（注入、XSS、认证、访问控制、SSRF、密钥、加密、依赖、配置、日志）上并行派发 **12 个专门的审计 agent**。它读取源代码并追踪每一条 source→sink 路径；默认为静态模式，并提供可选的*混合*模式，用单次良性的 live 请求来佐证代码发现。
+**`codeaudit`** 插件是其白盒对应物：一个静态源代码安全审计框架。`/codeaudit:codeaudit` 命令掌控整个流程 —— `code-recon` 基线、通过 `audit-planner` 规划，然后在 **10 个 OWASP 漏洞领域**（注入、XSS、认证、访问控制、SSRF、密钥、加密、依赖、配置、日志）上并行派发 **10 个专门的审计 agent**（外加一个 `code-recon` 基线和一个 `audit-planner`）。它读取源代码并追踪每一条 source→sink 路径；默认为静态模式，并提供可选的*混合*模式，用单次良性的 live 请求来佐证代码发现。
 
 **核心原则：**
 - 在每个升级节点都保持人工介入 —— 未经你的确认，Claude 无法进入利用阶段
@@ -473,6 +473,7 @@ flowchart LR
 | `inventory-api-discovery` | 发现 REST 端点、GraphQL schema、SOAP/WSDL、WebSocket、Swagger/OpenAPI/Postman 文档。 | Bash, Read, Write |
 | `inventory-javascript-mapper` | 通过无头 Playwright 提取 SPA 路由：React Router、Vue Router、Angular 路由，以及静态扫描器看不见的 AJAX 端点。 | Playwright MCP, Bash, Read, Write |
 | `inventory-surface-analyzer` | 将四个清点 agent 的输出综合为统一的、按风险分级的攻击面报告 + 可执行的测试清单。只读 —— 不运行任何扫描。 | Read, Write |
+| `crud-exerciser` | 已认证的交互式 CRUD 演练侦察。驱动应用去发现并演练改变状态的表单，捕获真实的写入请求 + 已创建对象的 ID，作为 BOLA（`idor-bola-tester`）和注入测试的种子。受环境限制（仅限 staging/dev），只创建带标记的对象。授权时由 `/pentest:recon` 部署。 | Playwright MCP, Bash, Read, Write |
 
 ### 业务逻辑 Agent
 
@@ -732,7 +733,7 @@ claude-whitebox/
 │   └── pentest/
 │       ├── .claude-plugin/
 │       │   └── plugin.json          # 插件元数据（MIT）
-│       ├── agents/                  # 18 个 agent .md 文件
+│       ├── agents/                  # 19 个 agent .md 文件
 │       ├── docs/
 │       │   ├── CLAUDE.md            # agent 架构概览
 │       │   ├── WORKFLOWS.md         # 规划与批准工作流参考

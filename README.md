@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    White-box source-code audit + black-box penetration testing for Claude Code — 12 codeaudit auditors across 10 OWASP domains, and an 18-agent pentest framework with 64 attack categories and Kali MCP integration.
+    White-box source-code audit + black-box penetration testing for Claude Code — 10 codeaudit auditors across 10 OWASP domains, and a 19-agent pentest framework with 64 attack categories and Kali MCP integration.
     <br />
     Structured, human-in-the-loop, evidence-driven.
   </p>
@@ -19,9 +19,9 @@
       <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
-    <img src="https://img.shields.io/badge/codeaudit_auditors-12-8B5CF6?style=flat-square" alt="12 codeaudit auditors" />
+    <img src="https://img.shields.io/badge/codeaudit_auditors-10-8B5CF6?style=flat-square" alt="10 codeaudit auditors" />
     <img src="https://img.shields.io/badge/OWASP_domains-10-8B5CF6?style=flat-square" alt="10 OWASP domains" />
-    <img src="https://img.shields.io/badge/pentest_agents-18-0EA5E9?style=flat-square" alt="18 pentest agents" />
+    <img src="https://img.shields.io/badge/pentest_agents-19-0EA5E9?style=flat-square" alt="19 pentest agents" />
     <img src="https://img.shields.io/badge/attack_categories-64-EF4444?style=flat-square" alt="64 attack categories" />
     <img src="https://img.shields.io/badge/authorized_use_only-red?style=flat-square" alt="Authorized use only" />
   </p>
@@ -42,7 +42,7 @@
 
 The **`pentest`** plugin gives Claude structured penetration testing capabilities. It is not a script or scanner, it is an **agent coordination framework**: the `/pentest:pentest` command coordinates the engagement from the main session — it runs reconnaissance, asks a planner agent for a deployment plan, then deploys specialized executor agents (each following a strict 4-phase workflow) in parallel, spending the time budget on escalation, and requiring operator approval before any active exploitation begins. Every finding ships with a working PoC, captured HTTP evidence, and a Playwright screenshot.
 
-The **`codeaudit`** plugin is the white-box counterpart: a static source-code security audit framework. The `/codeaudit:codeaudit` command owns the run — a `code-recon` baseline, planning via the `audit-planner`, then parallel dispatch of **12 specialized auditor agents** across **10 OWASP vulnerability domains** (injection, XSS, auth, access control, SSRF, secrets, crypto, dependencies, configuration, logging). It reads source and traces every source→sink path; static by default, with an optional *hybrid* mode that corroborates a code finding against a single benign live request.
+The **`codeaudit`** plugin is the white-box counterpart: a static source-code security audit framework. The `/codeaudit:codeaudit` command owns the run — a `code-recon` baseline, planning via the `audit-planner`, then parallel dispatch of **10 specialized auditor agents** across **10 OWASP vulnerability domains** (injection, XSS, auth, access control, SSRF, secrets, crypto, dependencies, configuration, logging) (plus a `code-recon` baseline and an `audit-planner`). It reads source and traces every source→sink path; static by default, with an optional *hybrid* mode that corroborates a code finding against a single benign live request.
 
 **Key principles:**
 - Human-in-the-loop at every escalation point — Claude cannot proceed to exploitation without your confirmation
@@ -473,6 +473,7 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 | `inventory-api-discovery` | Discovers REST endpoints, GraphQL schemas, SOAP/WSDL, WebSockets, Swagger/OpenAPI/Postman docs. | Bash, Read, Write |
 | `inventory-javascript-mapper` | SPA route extraction via headless Playwright: React Router, Vue Router, Angular routes, AJAX endpoints invisible to static scanners. | Playwright MCP, Bash, Read, Write |
 | `inventory-surface-analyzer` | Synthesizes all four inventory agent outputs into a unified risk-tiered attack surface report + actionable testing checklist. Reads only — runs no scans. | Read, Write |
+| `crud-exerciser` | Authenticated interactive CRUD-exercise recon. Drives the app to discover and exercise state-changing forms, capturing the real write requests + created object IDs as seeds for BOLA (`idor-bola-tester`) and injection testing. Environment-gated (staging/dev only), creates only marker-tagged objects. Deployed by `/pentest:recon` when authorized. | Playwright MCP, Bash, Read, Write |
 
 ### Business-Logic Agents
 
@@ -732,7 +733,7 @@ claude-whitebox/
 │   └── pentest/
 │       ├── .claude-plugin/
 │       │   └── plugin.json          # Plugin metadata (MIT)
-│       ├── agents/                  # 18 agent .md files
+│       ├── agents/                  # 19 agent .md files
 │       ├── docs/
 │       │   ├── CLAUDE.md            # Agent architecture overview
 │       │   ├── WORKFLOWS.md         # Planning & approval workflow reference

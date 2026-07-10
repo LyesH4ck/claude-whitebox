@@ -4,6 +4,87 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.23] + playwright [0.2.4] — 2026-07-10
+
+### Added
+- **`cve-tester` — mandatory Phase 2 → Phase 3 approval gate.** It was the only exploitation agent that
+  flowed straight from Experiment into running adapted public PoC code (up to RCE) with no checkpoint. It now
+  carries the same `APPROVAL GATE — Phase 2 → Phase 3` block as its peers (`csrf-tester` et al.): plan-level
+  approval satisfies it under `/pentest:pentest`; standalone/interactive runs stop for explicit operator
+  confirmation.
+
+### Fixed
+- **`authz-matrix` (`run.mjs`) — successful empty-body writes were misclassified as `deny`.** A cross-tenant
+  `DELETE`/`PUT`/`PATCH` returning `204 No Content` (or an empty-body `200`) was scored `deny` and never
+  flagged — precisely the destructive BOLA/BFLA the tool exists to surface. Success is now `2xx` regardless of
+  body length for write methods; the `len > 0` guard is kept only for reads (GET/HEAD).
+- **`authz-matrix` — `GET`/`HEAD` requests carrying a `body` threw and were swallowed as `{status:0}`** (→ a
+  hidden `deny`). A body is now attached only for non-GET/HEAD methods.
+- **`authz-matrix` — malformed/missing input JSON crashed with a raw Node stack trace** instead of the
+  `{ok:false}` contract its siblings honor. Input parsing is now wrapped and exits `2` with a structured error.
+- **`password_generator.py` — infinite loop on single-character pools.** `_remove_repeating_chars` /
+  `_remove_sequential_chars` spun forever when the replacement pool offered no valid alternative (e.g.
+  `no_repeating` + heavy `disallowed_chars`). Both now bail out to a best-effort password instead of hanging.
+- **`password_generator.py` — post-processing could silently drop a required class.** `no_repeating` /
+  `no_sequential` could overwrite the sole guaranteed char of a required class (breaking e.g. `require_special`);
+  a new `_ensure_required_classes` pass re-injects any dropped class so the returned password still satisfies policy.
+- **`param-mine.mjs` — ternary values leaked phantom params.** The key regex `/([A-Za-z_]\w*)\s*:\s*/` had no
+  left boundary, so `cond ? enabled : disabled` emitted `enabled` as a fake body param, bloating the fuzz
+  corpus. Anchored to an object-member boundary (`{`/`,`).
+- **`hooks.mjs` (playwright) — WebSocket wrapper dropped the static ready-state constants.**
+  `window.WebSocket.OPEN/CONNECTING/CLOSING/CLOSED` became `undefined` after injection (breaking
+  `ws.readyState === WebSocket.OPEN` and making the wrapper fingerprintable); they are now copied onto the wrapper.
+- **`credential_manager.py` — same-tick ID collision could silently overwrite an account.** The credential ID
+  was a hash of `target:username:timestamp` only; a random nonce (`secrets.token_hex`) is now included.
+
+### Changed
+- **`burp-import` / `crud-merge` — scope inference now uses the most-frequent host**, not `items[0]` (which in
+  a host-ordered Burp export is often an out-of-scope CDN/analytics host loaded first); emits `scope_source`.
+- **`burp-import` / `crud-merge` — multi-part suffix regex tightened to a 2-letter ccTLD tail** (`co.uk`,
+  `ne.jp`) so `go.com`-style hosts are no longer mis-split; form-key extraction anchored to a field boundary
+  (not `filename="…"`) and URL-decoded; static assets excluded from the injection/fuzz corpus.
+- **`crud-merge` — cross-identity owner is now a bare identity label only** (`labelish`) so `run.mjs`'s
+  `id.label === req.owner` match holds, and `create` requests are de-duplicated by a body hash.
+- **`password_generator.py` — uniform `require_*` semantics.** `require_lowercase`/`require_uppercase=False`
+  now EXCLUDE the class (matching `require_digits`/`require_special`) instead of keeping it in the pool; the
+  four flags now behave the same way.
+- **`credential_manager.py` — documented the single-writer assumption** (atomic save, but the read-modify-write
+  sequence is unlocked → last-writer-wins under concurrency).
+- **`domain-assessment` / `pentester-executor` — scan results now write to `outputs/{engagement}/`**, not into
+  the git-tracked `syn-scan.md` reference (which is now a read-only template); `Edit` dropped from
+  `domain-assessment`'s tool grant (it was only used for that write).
+- **op-signature drift guard hardened** — hard-fails (instead of silently skipping) when the sibling copy is
+  missing in the monorepo layout, and a **mirror guard was added on the playwright side** so drift is caught
+  from both directions.
+- **`stealth/package.json` — removed the inert `version`** field (the package is `private`, never published).
+
+### Infrastructure
+- **CI added** (`.github/workflows/ci.yml`) — runs the `.mjs` (`node --test`) and Python tool suites on push/PR.
+- **Root `package.json`** with `test` / `test:py` / `test:all` scripts wiring up the previously
+  manual-only suites.
+
+### Tests
+- **End-to-end test suites for the two densest decision engines**, which previously had none — `authz-matrix`
+  (`run.test.mjs`, stub-server matrix incl. an explicit B1 empty-body-write regression guard, GET-with-body,
+  access-map unauth flag, malformed-input contract) and `sqli-detect` (`sqli-detect.test.mjs`, one stub per
+  class: error-based, quote-balance, boolean-blind, baseline-subtraction no-false-positive, query-disclosure,
+  time-based).
+- **`param-mine.test.mjs`** (mining + the ternary phantom-param guard) and **`op-signature.test.mjs`** on the
+  playwright side (behaviour + reverse drift guard).
+- **Python suite expanded** (15 → 22) — `require_*` exclusion, required-class survival, single-tick ID
+  uniqueness, and the previously untested `CredentialManager` mutators (list/delete/cleanup/update-metadata/export).
+- **49 `.mjs` tests + 22 Python tests, all green.**
+
+### Docs
+- **README (en/fr/zh): corrected drifted counts** — codeaudit "12 auditors" → **10 auditor agents across 10
+  OWASP domains** (+ `code-recon` baseline + `audit-planner`); pentest "18 agents" → **19**, and the previously
+  undocumented **`crud-exerciser`** agent is now listed.
+- **`BUSINESS_LOGIC_DETECTION_SPEC.md` marked ✅ implemented** — the three bricks (`business-modeler`,
+  `business-logic-tester` + delta oracle, orchestration wiring) and the param-level recon gap (`param-mine`)
+  are shipped; the doc was still labelled "backlog / proposition".
+
+---
+
 ## [2.4.22] + playwright [0.2.3] — 2026-07-10
 
 ### Changed
