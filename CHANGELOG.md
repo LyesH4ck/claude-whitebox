@@ -4,7 +4,17 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
-## [2.4.28] — 2026-07-10
+## [2.4.29] — 2026-07-10
+
+### Fixed
+- **`injection-tester` never consulted the SQLi knowledge base — only the quickstart + `sqli-detect.mjs`.** The
+  comprehensive **`sql-injection.md`** (3038 lines: 18 worked PortSwigger labs + extraction techniques — UNION
+  data-from-other-tables, schema/data enumeration, blind conditional/time retrieval, OOB exfil, second-order,
+  stacked queries, filter-bypass) and **`payloads/blind.md`** were never referenced by the agent, so its
+  exploitation was capped at what the detector alone surfaced. Now the agent is pointed at `sql-injection.md`
+  as the DEEP exploitation reference (read the matching section during Phase 3 escalation, not wholesale during
+  the sweep) and at `payloads/blind.md` for blind time/boolean/OOB payloads — with an explicit "`sqli-detect.mjs`
+  DETECTS; these docs tell you how to EXTRACT" note. Complements the 2.4.27 CONFIRMED ≠ DONE escalation.
 
 ### Added
 - **`sqli-detect.mjs` — unquoted numeric-context boolean for EVERY param.** The bare `<orig> AND 1=1` /
