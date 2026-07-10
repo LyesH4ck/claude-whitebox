@@ -60,7 +60,10 @@ if (!a.url) { emit({ ok: false, error: 'missing --url' }); process.exit(2); }
 // ── scope: a domain-suffix allow-list, defaulting to the start host's registrable-ish domain (last 2 labels).
 // A request is in-scope when its TARGET host matches — regardless of the page's Origin (multi-host frontends).
 const startHost = new URL(a.url).hostname;   // hostname, NOT host — scope must ignore the port
-const defaultScope = startHost.split('.').slice(-2).join('.');
+// registrable domain — public-suffix-aware so `app.x.co.uk` → `x.co.uk`, not `co.uk` (a last-2-labels default
+// would let `evil.co.uk` pass in-scope). Pass --scope to override.
+const MULTI_SUFFIX = /\.(co|com|net|org|gov|edu|ac|or|ne|go)\.[a-z]{2,3}$/i;
+const defaultScope = (MULTI_SUFFIX.test(startHost) ? startHost.split('.').slice(-3) : startHost.split('.').slice(-2)).join('.');
 const SCOPE = (a.scope ? a.scope.split(',') : [defaultScope]).map((s) => s.trim().toLowerCase()).filter(Boolean);
 const inScope = (host) => SCOPE.some((s) => host === s || host.endsWith('.' + s));
 const guard = 400;
@@ -83,13 +86,17 @@ function salient(v, key, acc) {
   }
   if (key && DISC.has(key.toLowerCase()) && !VOLATILE.has(key.toLowerCase())) acc.add(key.toLowerCase() + '=' + String(v).slice(0, 40));
 }
-function bodySignature(method, pth, postData) {
+function bodySignature(method, pth, postData, query) {
   let shape = '', sal = '';
   if (postData) {
     try { const j = JSON.parse(postData); shape = skeleton(j); const acc = new Set(); salient(j, '', acc); sal = [...acc].sort().join('|'); }
     catch { shape = postData.split('&').map((kv) => kv.split('=')[0]).filter((k) => !VOLATILE.has(k.toLowerCase())).sort().join('&'); }
   }
-  return `${method} ${pth} ${shape} ${sal}`;
+  // fold non-volatile QUERY keys too — GET-based grids carry filter/sort in the query, not a body (else all
+  // GET operations to the same path collapse to one signature).
+  let q = '';
+  if (query) { try { q = [...new URLSearchParams(query).keys()].filter((k) => !VOLATILE.has(k.toLowerCase())).sort().join(','); } catch { /* skip */ } }
+  return `${method} ${pth} ${shape} ${sal} ${q}`;
 }
 // flatten a JSON body / query into dotted leaf param names (arrays → [])
 function flattenParams(v, prefix, out) {
@@ -159,7 +166,7 @@ try {
     if (!endpoints.has(ekey)) endpoints.set(ekey, { host: r.host, method: r.method, path: np, frames: new Set(), variants: new Map(), params: new Set() });
     const e = endpoints.get(ekey);
     if (r.frame_url) e.frames.add(new URL(r.frame_url).host + new URL(r.frame_url).pathname);
-    const sig = bodySignature(r.method, np, r.post_data);
+    const sig = bodySignature(r.method, np, r.post_data, r.query);
     if (!e.variants.has(sig)) e.variants.set(sig, { signature: sig, count: 0, sample_body: r.post_data ? r.post_data.slice(0, 600) : null, statuses: new Set() });
     const v = e.variants.get(sig); v.count++; if (r.status != null) v.statuses.add(r.status);
     // params: query keys (in:query) + JSON body leaves (in:json)

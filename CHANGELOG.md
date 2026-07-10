@@ -4,6 +4,29 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.21] + playwright [0.2.2] — 2026-07-10
+
+### Fixed
+- **Multi-agent code review of the branch — 9 findings fixed (7 correctness/contract, 2 hardening), + tests.**
+  - **BOLA oracle silently disabled for crud-seeded requests.** `crud-merge` emitted `owner` as a descriptive
+    identity string, but `run.mjs` matches `owner === identity.label`; it now emits the bare **label** (the
+    `crud-exerciser` records `owner`), re-enabling the foreign-data confirmation the whole feature exists for.
+  - **`burp-import` aborted the entire import on a `%` in a form-body key** — `decodeURIComponent` is now
+    guarded, one malformed body no longer kills the run.
+  - **`password_generator` crashed** (`IndexError` on `_RNG.choice('')`) when `disallowed_chars` emptied a
+    required class — now degrades (drops the class) before the all-empty guard.
+  - **Stale coverage dedup key.** `pentest.md` Step 6.7 deduped static routes by `(host, method, path)`, but
+    that file now carries `methods[]`; keyed by `(host, path)` fanning `methods[]`.
+  - **GET-grid variants collapsed.** `bodySignature` (crawl + burp) now folds non-volatile **query** keys, so
+    GET grids with `?filterModel`/`?sortModel` no longer merge into a single variant.
+  - **Express bracket path param mislabeled.** `codeaudit-leads` Rails `params[:x]` branch now uses a lookbehind
+    so `req.params['x']` is classified `path` (Express), not `query`.
+  - `crud-merge`: dedup `seen` updated in-loop (no in-batch duplicates); host-less actions skipped (no
+    malformed `https:///…`). Default scope is now public-suffix-aware (`app.x.co.uk` → `x.co.uk`, not `co.uk`)
+    in crawl + burp.
+  - +regression tests across all four tools (node 25/3/2, python 15). *(The op-signature-kernel duplication —
+    a cleanup finding — is left for a follow-up `op-signature.mjs` extraction.)*
+
 ## [2.4.20] — 2026-07-10
 
 ### Changed
