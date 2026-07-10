@@ -4,6 +4,22 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.19] — 2026-07-10
+
+### Added
+- **`burp-import` Layer C — capture `${base}/fragment` template-literal writes.** Layer A/B only see path
+  literals that start with `/`; a huge share of the write endpoints are `x.post(\`${baseUrl}/sale-invoices\`)`
+  — the literal starts with `${…}`, so they were **completely missed**. Layer C captures those fragments (with
+  the Layer-B method + `{id}`), roughly **doubling the statically-known write surface** (on the real 40 MB
+  export: 38→~100 write routes, 90→~180 BOLA candidates — e.g. `POST /api/documents/{id}/esign/sign`,
+  `DELETE /api/v1/documents/{id}`, `PUT|DELETE /api/v1/sale-invoices/{id}/custom-documents/{id}`).
+- **Conservative base→host resolution.** The `${base}` var is resolved to a host **only when it is unambiguous
+  (a single URL across all bundles) AND in-scope** — minified code reuses short var names for hundreds of URLs,
+  so a first-wins global map produced confidently-WRONG hosts (react.dev, w3.org, …). Ambiguous/runtime-resolved
+  bases stay `base_unresolved` (a lead the js-mapper AI resolves in-context) rather than a false host; noise
+  fragments (`/{param}/…` suffixes without their base) are dropped. `static_routes[]` gain `host`,
+  `base_unresolved`, and a 3-tier `confidence` (method+host → high). +Layer C tests.
+
 ## [2.4.18] — 2026-07-10
 
 ### Added
