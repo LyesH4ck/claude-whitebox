@@ -55,6 +55,7 @@ try {
     widgets:  { type: 'boolean', default: true },     // read-only: exercise custom dropdowns/typeaheads for param discovery
     'max-widgets': { type: 'string', default: '10' },
     'max-options': { type: 'string', default: '3' },  // option values to select per dropdown (each may echo a param)
+    'max-steps':   { type: 'string', default: '4' },  // multi-step (wizard) advances to try before giving up on a create
     submit:   { type: 'boolean', default: false },   // ARM: without it, dry-run (no submit)
     'dry-run':{ type: 'boolean', default: false },   // force dry-run even if --submit
     headless: { type: 'boolean', default: true },
@@ -79,8 +80,11 @@ const timeout = +a.timeout;
 const viewport = a.viewport ? { width: +a.viewport.split('x')[0], height: +a.viewport.split('x')[1] } : undefined;
 
 // NEVER click a submit that looks destructive.
-const DESTRUCTIVE = /\b(delete|remove|supprim|effac|drop|purge|reset|clear|cancel|annul|bulk|deactivate|revoke)\b/i;
-const CREATE_HINT = /\b(save|submit|create|add|new|nouveau|créer|creer|ajouter|enregistrer|valider|confirm)\b/i;
+const DESTRUCTIVE = /\b(delete|remove|supprim|effac|drop|purge|reset|clear|bulk|deactivate|revoke|hapus)\b/i;
+// The submit is chosen LABEL-AGNOSTICALLY: we don't match the action's name (Save/Submit/Valider/Kirim/Simpan/
+// 確定/…) — we EXCLUDE these cancel/back/close labels (multilingual) and take the primary action among the rest.
+const CANCEL_BACK = /\b(cancel|annul|close|fermer|ferme|back|retour|previous|préc[eé]dent|precedent|dismiss|discard|batal|tutup|kembali|abort)\b/i;
+const CREATE_HINT = /\b(save|submit|create|add|new|nouveau|créer|creer|ajouter|enregistrer|valider|confirm|simpan|kirim|buat|tambah)\b/i;
 const cssAttr = (s) => String(s).replace(/["\\]/g, '\\$&');
 // Never follow a link that would end the session or mutate state by navigation alone.
 const AVOID_LINK = /\b(logout|log-out|signout|sign-out|deconnex|déconnex|disconnect|delete|remove|supprim|drop|revoke)\b/i;
@@ -185,6 +189,7 @@ try {
   const maxViews = +a['max-views'];
   const MAX_WIDGETS = +a['max-widgets'];
   const MAX_OPTIONS = +a['max-options'];
+  const MAX_STEPS = +a['max-steps'];
   let processedForms = 0;
   const visited = new Set();
   const pagesVisited = [];
@@ -236,80 +241,125 @@ try {
   if (!armed) emitOut.intents = intents;
   if (a.out && armed && actions.length) { await mkdir(a.out, { recursive: true }); await writeFile(path.join(a.out, 'crud-exercise.json'), JSON.stringify(actions, null, 2)); }
 
-  async function processForm(pg, formIndex) {
-    const scopeLoc = formIndex == null ? pg : pg.locator('form').nth(formIndex);
-    const formEl = formIndex == null ? null : await scopeLoc.elementHandle().catch(() => null);
-    const fields = await pg.evaluate(new Function('formEl', `return (${INTROSPECT})(formEl);`), formEl).catch(() => []);
-    if (!fields.length) return;
-    const resource = guessResource(pg.url(), fields);
-
-    // pick a NON-destructive submit control
-    const submitLoc = await pickSubmit(scopeLoc);
-    const filledFields = [];
-
-    async function fillAll(salt) {
-      let n = 0;
-      for (const f of fields) {
-        const loc = scopeLoc.locator(`[name="${cssAttr(f.name)}"], [id="${cssAttr(f.name)}"]`).first();
-        const val = synthValue(f, ++n, salt);
-        try {
-          if (f.tag === 'select') { if (f.options && f.options.length) await loc.selectOption(f.options[Math.min(salt, f.options.length - 1)] || f.options[0], { timeout: 1500 }); }
-          else if (f.type === 'checkbox' || f.type === 'radio') { if (f.required) await loc.check({ timeout: 1500 }); }
-          else { await loc.fill(String(val), { timeout: 1500 }); }
-          if (salt === 0) filledFields.push({ name: f.name, type: f.type, required: !!f.required });
-        } catch { /* field not interactable — skip, retry/agent handles the odd one */ }
-      }
+  async function readFields(pg, formIndex) {
+    const formEl = formIndex == null ? null : await pg.locator('form').nth(formIndex).elementHandle().catch(() => null);
+    return await pg.evaluate(new Function('formEl', `return (${INTROSPECT})(formEl);`), formEl).catch(() => []);
+  }
+  async function fillFields(scopeLoc, fields, salt, record) {
+    let n = 0;
+    for (const f of fields) {
+      const loc = scopeLoc.locator(`[name="${cssAttr(f.name)}"], [id="${cssAttr(f.name)}"]`).first();
+      const val = synthValue(f, ++n, salt);
+      try {
+        if (f.tag === 'select') { if (f.options && f.options.length) await loc.selectOption(f.options[Math.min(salt, f.options.length - 1)] || f.options[0], { timeout: 1500 }); }
+        else if (f.type === 'checkbox' || f.type === 'radio') { if (f.required) await loc.check({ timeout: 1500 }); }
+        else { await loc.fill(String(val), { timeout: 1500 }); }
+        if (record) record.push({ name: f.name, type: f.type, required: !!f.required });
+      } catch { /* not interactable — skip */ }
     }
-
-    const intent = { resource, ui_route: routeOf(pg.url()), owner: null, marker: `${MARKER}-${resource}-1`,
-      fields: filledFields, planned_values: fields.map((f, i) => ({ name: f.name, value: synthValue(f, i + 1, 0) })) };
-
-    if (!armed) { await fillAll(0); intents.push(intent); return; }   // dry-run: fill for preview, submit NOTHING
-
-    // ARMED: fill → submit → capture write → extract id, with ONE validation retry.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await fillAll(attempt);
-      if (!submitLoc) return;
-      const [resp] = await Promise.all([
-        pg.waitForResponse((r) => { try { const rq = r.request(); return rq.method() !== 'GET' && rq.method() !== 'HEAD' && inScope(new URL(rq.url()).hostname.toLowerCase()); } catch { return false; } }, { timeout: Math.min(timeout, 12000) }).catch(() => null),
-        submitLoc.click({ timeout: 3000 }).catch(() => {}),
-      ]);
-      await settle(pg);
-      if (!resp) continue;                                 // nothing fired — retry once
-      const rq = resp.request();
-      const status = resp.status();
-      const u = new URL(rq.url());
-      const bodyText = await resp.text().catch(() => '');
-      let body; try { body = rq.postData() ? JSON.parse(rq.postData()) : undefined; } catch { body = rq.postData() || undefined; }
-      if (status >= 400 && attempt === 0) {               // validation/error → read it, retry with fresh values
-        continue;
-      }
-      let respJson; try { respJson = JSON.parse(bodyText); } catch { respJson = null; }
-      const created = findId(respJson, '') || idFromLocation(resp.headers()['location']) || idFromUrlChange(pg.url(), u.pathname) || {};
-      if (resp.headers()['location'] && !created.location) created.location = resp.headers()['location'];
-      actions.push({ resource, action: 'create', owner: null, identity: null, marker: intent.marker, ui_route: intent.ui_route,
-        request: { method: rq.method(), host: u.hostname, path: u.pathname, content_type: (rq.headers()['content-type'] || '').split(';')[0] || null, body },
-        created: Object.keys(created).length ? created : undefined,
-        response_status: status, fields: filledFields });
-      return;
+  }
+  // Drive CUSTOM dropdowns/typeaheads as part of completing the form: open each, and select a VALID option
+  // (type a probe in a typeahead → pick the first result; else pick the first option). This is what satisfies
+  // required custom selects so the primary/submit button enables. Complements native-<select> filling.
+  async function fillWidgets(scopeLoc, pg) {
+    const SEL = '[role="combobox"], [aria-haspopup="listbox"], mat-select';
+    const cn = Math.min(await scopeLoc.locator(SEL).count().catch(() => 0), MAX_WIDGETS);
+    for (let i = 0; i < cn; i++) {
+      const c = scopeLoc.locator(SEL).nth(i);
+      try {
+        if (!(await c.isVisible().catch(() => false))) continue;
+        await c.click({ timeout: 1500 }); await settle(pg);
+        const search = pg.locator('.cdk-overlay-container input, [role="listbox"] input, [role="dialog"] input[placeholder*="search" i], input[placeholder*="find" i]').first();
+        if ((await search.count().catch(() => 0)) && (await search.isVisible().catch(() => false))) {
+          await search.pressSequentially('a', { timeout: 1500 }).catch(() => {}); await settle(pg);
+        }
+        const opt = pg.locator('[role="option"], .mat-option, [role="listbox"] li').first();
+        if ((await opt.count().catch(() => 0)) && (await opt.isVisible().catch(() => false))) { await opt.click({ timeout: 1500 }).catch(() => {}); await settle(pg); }
+        else await pg.keyboard.press('Escape').catch(() => {});
+      } catch { /* widget not interactable — skip */ }
     }
   }
 
+  async function processForm(pg, formIndex) {
+    // For a page-level (pseudo-form) create, the form usually lives in a dialog opened by a +add BUTTON — open it
+    // first so the fields are in the DOM. (Real <form> elements already present are handled as-is.)
+    if (armed && formIndex == null) await openAddDialogs(pg);
+    const scopeLoc = formIndex == null ? pg : pg.locator('form').nth(formIndex);
+    const fields0 = await readFields(pg, formIndex);
+    if (!fields0.length && !(armed && await scopeLoc.locator('[role="combobox"], mat-select').count().catch(() => 0))) return;
+    const resource = guessResource(pg.url(), fields0);
+    const filledFields = [];
+
+    if (!armed) {   // dry-run: preview native fields, submit NOTHING (widget discovery runs read-only elsewhere)
+      await fillFields(scopeLoc, fields0, 0, filledFields);
+      intents.push({ resource, ui_route: routeOf(pg.url()), owner: null, marker: `${MARKER}-${resource}-1`,
+        fields: filledFields, planned_values: fields0.map((f, i) => ({ name: f.name, value: synthValue(f, i + 1, 0) })) });
+      return;
+    }
+
+    // ARMED — complete the form like a user testing it: fill native fields + drive custom widgets, ADVANCE
+    // through multi-step (a "Next"/"Continue" is just the primary action of that step), then SUBMIT via the
+    // primary action button — chosen label-AGNOSTICALLY (Save/Submit/Valider/Kirim/Simpan/…). Capture the write.
+    const writePredicate = (r) => { try { const rq = r.request(); return rq.method() !== 'GET' && rq.method() !== 'HEAD' && inScope(new URL(rq.url()).hostname.toLowerCase()); } catch { return false; } };
+    for (let step = 0; step < MAX_STEPS; step++) {
+      const fields = step === 0 ? fields0 : await readFields(pg, formIndex);   // re-introspect each step
+      await fillFields(scopeLoc, fields, step, step === 0 ? filledFields : null);
+      await fillWidgets(scopeLoc, pg);
+      const submitLoc = await pickSubmit(scopeLoc);
+      if (!submitLoc) break;
+      const [resp] = await Promise.all([
+        // a create POST fires within a few seconds of the click; keep this short so a multi-step wizard doesn't
+        // burn the full timeout per non-final step (a "Next" fires no write and we want to advance quickly).
+        pg.waitForResponse(writePredicate, { timeout: Math.min(timeout, 5000) }).catch(() => null),
+        submitLoc.click({ timeout: 3000 }).catch(() => {}),
+      ]);
+      await settle(pg);
+      if (resp) {
+        const rq = resp.request(); const status = resp.status(); const u = new URL(rq.url());
+        const bodyText = await resp.text().catch(() => '');
+        let body; try { body = rq.postData() ? JSON.parse(rq.postData()) : undefined; } catch { body = rq.postData() || undefined; }
+        if (status >= 400 && step < MAX_STEPS - 1) continue;   // validation error → keep completing / retry values
+        let respJson; try { respJson = JSON.parse(bodyText); } catch { respJson = null; }
+        const created = findId(respJson, '') || idFromLocation(resp.headers()['location']) || idFromUrlChange(pg.url(), u.pathname) || {};
+        if (resp.headers()['location'] && !created.location) created.location = resp.headers()['location'];
+        actions.push({ resource, action: 'create', owner: null, identity: null, marker: `${MARKER}-${resource}-1`, ui_route: routeOf(pg.url()),
+          request: { method: rq.method(), host: u.hostname, path: u.pathname, content_type: (rq.headers()['content-type'] || '').split(';')[0] || null, body },
+          created: Object.keys(created).length ? created : undefined, response_status: status, fields: filledFields, steps: step + 1 });
+        return;
+      }
+      // no write fired: a "Next" may have advanced the wizard, or validation blocked. If fillable controls
+      // remain in scope, loop (complete the next step); otherwise give up on this form.
+      if (!((await scopeLoc.locator('input, select, textarea, [role="combobox"], mat-select').count().catch(() => 0)) > 0)) break;
+    }
+  }
+
+  async function labelOf(loc) {
+    return (((await loc.getAttribute('value').catch(() => '')) || '') + ' ' +
+            ((await loc.textContent().catch(() => '')) || '') + ' ' +
+            ((await loc.getAttribute('aria-label').catch(() => '')) || '')).trim();
+  }
   async function pickSubmit(scopeLoc) {
+    // 1) canonical submit — label-agnostic (any type=submit that is not a cancel/destructive control).
     const explicit = scopeLoc.locator('button[type="submit"], input[type="submit"]').first();
     if (await explicit.count().catch(() => 0)) {
-      const label = ((await explicit.getAttribute('value').catch(() => '')) || (await explicit.textContent().catch(() => '')) || '').trim();
-      if (!DESTRUCTIVE.test(label)) return explicit;
+      const label = await labelOf(explicit);
+      if (!CANCEL_BACK.test(label) && !DESTRUCTIVE.test(label)) return explicit;
     }
-    // otherwise a button whose label looks like create/save and NOT destructive
+    // 2) otherwise the PRIMARY action — we do NOT match its name; we EXCLUDE cancel/back/close/destructive and
+    //    take the primary-styled button, else the LAST enabled one (dialog footers put the confirming action last).
     const buttons = scopeLoc.locator('button, [role="button"], input[type="button"]');
     const n = await buttons.count().catch(() => 0);
+    let primary = null, last = null;
     for (let i = 0; i < n; i++) {
       const b = buttons.nth(i);
-      const label = ((await b.getAttribute('value').catch(() => '')) || (await b.textContent().catch(() => '')) || '').trim();
-      if (label && CREATE_HINT.test(label) && !DESTRUCTIVE.test(label)) return b;
+      if (!(await b.isVisible().catch(() => false)) || !(await b.isEnabled().catch(() => true))) continue;
+      const label = await labelOf(b);
+      if (CANCEL_BACK.test(label) || DESTRUCTIVE.test(label)) continue;
+      last = b;
+      const cls = (await b.getAttribute('class').catch(() => '')) || '';
+      if (!primary && /(primary|btn-primary|is-primary|_primary|confirm|submit)/i.test(cls)) primary = b;
     }
-    return null;
+    return primary || last;
   }
 
   // ── READ-ONLY widget/typeahead enumeration (param discovery — never submits a form) ──────────────────────

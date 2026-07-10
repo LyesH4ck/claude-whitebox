@@ -214,3 +214,60 @@ test('read-only widget pass: custom combobox typeahead → ?keyword and option s
     assert.ok(items && items.params.some((p) => p.name === 'name'), 'option-select ?name captured');
   } finally { server.close(); }
 });
+
+// General "complete the form like a user, whatever the action is called": a page-level +add button opens a
+// dialog, a custom combobox must be selected, a Continue step advances, and the final action is labelled 確定
+// (NOT in any create-hint list) next to a Cancel — proving submit is LABEL-AGNOSTIC (excludes cancel, takes the
+// primary) and multi-step aware. Not tailored to any specific app.
+function startFlowServer() {
+  const writes = [];
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/') return html(res, page(`
+      <button id="add" onclick="document.getElementById('d1').style.display='block'">Add sale</button>
+      <div id="d1" role="dialog" style="display:none">
+        <div id="cb" role="combobox" onclick="document.getElementById('lb').style.display='block'">Pick buyer</div>
+        <div id="lb" role="listbox" style="display:none"><div role="option" onclick="this.parentElement.style.display='none'">Buyer A</div></div>
+        <input id="ref" placeholder="reference">
+        <button id="next" onclick="document.getElementById('d1').style.display='none';document.getElementById('d2').style.display='block'">Continue</button>
+      </div>
+      <div id="d2" role="dialog" style="display:none">
+        <input id="note" placeholder="note">
+        <button id="cancel" onclick="document.getElementById('d2').style.display='none'">Cancel</button>
+        <button id="ok">確定</button>
+      </div>
+      <script>
+        document.getElementById('ok').addEventListener('click', () => {
+          fetch('/api/sales', { method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ ref: document.getElementById('ref').value, note: document.getElementById('note').value }) })
+            .then(r=>r.json()).then(j=>{document.title='ok'+(j.id||'');});
+        });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/api/sales') {
+      const body = await readBody(req); writes.push({ path: u.pathname, body });
+      res.writeHead(201, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ id: 'sale-1' }));
+    }
+    res.writeHead(404); res.end('nope');
+  });
+  server._writes = writes;
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('armed: opens dialog → fills custom widget → advances a step → submits via 確定 (label-agnostic) → captures create', async () => {
+  const server = await startFlowServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--submit', '--marker', 'PENTEST-flow', '--max-steps', '4'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.equal(server._writes.length, 1, 'exactly one create POST (the 確定 action, not Cancel/Continue)');
+    const sent = JSON.parse(server._writes[0].body);
+    assert.match(sent.ref, /^PENTEST-flow/, 'step-1 field filled with the marker');
+    assert.match(sent.note, /^PENTEST-flow/, 'step-2 field filled after advancing');
+    const act = out.actions.find((a) => a.request.path === '/api/sales');
+    assert.ok(act, 'create captured');
+    assert.ok(act.steps >= 2, `multi-step completion recorded (steps=${act && act.steps})`);
+  } finally { server.close(); }
+});

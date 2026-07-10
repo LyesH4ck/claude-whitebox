@@ -4,6 +4,24 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.33] + playwright [0.2.7] — 2026-07-10
+
+### Added
+- **`crawl-write.mjs` — generic "complete the form like a user, whatever the action is called".** The armed run
+  no longer just fills a flat `<form>` and clicks a create-labelled button. It now, GENERICALLY (not per-app):
+  opens the create dialog (via +add BUTTONS, not only links); fills native fields AND **drives custom
+  dropdowns/typeaheads** (opens each, selects a valid option — so required custom selects are satisfied);
+  **advances multi-step wizards** (`--max-steps`, re-introspecting each step); and clicks the final action
+  **LABEL-AGNOSTICALLY** — it does NOT match the button's name (Save / Submit / Valider / Simpan / Kirim / 確定
+  / …); it excludes cancel/back/close/destructive (multilingual) and takes the primary action, then captures the
+  write. Per-step write-wait shortened to 5s so a wizard doesn't burn the full timeout per non-final step.
+  - Test `crawl-write.test.mjs`: a stub with a page-level +add button → dialog → custom combobox → a Continue
+    step → a `確定`/Cancel footer; asserts the flow opens, fills the widget, advances, and submits via the
+    non-English primary (not Cancel), capturing a 2-step create.
+  - `crud-exerciser` Phase 3 documents the generic completion.
+
+---
+
 ## [2.4.32] + playwright [0.2.6] — 2026-07-10
 
 ### Added
