@@ -69,11 +69,44 @@ node probe.mjs --url "https://target/app" --action capture-net
 `reflectedRaw: true` with `markerHasSpecials: true` flags an **unencoded reflection** (likely sink) even
 when execution didn't fire.
 
+## crawl.mjs — interaction-driven recon capture (the "missed POST" fix)
+
+A link/GET-only crawler (and the `@playwright/mcp` `browser_network_requests()` summary) miss the **data
+XHR/fetch** traffic of modern SPAs: server-side grids (ag-grid SSRM, datatables) fetch rows by **POST** with
+the grid state in the body, and those POSTs fire at grid render, on another host, inside frames. `crawl.mjs`
+captures them:
+
+- **Interaction-driven** — clicks in-scope SPA router-links (not `goto`) and exercises grids (scroll → load
+  blocks, sort, filter, expand groups) so render-time POSTs actually fire.
+- **Body-level, all-frames** — context-level capture of every method (POST/PUT/PATCH/DELETE) **with request
+  bodies**, on the main frame **and iframes** (fixes the frame-drop that loses micro-frontend traffic).
+- **Operation-signature dedup** — same URL with different `filterModel`/`sortModel`/`rowGroupCols` bodies are
+  kept as **distinct variants**; volatile paging (`startRow`/`offset`/…) collapses, so you get real surfaces,
+  not 500 pagination dupes.
+- **Multi-host scope** — keeps any request whose **target** host is in scope even when the page Origin is a
+  different host/TLD (`--scope` is a domain-suffix allow-list, not the page origin).
+
+```bash
+node crawl.mjs --url "https://app.target/route" \
+  --scope target.id,target.systems \             # in-scope host suffixes (include every micro-frontend host)
+  --cookie "sess=…; csrf=…" \                     # paste your session Cookie directly (or --header "Authorization: Bearer …",
+                                                  # or --state auth.json for a Playwright storageState) — else data POSTs 401
+  [--proxy http://127.0.0.1:8080] [--scroll 6] [--no-grid] [--max-views 12] [--viewport 1280x800]
+  --out outputs/ENG/inventory                     # writes crawl-endpoints.json (endpoints[] + a param_inventory slice)
+```
+
+Output (one JSON object): `endpoints[]` grouped by `(host, method, path)`, each with `variants[]`
+(one per body signature, with a `sample_body`), the `frames` it was seen in, and flattened `params`; plus a
+`param_inventory` slice that drops straight into `inventory/param-inventory.json`, and `linked_hosts[]`
+(out-of-scope hosts seen, for scope expansion). Proven end-to-end by `crawl.test.mjs`.
+
 ## Files
 
-- `browser.mjs` — stealth bootstrap (playwright-extra + stealth plugin, realistic context).
+- `browser.mjs` — stealth bootstrap (playwright-extra + stealth plugin, realistic context; `storageState`/`viewport` aware).
 - `hooks.mjs` — init script that captures fetch/XHR/WS for `capture-net`.
-- `probe.mjs` — CLI entry (actions above).
+- `probe.mjs` — WAF/XSS probe CLI (actions above).
+- `crawl.mjs` — interaction-driven recon crawler (data-POST / grid / cross-frame capture).
+- `crawl.test.mjs` — end-to-end proof (local ag-grid-SSRM fixture → before/after variant capture).
 
 ## Limits
 

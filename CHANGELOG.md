@@ -4,6 +4,511 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.26] — 2026-07-10
+
+### Added
+- **`/pentest:crud` — standalone launcher for the AI-piloted write-crawler.** Relaunch the CRUD crawl on its own
+  (like `/pentest:idor|sql|xss|ssrf`) to test it. It deploys the **`crud-exerciser` agent**, which drives the
+  Playwright MCP browser intelligently (reasoning about links/forms) with **`crawl-write.mjs` as its deterministic
+  backbone**, to crawl the authenticated app, discover CREATE forms, and (armed) capture the write requests +
+  created `{id}`s as BOLA/injection seeds via `crud-merge.mjs`. **It runs the crawler ONLY — no recon, no planner,
+  no other agent** (an earlier draft's recon-preflight made it trigger `/pentest:recon`; removed — the crawler
+  self-navigates, and the agent's recon ingest is now optional). **Hard-gated by `environment` +
+  `rules_of_engagement`** and **defaults to dry-run** (discover + preview, submit nothing); it submits only when
+  the RoE authorizes state-change and the operator confirms. Wired into the `/pentest:recon` hand-off and the docs
+  command inventory (11 → 12).
+
+---
+
+## [2.4.24] + playwright [0.2.5] — 2026-07-10
+
+### Added
+- **`crawl-write.mjs` — gated interactive WRITE-mode exerciser** (the deterministic backbone of the
+  `crud-exerciser` agent). It drives an authenticated app, **navigates breadth-first following the links it
+  finds** (create-labelled first, then any in-scope internal link, up to `--max-views`; never a logout/delete
+  link), discovers CREATE forms on every page, fills each field with marker-compliant, field-typed values,
+  submits, and captures the real write request (method/host/path/body) + the created object `{id}`, with a
+  one-shot validation retry. It emits `crud-exercise.json` straight into
+  the existing pipeline — `crud-merge.mjs` then DERIVES the `{id}`-bearing GET/PUT/DELETE BOLA corpus and the
+  injection body-field seeds, so **captured writes flow into `idor-bola-tester` / `injection-tester`**.
+  - **Safety:** state-mutating, so it is double-armed — default is `--dry-run` (discovers/previews, submits
+    NOTHING); it submits ONLY with both `--submit` and a non-empty `--marker` (every created value carries the
+    marker); it only ever clicks a form's own create/save control and NEVER a delete/remove/bulk/reset control;
+    CREATE only, capped per form. Honors the operator proxy.
+  - `crud-exerciser` Phase 3 now uses it as the primary path (dry-run preview → armed run), keeping the MCP
+    browser only as a fallback for exotic forms (wizards, rich editors, non-`<form>` widgets).
+- Test suite `crawl-write.test.mjs` (real-browser stub app): dry-run submits nothing, armed run captures the
+  marker POST + created id, unmarked submit refused, destructive-only control never clicked, a deep form
+  reached only via a non-create link is found and submitted while the logout link is skipped, validation retry.
+
+### Changed
+- **CI now provisions the browser** — installs the stealth-probe deps + Chromium before `node --test`, so the
+  browser-driven crawler suites (`crawl`, `crawl-write`) run in CI too.
+
+---
+
+## [2.4.23] + playwright [0.2.4] — 2026-07-10
+
+### Added
+- **`cve-tester` — mandatory Phase 2 → Phase 3 approval gate.** It was the only exploitation agent that
+  flowed straight from Experiment into running adapted public PoC code (up to RCE) with no checkpoint. It now
+  carries the same `APPROVAL GATE — Phase 2 → Phase 3` block as its peers (`csrf-tester` et al.): plan-level
+  approval satisfies it under `/pentest:pentest`; standalone/interactive runs stop for explicit operator
+  confirmation.
+
+### Fixed
+- **`authz-matrix` (`run.mjs`) — successful empty-body writes were misclassified as `deny`.** A cross-tenant
+  `DELETE`/`PUT`/`PATCH` returning `204 No Content` (or an empty-body `200`) was scored `deny` and never
+  flagged — precisely the destructive BOLA/BFLA the tool exists to surface. Success is now `2xx` regardless of
+  body length for write methods; the `len > 0` guard is kept only for reads (GET/HEAD).
+- **`authz-matrix` — `GET`/`HEAD` requests carrying a `body` threw and were swallowed as `{status:0}`** (→ a
+  hidden `deny`). A body is now attached only for non-GET/HEAD methods.
+- **`authz-matrix` — malformed/missing input JSON crashed with a raw Node stack trace** instead of the
+  `{ok:false}` contract its siblings honor. Input parsing is now wrapped and exits `2` with a structured error.
+- **`password_generator.py` — infinite loop on single-character pools.** `_remove_repeating_chars` /
+  `_remove_sequential_chars` spun forever when the replacement pool offered no valid alternative (e.g.
+  `no_repeating` + heavy `disallowed_chars`). Both now bail out to a best-effort password instead of hanging.
+- **`password_generator.py` — post-processing could silently drop a required class.** `no_repeating` /
+  `no_sequential` could overwrite the sole guaranteed char of a required class (breaking e.g. `require_special`);
+  a new `_ensure_required_classes` pass re-injects any dropped class so the returned password still satisfies policy.
+- **`param-mine.mjs` — ternary values leaked phantom params.** The key regex `/([A-Za-z_]\w*)\s*:\s*/` had no
+  left boundary, so `cond ? enabled : disabled` emitted `enabled` as a fake body param, bloating the fuzz
+  corpus. Anchored to an object-member boundary (`{`/`,`).
+- **`hooks.mjs` (playwright) — WebSocket wrapper dropped the static ready-state constants.**
+  `window.WebSocket.OPEN/CONNECTING/CLOSING/CLOSED` became `undefined` after injection (breaking
+  `ws.readyState === WebSocket.OPEN` and making the wrapper fingerprintable); they are now copied onto the wrapper.
+- **`credential_manager.py` — same-tick ID collision could silently overwrite an account.** The credential ID
+  was a hash of `target:username:timestamp` only; a random nonce (`secrets.token_hex`) is now included.
+
+### Changed
+- **`burp-import` / `crud-merge` — scope inference now uses the most-frequent host**, not `items[0]` (which in
+  a host-ordered Burp export is often an out-of-scope CDN/analytics host loaded first); emits `scope_source`.
+- **`burp-import` / `crud-merge` — multi-part suffix regex tightened to a 2-letter ccTLD tail** (`co.uk`,
+  `ne.jp`) so `go.com`-style hosts are no longer mis-split; form-key extraction anchored to a field boundary
+  (not `filename="…"`) and URL-decoded; static assets excluded from the injection/fuzz corpus.
+- **`crud-merge` — cross-identity owner is now a bare identity label only** (`labelish`) so `run.mjs`'s
+  `id.label === req.owner` match holds, and `create` requests are de-duplicated by a body hash.
+- **`password_generator.py` — uniform `require_*` semantics.** `require_lowercase`/`require_uppercase=False`
+  now EXCLUDE the class (matching `require_digits`/`require_special`) instead of keeping it in the pool; the
+  four flags now behave the same way.
+- **`credential_manager.py` — documented the single-writer assumption** (atomic save, but the read-modify-write
+  sequence is unlocked → last-writer-wins under concurrency).
+- **`domain-assessment` / `pentester-executor` — scan results now write to `outputs/{engagement}/`**, not into
+  the git-tracked `syn-scan.md` reference (which is now a read-only template); `Edit` dropped from
+  `domain-assessment`'s tool grant (it was only used for that write).
+- **op-signature drift guard hardened** — hard-fails (instead of silently skipping) when the sibling copy is
+  missing in the monorepo layout, and a **mirror guard was added on the playwright side** so drift is caught
+  from both directions.
+- **`stealth/package.json` — removed the inert `version`** field (the package is `private`, never published).
+
+### Infrastructure
+- **CI added** (`.github/workflows/ci.yml`) — runs the `.mjs` (`node --test`) and Python tool suites on push/PR.
+- **Root `package.json`** with `test` / `test:py` / `test:all` scripts wiring up the previously
+  manual-only suites.
+
+### Tests
+- **End-to-end test suites for the two densest decision engines**, which previously had none — `authz-matrix`
+  (`run.test.mjs`, stub-server matrix incl. an explicit B1 empty-body-write regression guard, GET-with-body,
+  access-map unauth flag, malformed-input contract) and `sqli-detect` (`sqli-detect.test.mjs`, one stub per
+  class: error-based, quote-balance, boolean-blind, baseline-subtraction no-false-positive, query-disclosure,
+  time-based).
+- **`param-mine.test.mjs`** (mining + the ternary phantom-param guard) and **`op-signature.test.mjs`** on the
+  playwright side (behaviour + reverse drift guard).
+- **Python suite expanded** (15 → 22) — `require_*` exclusion, required-class survival, single-tick ID
+  uniqueness, and the previously untested `CredentialManager` mutators (list/delete/cleanup/update-metadata/export).
+- **49 `.mjs` tests + 22 Python tests, all green.**
+
+### Docs
+- **README (en/fr/zh): corrected drifted counts** — codeaudit "12 auditors" → **10 auditor agents across 10
+  OWASP domains** (+ `code-recon` baseline + `audit-planner`); pentest "18 agents" → **19**, and the previously
+  undocumented **`crud-exerciser`** agent is now listed.
+- **`BUSINESS_LOGIC_DETECTION_SPEC.md` marked ✅ implemented** — the three bricks (`business-modeler`,
+  `business-logic-tester` + delta oracle, orchestration wiring) and the param-level recon gap (`param-mine`)
+  are shipped; the doc was still labelled "backlog / proposition".
+
+---
+
+## [2.4.22] + playwright [0.2.3] — 2026-07-10
+
+### Changed
+- **Extracted the duplicated operation-signature/param kernel into a canonical `op-signature.mjs`** (the last
+  code-review cleanup finding). `bodySignature` / `flattenParams` / `normPath` (+ private
+  `VOLATILE`/`DISC`/`skeleton`/`salient`) were copied byte-for-byte in `crawl.mjs` and `burp-import.mjs`, and
+  re-implemented as `leaves()` in `crud-merge.mjs` — a silent-drift hazard: a one-sided edit would make the same
+  request hash differently across recon sources and double-count in the surface-analyzer union. Now one
+  canonical module (`essential-skills/op-signature/`) imported by burp-import + crud-merge, and vendored
+  byte-identical for `crawl.mjs` (cross-plugin imports aren't portable across the versioned cache dirs), guarded
+  by a **drift test** that fails if the two copies diverge. Behavior unchanged; all suites green.
+
+## [2.4.21] + playwright [0.2.2] — 2026-07-10
+
+### Fixed
+- **Multi-agent code review of the branch — 9 findings fixed (7 correctness/contract, 2 hardening), + tests.**
+  - **BOLA oracle silently disabled for crud-seeded requests.** `crud-merge` emitted `owner` as a descriptive
+    identity string, but `run.mjs` matches `owner === identity.label`; it now emits the bare **label** (the
+    `crud-exerciser` records `owner`), re-enabling the foreign-data confirmation the whole feature exists for.
+  - **`burp-import` aborted the entire import on a `%` in a form-body key** — `decodeURIComponent` is now
+    guarded, one malformed body no longer kills the run.
+  - **`password_generator` crashed** (`IndexError` on `_RNG.choice('')`) when `disallowed_chars` emptied a
+    required class — now degrades (drops the class) before the all-empty guard.
+  - **Stale coverage dedup key.** `pentest.md` Step 6.7 deduped static routes by `(host, method, path)`, but
+    that file now carries `methods[]`; keyed by `(host, path)` fanning `methods[]`.
+  - **GET-grid variants collapsed.** `bodySignature` (crawl + burp) now folds non-volatile **query** keys, so
+    GET grids with `?filterModel`/`?sortModel` no longer merge into a single variant.
+  - **Express bracket path param mislabeled.** `codeaudit-leads` Rails `params[:x]` branch now uses a lookbehind
+    so `req.params['x']` is classified `path` (Express), not `query`.
+  - `crud-merge`: dedup `seen` updated in-loop (no in-batch duplicates); host-less actions skipped (no
+    malformed `https:///…`). Default scope is now public-suffix-aware (`app.x.co.uk` → `x.co.uk`, not `co.uk`)
+    in crawl + burp.
+  - +regression tests across all four tools (node 25/3/2, python 15). *(The op-signature-kernel duplication —
+    a cleanup finding — is left for a follow-up `op-signature.mjs` extraction.)*
+
+## [2.4.20] — 2026-07-10
+
+### Changed
+- **Unified the `static-routes.json` schema across the two static extractors.** The `inventory-javascript-mapper`
+  Phase 3.5 output now uses the **same shape as `burp-import`'s `static_routes[]`**: `methods[]` (array, was a
+  singular `method:"UNKNOWN"`), plus `write`, **`base_unresolved`** (the `${base}` var Layer C couldn't resolve
+  — a host-less lead), `host`, `id_params`, `bola_candidate`, and a 3-tier `confidence` (method+host → high).
+  Layer C guidance aligned to the conservative base→host resolution (only unambiguous + in-scope, never a
+  first-wins global map that invents wrong hosts). `inventory-surface-analyzer` now merges the static sources
+  by `(host, normalized_path)`, unioning `methods[]` and carrying `write`/`base_unresolved` — so the JS-mined
+  write surface (from either the js-mapper or burp-import) flows to the testers as one consistent pool.
+
+## [2.4.19] — 2026-07-10
+
+### Added
+- **`burp-import` Layer C — capture `${base}/fragment` template-literal writes.** Layer A/B only see path
+  literals that start with `/`; a huge share of the write endpoints are `x.post(\`${baseUrl}/sale-invoices\`)`
+  — the literal starts with `${…}`, so they were **completely missed**. Layer C captures those fragments (with
+  the Layer-B method + `{id}`), roughly **doubling the statically-known write surface** (on the real 40 MB
+  export: 38→~100 write routes, 90→~180 BOLA candidates — e.g. `POST /api/documents/{id}/esign/sign`,
+  `DELETE /api/v1/documents/{id}`, `PUT|DELETE /api/v1/sale-invoices/{id}/custom-documents/{id}`).
+- **Conservative base→host resolution.** The `${base}` var is resolved to a host **only when it is unambiguous
+  (a single URL across all bundles) AND in-scope** — minified code reuses short var names for hundreds of URLs,
+  so a first-wins global map produced confidently-WRONG hosts (react.dev, w3.org, …). Ambiguous/runtime-resolved
+  bases stay `base_unresolved` (a lead the js-mapper AI resolves in-context) rather than a false host; noise
+  fragments (`/{param}/…` suffixes without their base) are dropped. `static_routes[]` gain `host`,
+  `base_unresolved`, and a 3-tier `confidence` (method+host → high). +Layer C tests.
+
+## [2.4.18] — 2026-07-10
+
+### Added
+- **`burp-import` Layer B — HTTP method inference for JS-mined routes.** The routes mined from JS bundles were
+  all `method: UNKNOWN` (Layer A = path only), so they were indistinguishable reads-vs-writes and unroutable to
+  the testers. Layer B infers the method from the **call-site** (verb call `.post(`/`.delete(`, XHR
+  `.open("POST",…)`, config object `fetch(url,{method:"X"})` / `axios({method})`) and extracts `{id}` path
+  params → `bola_candidate`. On the real 40 MB export this surfaced **38 write routes and 90 BOLA candidates
+  statically** — e.g. `PATCH /accounts/{id}/billing-info`, `DELETE /api/v1/documents/{id}`,
+  `POST /api/documents/{id}/esign/sign` — so the write attack surface is known **without exercising it** (the
+  coverage backstop to `crud-exerciser`'s depth). `static_routes[]` now carry `methods[]`, `id_params[]`,
+  `bola_candidate`, `write`, `confidence`; sorted writes/BOLA-first. +Layer B test assertions.
+
+## [2.4.17] — 2026-07-10
+
+### Added
+- **`crud-exerciser` agent — authorized interactive capture of the write surface** (the missing recon piece for
+  create/edit functionality). Read-only crawling and JS-bundle mining discover *paths* but not the real write
+  requests — those only exist when the action is performed. This new **state-changing, hard-gated** agent drives
+  create/edit forms with the operator's session (generic — it *uses the app*), capturing the real write requests
+  (method/host/body) and the **created object `{id}`s** as SEEDS for the testers. It is SETUP only — it does not
+  judge BOLA (`200 ≠ BOLA` stays the tester's oracle).
+  - **Hard gate:** deployed by `/pentest:recon` (new Step 6b) only when `rules_of_engagement` authorizes
+    state-change. Action level by `environment`: `staging`/`demo`/`dev` → create + modify; `prod`/unset →
+    create-only or skip. Creates **only marker-tagged** objects, **never touches another principal's data**, and
+    **leaves objects marked** for operator verification (no auto-cleanup, per `crud/created-objects.json`); audits
+    every state-changing action.
+  - **`crud-merge.mjs`** (deterministic, tested) turns `crud-exercise.json` into the tester seeds: the BOLA
+    corpus `.pentest-authz-requests.json` (the create + the derived `{id}`-bearing GET/PUT/DELETE, owner-tagged,
+    split-host absolute URLs, auth stripped for `run.mjs` identity injection) and the write-body fields into
+    `param-inventory.json` for `injection-tester`. The existing `idor-bola-tester` (multi-identity oracle +
+    creation playbook) consumes it unchanged — no new BOLA brick needed.
+  - Docs: pentest agent count 18→19; `/pentest:recon` Step 6b; ATTACK_INDEX helper note.
+
+## [2.4.16] — 2026-07-09
+
+### Fixed
+- **Session Freshness Gate — stop silently reusing an expired session.** `/pentest:recon` Step 3 used to
+  reuse a stored `.pentest-identities.json` identity **without asking or checking it**, so an engagement could
+  run "green" while actually mapping/testing **unauthenticated** (every authed endpoint 401s → false
+  negatives). New `essential-skills/methodology/session-check.md` defines the gate: **show** the session,
+  **probe** a witness authenticated request (vs the unauth baseline), and offer **use / refresh / replace** —
+  refusing to test authenticated on a STALE session unless the operator explicitly overrides (then it's a
+  recorded coverage gap). Wired into `/pentest:recon` and all four bricks (`/pentest:sql|xss|idor|ssrf`); for
+  `/pentest:idor` the gate runs **per identity** (a stale identity poisons the authz matrix — a `401` reads as
+  "access denied" and hides a real BOLA). Pasted sessions are now stamped with an `added` timestamp so the
+  gate can show their age.
+
+## [2.4.15] — 2026-07-09
+
+### Added
+- **`burp-import` now mines the JS bundles too — the export carries two recon sources.** Beyond the observed
+  request surface, it extracts routes from the **JS bundle response bodies** (Layer-A: URL-like path literals,
+  dynamic segments → `{param}`) into `static_routes[]`. The `.js` in a Burp export are captured *authenticated*,
+  so this recovers API routes declared in code but never navigated (`observed_live:false`) — usually the
+  highest-value undiscovered surface (many with `{param}` → IDOR/BOLA candidates). `--bundles <dir>` dumps the
+  authenticated bundles for the js-mapper's deeper pass; `--no-mine-js` skips mining. On a real 40 MB export:
+  234 bundles → **251 new API routes** the crawl never saw (e.g. `/api/documents/{param}/esign/sign`,
+  `/api/lead/{leadId}/collateral`). `.js` are no longer lumped into the skipped-assets bucket. +1 test assertion.
+
+## [2.4.14] — 2026-07-09
+
+### Changed
+- **`/pentest:recon` now ASKS for a Burp deep-crawl export (Step 4b).** Previously the Burp-import path was
+  documented but not prompted; recon now offers "do you have a Burp Save-items XML export?" and, given a path,
+  runs `burp-import.mjs` and merges the result into the inventory (still running the static bundle extraction
+  as a complement). Validated on a real 40 MB authenticated export (321 items → the ag-grid data POSTs and
+  their body params, in 0.2 s).
+
+## [2.4.13] — 2026-07-09
+
+### Added
+- **`burp-import` — use an authenticated Burp deep crawl as a recon source.** New
+  `essential-skills/burp-import/burp-import.mjs` parses a Burp "Save items" XML export (base64 on or off) into
+  the plugin's recon inventory — `endpoints[]` grouped by `(host, method, path)`, one variant per operation
+  body-signature (same URL with different `filterModel`/`sortModel` = distinct surfaces; pagination collapses),
+  flattened query+body `params`, and a `param_inventory` slice that drops into `inventory/param-inventory.json`.
+  An authenticated Burp crawl is often a richer *observed* surface than a headless pass (it already solved auth
+  and captured real POST bodies), so this makes it a drop-in source every targeted command reuses.
+  - Dedup signature mirrors `stealth/crawl.mjs`, so Burp + browser-crawl sources merge cleanly; scope is a
+    host-suffix allow-list (multi-host); static assets are skipped by default (`--assets` to include them).
+  - Wired into `/pentest:recon` (new Step 4b): import if available, and **complement** — still run the JS
+    mapper's static bundle extraction for routes declared in JS but never navigated (which even a deep Burp
+    crawl won't have hit). Proven by `burp-import.test.mjs` (2 cases).
+
+## [2.4.12] — 2026-07-09
+
+### Added
+- **Normalizer contract validation — `codeaudit-leads.mjs` now emits `warnings[]`.** A finding missing
+  `id`/`vuln_class`/`source`, a `source` without `(file:line)`, an `endpoint.in` outside the enum, or an
+  `owasp` not in `Axx:YYYY` form is surfaced as a warning (findings are still processed best-effort) instead
+  of being silently coerced — making the one machine-read boundary from codeaudit auditable. On a real report
+  this immediately flags the findings whose prose `source` lacks a `(file:line)` resolution key. +2 tests (24).
+
+### Fixed
+- **`injection-tester` now loads `param-inventory.json` in Phase 1 recon.** Phase 2 mandates the injection
+  matrix over "every parameter from `param-inventory.json`", but Phase 1 only read `api-endpoints.json` — so
+  nested body params (`filterModel.keyword`, `sortModel[].colId`, `startRow`) were never enumerated by the
+  agent that tests them (a silent false negative on exactly the sinks the param-inventory exists to surface).
+  Phase 1 now reads `param-inventory.json` (+ `crawl-endpoints.json`) and builds the test corpus as their
+  union; an empty inventory is recorded as a coverage gap, not "no params".
+
+### Docs
+- **REPORT_CONTRACT: deterministic lead→finding merge.** Documented the `endpoint` object→string flattening
+  (`{method,path}` → `"METHOD /path"`, keeping `param`/`in` in evidence) and the `owasp` full-form rule, so
+  the static→live merge is reproducible instead of an ad-hoc per-run transform.
+- **README FR + zh-CN**: added the `/pentest:recon` and `/pentest:ssrf` command sections (were English-only).
+
+## [2.4.11] + playwright [0.2.1] — 2026-07-09
+
+### Changed
+- **One shared session config, set up once and reused by every brick.** `/pentest:recon` now offers a direct
+  **"paste a session cookie / token now"** option (writing `.pentest-identities.json`), and `/pentest:sql`,
+  `/pentest:xss`, `/pentest:ssrf` read that same shared config (offering the paste path when it is missing) —
+  so you configure the session once, at recon time, and every targeted test reuses it. `/pentest:idor` already
+  wrote `.pentest-identities.json`; it now states it is the shared store. (Previously `/pentest:recon` only
+  pointed at the `authenticating` skill, and sql/xss read auth ad hoc from `.pentest-scope.json` — inconsistent.)
+
+### Added
+- **`crawl.mjs --cookie "<Cookie>"` / `--header "K: V"`** — paste a session directly instead of exporting a
+  Playwright `storageState`; applied across all in-scope hosts/frames so the app session is sent even from a
+  micro-frontend origin. `/pentest:recon` forwards the pasted session to the crawler.
+
+### Fixed
+- **`--no-grid` / `--no-headless` now actually work.** `crawl.mjs` and `probe.mjs` were missing
+  `allowNegative: true` on `parseArgs`, so the documented negated boolean flags errored with
+  `Unknown option '--no-…'`.
+
+## [2.4.10] — 2026-07-09
+
+### Added
+- **`/pentest:recon` — standalone reconnaissance command.** Runs the full web-application-mapping (software
+  catalog, directory scan, API discovery, JS/SPA route mapping incl. the interaction-driven `crawl.mjs`
+  grid capture, param mining, surface synthesis) and **stops** — no planner, no exploitation. Writes the
+  reusable recon baseline (`inventory/*.json`, `analysis/attack-surface.md`, `recon/recon-manifest.json`,
+  `inventory/surface-map.json`, `inventory/param-inventory.json`) that the targeted-test commands reuse via
+  their recon preflight. Handles the authenticated-vs-public surface choice up front (so the data POSTs behind
+  login are actually mapped). This makes "run recon once, then unit-test each brick" a first-class workflow.
+- **`/pentest:ssrf` — targeted SSRF launcher**, completing the per-brick unit-test set
+  (`/pentest:sql|xss|idor|ssrf`). Deploys `pentester-executor` specialized for SSRF with a URL/host/param
+  recon preflight and OAST as the primary blind-confirmation channel; enforces the "a 200 is not SSRF"
+  verdict bar (server-issued callback / internal-metadata response / deny-vs-fetch differential).
+- Docs: `CLAUDE.md` command count 9→11, and README command reference updated with both commands (the intended
+  loop — `/pentest:recon` once, then `sql → xss → idor → ssrf` against that baseline).
+
+## [2.4.9] + playwright [0.2.0] — 2026-07-09
+
+### Added
+- **`playwright/stealth/crawl.mjs` — interaction-driven recon crawler that fixes the "missed POST" gap.**
+  A link/GET-only crawler and the `@playwright/mcp` `browser_network_requests()` summary both miss the data
+  XHR/fetch traffic of modern SPAs (server-side ag-grid / datatables that fetch rows by POST with the grid
+  state in the body). The new harness:
+  - **Interaction-driven** — clicks in-scope SPA router-links (not `goto`) and exercises grids (scroll → load
+    blocks, sort, filter, expand groups) so render-time POSTs actually fire.
+  - **Body-level, all-frames capture** — context-level capture of every method WITH request bodies, on the
+    main frame and iframes (fixes the frame-drop that lost micro-frontend traffic — `probe.mjs`'s in-page hook
+    only ever read the top frame).
+  - **Operation-signature dedup** — same URL with different `filterModel`/`sortModel`/`rowGroupCols` bodies is
+    kept as distinct variants; volatile paging (`startRow`/`offset`/…) collapses, so a grid yields real test
+    surfaces instead of one URL-deduped endpoint or 500 pagination dupes.
+  - **Multi-host scope** — keeps any request whose TARGET host is in scope even when the page Origin is a
+    different host/TLD (`--scope` is a domain-suffix allow-list, not the page origin). Carries an authenticated
+    session via `--state` (Playwright storageState) so data POSTs don't 401 and get dropped.
+  - Emits `crawl-endpoints.json` (endpoints grouped by host/method/path, one variant per body signature, with
+    bodies + frames + flattened params) plus a `param_inventory` slice that drops into `param-inventory.json`.
+  - Proven end-to-end by `crawl.test.mjs` (local ag-grid-SSRM fixture): 1 URL-deduped endpoint → 4 distinct
+    operation variants, pagination collapsed, bodies captured, iframe request seen.
+- `newStealthContext` gained additive `storageState` / `viewport` options (auth session + real viewport).
+
+### Changed
+- **`inventory-javascript-mapper` Phase 3 now routes server-side grids through `crawl.mjs`.** New step 1c
+  documents that `browser_network_requests()` does not return POST bodies or iframe traffic, and mandates the
+  owned crawl harness for grid views — merging its variant-level endpoints + `param_inventory` into the
+  inventory so the previously-missed POST surfaces reach injection/BOLA testing.
+
+## [2.4.8] — 2026-07-09
+
+### Docs
+- **INSTALL.md now says 64 attack categories** (was a stale 63) — matches the READMEs, `plugin.json`,
+  `marketplace.json`, `SKILL.md`, and `ATTACK_INDEX.md`.
+- **All three READMEs now describe both plugins above the fold.** The tagline and badges advertised only the
+  pentest framework (18 agents / 64 categories), rendering the namesake white-box `codeaudit` plugin
+  invisible on a repo literally called `claude-whitebox`. Broadened the EN/FR/zh-CN taglines to "white-box
+  source-code audit + black-box penetration testing" and added `codeaudit` badges (12 auditors / 10 OWASP
+  domains) alongside the pentest ones.
+- **Reconciled the "Essential Skills (4)" count with the 5 on-disk subdirs.** The `64` per-domain breakdown
+  still sums correctly (Essential Skills = the 4 attack-relevant helpers); `SKILL.md` and `ATTACK_INDEX.md`
+  now note explicitly that `codeaudit-handoff` and `playwright-automation` are non-attack helpers excluded
+  from the 64, so the headline count is verifiable against the tree.
+
+## [2.4.7] + codeaudit [0.1.5] — 2026-07-09
+
+### Fixed
+- **Unified the generic-executor / planner agent IDs to kebab-case (dispatch consistency).** The two agents
+  shipped a spaced Title-Case frontmatter `name:` (`Pentester Executor` / `Pentester Orchestrator`) while the
+  filenames, the 28 other agents, and ~77 references (incl. `.pentest-attacks.json`, the Skill Coordinator
+  Map, and the deployment-plan schema instruction) used kebab `pentester-executor` / `pentester-orchestrator`
+  — an id that matched no registered agent. Renamed both frontmatter names to kebab and converted every
+  remaining spaced reference across 8 files (H1 titles kept Title-Case, per the `xss-tester` convention), so
+  a single identifier now flows config → coordinator map → deployment-plan `agent` → `Task` dispatch.
+- **Fixed recon-inventory path drift in the targeted-test commands.** `/pentest:idor`, `/pentest:sql`, and
+  `/pentest:xss` told the preflight to infer coverage from `outputs/{engagement}/recon/inventory/*.json`, but
+  the inventory agents write to `outputs/{engagement}/inventory/*.json` (recon-manifest.json stays under
+  `recon/`). The fallback globbed a never-populated directory and always concluded "no inventory", forcing
+  needless re-recon. Corrected to `inventory/*.json`.
+- **codeaudit 0.1.4→0.1.5 — `audit-planner` description no longer advertises "time allocation"**, which the
+  audit workflow explicitly does not use ("completeness, not budget — no timer"). Now "in what order, by
+  sink density", aligned with the completeness model.
+
+### Added
+- **Playwright-MCP browser-driver preflight (`pentest.md` Step 6.2).** The seven client-side agents depend on
+  the `playwright` plugin's `mcp__plugin_playwright_playwright__*` tools, a dependency stated only in prose.
+  The engagement preflight now verifies the MCP is reachable and, if not, warns loudly, sets
+  `playwright_active=false`, and records a coverage gap — so a missing browser driver fails loud instead of
+  silently degrading DOM/stored-XSS, CSP, prototype-pollution, and JS-route mapping to curl-only.
+
+## [2.4.6] — 2026-07-09
+
+### Fixed
+- **`authenticating` Python tools hardened — 9 code-review findings + a stdlib test suite.**
+  `password_generator.py`:
+  - **CSPRNG.** All password material now comes from `secrets.SystemRandom()` (os.urandom-backed), not the
+    predictable Mersenne-Twister `random` module — this is account-credential generation.
+  - **`'character'` no longer forces a special char.** The hint scan matched the bare substring `'character'`,
+    present in almost every "N characters" length hint, so it set `require_special=True` unconditionally and
+    broke signup on sites that forbid specials. Now matches `special char` / `symbol` / `punctuation`.
+  - **Length is clamped and validated.** An incoherent hint (min parsed above max) no longer overshoots max;
+    a requested length shorter than the required character classes now raises `ValueError` instead of
+    silently emitting a longer password (negative `remaining` → empty range).
+  - **Consistent defaults.** `analyze_requirements` now defaults `require_upper/lower/digits` to `True`,
+    matching `generate()`'s fallbacks and the convenience wrapper (was `False`, so the two paths disagreed).
+
+  `credential_manager.py`:
+  - **Atomic, private writes.** Saves go through `mkstemp` (created `0600` before any plaintext) + `os.replace`
+    — closing the world-readable window of the old "open 'w' then chmod" and making writes crash-safe.
+  - **Corrupt store is preserved, not silently wiped.** A JSON-decode error used to return `{}`, so the next
+    save truncated real data; now the bad file is renamed `.corrupt` and a `ValueError` is raised.
+  - **Reads no longer rewrite the file.** `get_credential` gained `mark_used=False` (opt-in) so a pure
+    read/export stops rewriting the plaintext store on every lookup, and it now returns a `deepcopy` rather
+    than a live alias into the in-memory store.
+  - **`.gitignore` anchored to the store's own directory** (was always the CWD) and skipped outside a git
+    work tree, so the ignore rule protects the real path and unrelated dirs aren't littered.
+  - **Timezone-aware timestamps** via a `_utcnow()` helper (deprecated naive `datetime.utcnow()` removed).
+  - Added `test_auth_tools.py` (stdlib `unittest`, 14 cases) covering every fix above.
+
+## [2.4.5] — 2026-07-09
+
+### Fixed
+- **NoSQLi auth-bypass no longer confirmed on a bare HTTP 200.** `injection-tester`'s Phase-2 rule was
+  "HTTP 200 with successful login response → NoSQLi confirmed", but many login APIs return 200 with an error
+  body on failed auth. Now requires a **3-way differential** — wrong-creds baseline vs operator injection vs
+  valid-creds baseline — confirming only when the injection yields the SAME authenticated artifact
+  (`Set-Cookie` session / JWT / 302 into the app) as valid creds that the wrong-creds baseline does NOT.
+  Pulls the Phase-4 `'token' in r.text` bar forward into the confirmation language.
+- **Handoff correlator (voie B) now tolerates all three `params` shapes.** Recon producers emit `params`
+  three ways — flat name array `["id"]` (surface-map / web-app), object array `[{name,in,sample}]`
+  (param-inventory), and object keyed by location `{"path":["id"],"query":["fields"]}` (api-endpoints).
+  `codeaudit-leads.mjs`'s `correlate` only handled the flat array: the object array made every `String(x)`
+  become `"[object Object]"` (silent no-match) and the location-keyed object **threw** (dropped the finding
+  to `malformed`). A new `paramNames()` normalizes any shape to a flat name list before matching. +4
+  regression tests (22 total, all passing).
+
+### Docs
+- **`surface-map.json` is now a first-class recon contract (Format 6 in `RECONNAISSANCE_OUTPUT.md`).** It was
+  the single most load-bearing recon artifact for the white-box→black-box handoff (`--surface`) and the Step
+  6.7 coverage math, yet its schema lived only in the `inventory-surface-analyzer` prompt. Added its full
+  shape plus a `params`-shapes reconciliation table (canonical = the `[{name,in,sample}]` object array;
+  surface-map flattens to names by design) so producers and consumers code against one documented contract.
+
+## [2.4.4] — 2026-07-09
+
+### Fixed
+- **XSS/CMDi detection discipline — closed four false-positive/negative gaps where the codified PoC or probe
+  contradicted the repo's own "confirm, don't assume" rule.**
+  - **XSS reflected PoC no longer confirms on substring reflection (false positive).** `xss-tester`'s `poc.py`
+    asserted only `'onerror=alert' in r.text` — a safely HTML-encoded reflection (`&lt;img … onerror=alert…&gt;`)
+    still contains that substring and was reported `VULNERABLE`. The PoC now asserts the payload reflects
+    **UN-encoded** in an executable context (raw markup present AND its `html.escape()` form absent); a new
+    Critical Rule states an encoded reflection is `tested_not_vulnerable`, with the Playwright console-alert +
+    screenshot as ground truth.
+  - **CMDi no longer confirmed on a single un-baselined timing (false-positive RCE).** Both the Phase-2 probe
+    and `poc.py` required only one ~5s response (jitter / slow backend fake it). They now require a
+    **baselined, scaling differential** — `sleep 0` control vs `sleep 5` stable over repeats, and `sleep 10`
+    tracking ~2×. A bare time-blip with no scaling and no OAST hit is `probable`, not `confirmed`; the Critical
+    Rule and the OAST/DNS callback (preferred, deterministic) are aligned to this.
+  - **CMDi OOB probe now uses the real OAST payload.** The Phase-2 out-of-band probe referenced an undefined
+    `BURP_COLLABORATOR_HOST` (dead since the OAST integration); it now allocates a unique `$PAYLOAD` from the
+    OAST pool and correlates the callback in `oast/interactions.jsonl`.
+  - **DOM-XSS curl-on-fragment check removed (false negative).** A `curl "…/#<img …>"` can never observe the
+    payload — the `#…` fragment is not sent to the server. Replaced with the Playwright
+    `browser_navigate(#payload)` + `browser_console_messages()` path.
+
+## [2.4.3] — 2026-07-09
+
+### Fixed
+- **Hybrid handoff normalizer (`codeaudit-leads.mjs`) hardened — 4 review findings + the mandated e2e test.**
+  The report is `UNTRUSTED DATA`; these close the gaps where a malformed or free-text report could crash the
+  handoff or fabricate a misleading lead.
+  - **No longer crashes on a bad `findings[]` element.** A `null` / non-object entry (hand-edited, truncated,
+    trailing comma) used to throw an uncaught `TypeError` and produce **no** `exploitation-leads.json` at all —
+    every valid lead in the same report was lost. Now such an element is skipped and counted in
+    `totals.malformed` (never a silent drop), and the whole per-finding body is wrapped so one bad finding is
+    counted, never fatal — the `{ok:true}` + leads contract always holds.
+  - **No phantom `externally_reachable` leads.** The loose free-text fallback that grabs a trailing identifier
+    from any `source` string is now flagged `low_confidence` and **no longer implies reachability** — only a
+    resolved endpoint, a recognized framework accessor, or a whole-object binding does. Garbage/prose `source`
+    text can no longer be promoted to a high-priority exploitation target.
+  - **`in` enum honored on every field.** The top-level `lead.in` is now passed through `canonIn()` (was raw),
+    and the fallback returns `in: null` instead of the out-of-enum string `'unknown'` — the lead's `in` is now
+    always `query|path|header|cookie|json|form` or `null`, consistent with `endpoint.in`.
+  - **`body.<field>` / `data.<field>` sources now parse as `json`.** code-recon's own "feeds" shorthand
+    (e.g. `body.url`) previously fell through to the fallback and lost its injection location; two `\b`-guarded
+    patterns now map it to `in: json` (the `\b` protects `formData.` / `metadata.`).
+- **Added the end-to-end fixture test mandated by `HYBRID_HANDOFF_SPEC.md` §8 ("leçon SQLi").**
+  `codeaudit-leads.test.mjs` (zero-dep, Node 18+, `node --test`) runs the real normalizer as a subprocess over
+  synthetic reports: voie A / voie B resolution, per-framework accessor parsing, whole-object binding,
+  non-routable classes, and a regression case for each of the four fixes above. 18 cases, all passing.
+
 ## [2.4.2] + codeaudit [0.1.4] — 2026-07-08
 
 ### Fixed

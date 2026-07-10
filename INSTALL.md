@@ -5,7 +5,7 @@
 | Plugin | Command | What it does |
 |--------|---------|--------------|
 | `codeaudit` | `/codeaudit:codeaudit` | White-box source-code security audit (static source-to-sink, optional live correlation) |
-| `pentest`   | `/pentest:pentest`     | Black-box penetration testing framework (63 attack categories, agent-coordinated) |
+| `pentest`   | `/pentest:pentest`     | Black-box penetration testing framework (64 attack categories, agent-coordinated) |
 | `playwright` | _(MCP provider)_ | Playwright MCP server with stealth-friendly defaults; **dependency of `pentest`'s client-side agents** (XSS, CSP, prototype-pollution, JS mapping) |
 
 The `codeaudit` and `pentest` plugins run inside Claude Code as agents, skills, and slash commands — no

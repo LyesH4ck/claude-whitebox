@@ -35,6 +35,7 @@ const { launch, newStealthContext } = await import('./browser.mjs');
 let parsed;
 try {
   parsed = parseArgs({
+    allowNegative: true,   // so the documented --no-headless works (boolean negation)
     options: {
       url:      { type: 'string' },
       action:   { type: 'string', default: 'navigate' },

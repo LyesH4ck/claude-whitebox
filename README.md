@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    A full penetration testing framework for Claude Code with Kali MCP integration containing 18 agents, 6 skill coordinators and 64 attack categories.
+    White-box source-code audit + black-box penetration testing for Claude Code — 10 codeaudit auditors across 10 OWASP domains, and a 19-agent pentest framework with 64 attack categories and Kali MCP integration.
     <br />
     Structured, human-in-the-loop, evidence-driven.
   </p>
@@ -19,7 +19,9 @@
       <img src="https://img.shields.io/github/issues/LyesH4ck/claude-whitebox?style=flat-square" alt="Issues" />
     </a>
     <img src="https://img.shields.io/badge/Claude_Code-compatible-6B46C1?style=flat-square&logo=anthropic" alt="Claude Code compatible" />
-    <img src="https://img.shields.io/badge/pentest_agents-18-0EA5E9?style=flat-square" alt="18 pentest agents" />
+    <img src="https://img.shields.io/badge/codeaudit_auditors-10-8B5CF6?style=flat-square" alt="10 codeaudit auditors" />
+    <img src="https://img.shields.io/badge/OWASP_domains-10-8B5CF6?style=flat-square" alt="10 OWASP domains" />
+    <img src="https://img.shields.io/badge/pentest_agents-19-0EA5E9?style=flat-square" alt="19 pentest agents" />
     <img src="https://img.shields.io/badge/attack_categories-64-EF4444?style=flat-square" alt="64 attack categories" />
     <img src="https://img.shields.io/badge/authorized_use_only-red?style=flat-square" alt="Authorized use only" />
   </p>
@@ -40,7 +42,7 @@
 
 The **`pentest`** plugin gives Claude structured penetration testing capabilities. It is not a script or scanner, it is an **agent coordination framework**: the `/pentest:pentest` command coordinates the engagement from the main session — it runs reconnaissance, asks a planner agent for a deployment plan, then deploys specialized executor agents (each following a strict 4-phase workflow) in parallel, spending the time budget on escalation, and requiring operator approval before any active exploitation begins. Every finding ships with a working PoC, captured HTTP evidence, and a Playwright screenshot.
 
-The **`codeaudit`** plugin is the white-box counterpart: a static source-code security audit framework. The `/codeaudit:codeaudit` command owns the run — a `code-recon` baseline, planning via the `audit-planner`, then parallel dispatch of **12 specialized auditor agents** across **10 OWASP vulnerability domains** (injection, XSS, auth, access control, SSRF, secrets, crypto, dependencies, configuration, logging). It reads source and traces every source→sink path; static by default, with an optional *hybrid* mode that corroborates a code finding against a single benign live request.
+The **`codeaudit`** plugin is the white-box counterpart: a static source-code security audit framework. The `/codeaudit:codeaudit` command owns the run — a `code-recon` baseline, planning via the `audit-planner`, then parallel dispatch of **10 specialized auditor agents** across **10 OWASP vulnerability domains** (injection, XSS, auth, access control, SSRF, secrets, crypto, dependencies, configuration, logging) (plus a `code-recon` baseline and an `audit-planner`). It reads source and traces every source→sink path; static by default, with an optional *hybrid* mode that corroborates a code finding against a single benign live request.
 
 **Key principles:**
 - Human-in-the-loop at every escalation point — Claude cannot proceed to exploitation without your confirmation
@@ -190,6 +192,14 @@ Once active, the `oast` skill is mounted alongside the primary skill so injectio
 
 ---
 
+### /pentest:recon
+
+**Purpose:** Standalone reconnaissance — runs the full web-application-mapping (software catalog, directory scan, API discovery, JS/SPA route mapping with **interaction-driven data-POST capture**, surface synthesis) and **stops**. Writes the reusable recon baseline (`inventory/*.json`, `analysis/attack-surface.md`, `recon/recon-manifest.json`) so you can then unit-test each brick separately — each targeted command reuses it via its recon preflight.
+
+**Flow:** resolve target + authorization gate → auth/session choice (map authenticated surface vs public-only) → pre-flight (reachability + browser driver) → deploy the 5 inventory agents (incl. the `crawl.mjs` grid capture + param mining) → `inventory-surface-analyzer` writes the surface + `recon-manifest.json` → summary + hand-off to `/pentest:sql|xss|idor|ssrf`.
+
+---
+
 ### /pentest:idor
 
 **Purpose:** Targeted IDOR/BOLA/BFLA/BOPLA test on a single scope — deploys the `idor-bola-tester` agent directly (no recon/planner/quota loop). Adapts to however many identities you supply (0/1/2/N) and gates the verdict on the oracle strength (`200 ≠ BOLA`).
@@ -216,6 +226,14 @@ Once active, the `oast` skill is mounted alongside the primary skill so injectio
 **Purpose:** Targeted SQL/NoSQL injection test on a single scope — deploys the `injection-tester` agent (sqlmap + curl) directly (no full engagement). SQLi + NoSQLi operator injection + OS command injection, with a capability-aware recon preflight.
 
 **Flow:** resolve target + authorization gate → optional auth + parameters + DB type → recon preflight (api/param discovery) → plan confirmation → deploy `injection-tester` → summary + surface-coverage declaration.
+
+---
+
+### /pentest:ssrf
+
+**Purpose:** Targeted SSRF test on a single scope — deploys the `pentester-executor` agent (specialized for SSRF) directly (no full engagement). Traces URL/host/path params and URL-import features to server-side outbound requests; **confirms blind SSRF out-of-band via OAST** and checks cloud-metadata/internal reachability. Verdict bar: a 200 is not SSRF — proof is a server-issued callback, an internal/metadata response, or a deny-vs-fetch differential.
+
+**Flow:** resolve target + authorization gate → OAST collaborator (primary blind-confirm channel) → recon preflight (api/param discovery, URL-shaped params) → plan confirmation → deploy `pentester-executor` (SSRF) → summary + surface-coverage declaration.
 
 ---
 
@@ -455,6 +473,7 @@ Within each executor agent, a second approval gate exists between **Phase 2 (Exp
 | `inventory-api-discovery` | Discovers REST endpoints, GraphQL schemas, SOAP/WSDL, WebSockets, Swagger/OpenAPI/Postman docs. | Bash, Read, Write |
 | `inventory-javascript-mapper` | SPA route extraction via headless Playwright: React Router, Vue Router, Angular routes, AJAX endpoints invisible to static scanners. | Playwright MCP, Bash, Read, Write |
 | `inventory-surface-analyzer` | Synthesizes all four inventory agent outputs into a unified risk-tiered attack surface report + actionable testing checklist. Reads only — runs no scans. | Read, Write |
+| `crud-exerciser` | Authenticated interactive CRUD-exercise recon. Drives the app to discover and exercise state-changing forms, capturing the real write requests + created object IDs as seeds for BOLA (`idor-bola-tester`) and injection testing. Environment-gated (staging/dev only), creates only marker-tagged objects. Deployed by `/pentest:recon` when authorized. | Playwright MCP, Bash, Read, Write |
 
 ### Business-Logic Agents
 
@@ -714,7 +733,7 @@ claude-whitebox/
 │   └── pentest/
 │       ├── .claude-plugin/
 │       │   └── plugin.json          # Plugin metadata (MIT)
-│       ├── agents/                  # 18 agent .md files
+│       ├── agents/                  # 19 agent .md files
 │       ├── docs/
 │       │   ├── CLAUDE.md            # Agent architecture overview
 │       │   ├── WORKFLOWS.md         # Planning & approval workflow reference

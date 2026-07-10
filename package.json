@@ -1,0 +1,12 @@
+{
+  "name": "claude-whitebox",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Test harness for the claude-whitebox plugin marketplace (pentest / codeaudit / playwright). The plugins ship as prompts plus zero-dependency .mjs/.py tools; this root package only wires up their test suites — it is not published.",
+  "scripts": {
+    "test": "node --test $(find plugins -name '*.test.mjs' -not -path '*/node_modules/*')",
+    "test:py": "python3 plugins/pentest/skills/authenticating/tools/test_auth_tools.py",
+    "test:all": "npm test && npm run test:py"
+  },
+  "license": "MIT"
+}
