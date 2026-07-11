@@ -316,3 +316,31 @@ test('read-only discovery captures POST BODY params (nested json), not just quer
     assert.ok(gql.params.some((p) => p.name === 'page' && p.in === 'json'), 'top-level body param captured');
   } finally { server.close(); }
 });
+
+// review fix: a dead SPA/hash link (create-labelled, so sorted first) whose click doesn't change the URL used to
+// be re-selected every iteration, burning the whole --max-views budget so a real page behind it was never reached.
+function startDeadLinkServer() {
+  const hits = [];
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/') return html(res, page('<a href="#/new" onclick="return false">Create</a> <a href="/real">Real page</a>'));
+    if (u.pathname === '/real') return html(res, createForm('/api/real'));
+    if (req.method === 'POST' && u.pathname === '/api/real') { hits.push(1); res.writeHead(201, { 'Content-Type': 'application/json' }); return res.end('{"id":"r1"}'); }
+    res.writeHead(404); res.end('nope');
+  });
+  server._hits = hits;
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('a dead SPA/hash link does not starve navigation — a real page behind it is still reached (review fix)', async () => {
+  const server = await startDeadLinkServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--submit', '--marker', 'PENTEST-dl', '--max-views', '3'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.ok(server._hits.length >= 1, 'the /real create form was reached + submitted (not starved by the dead #/new link)');
+  } finally { server.close(); }
+});

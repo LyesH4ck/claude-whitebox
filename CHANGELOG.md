@@ -4,6 +4,25 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.35] + playwright [0.2.10] — 2026-07-11
+
+### Fixed — code-review of the 2.4.34 quick-wins (3 confirmed self-inflicted regressions)
+- **Dead-link navigation starvation.** After D3 admitted hash/relative links, a dead SPA link whose click doesn't
+  change the URL was never marked visited (only the *landed* page was), so it was re-selected every iteration and
+  burned the whole `--max-views` budget — the opposite of D3's depth goal. Now the nav target is marked visited
+  when SELECTED (a separate `processed` set dedups page-work), so a dead link is tried once and navigation moves on.
+- **`--owner` bypassed the `labelish` guard.** `crud-merge` trusted `act.owner` verbatim, so a descriptive
+  `--owner "alice (tenant 5)"` flowed into `run.mjs` where it never matches an identity label — silently degrading
+  every BOLA row to "AUTHZ?" (the exact failure D2 meant to fix). Both `act.owner` and `act.identity` are now
+  passed through `labelish`; a descriptive value degrades to null (safe fallback) instead of a false non-match.
+- **Param-inventory merge dropped params on collision.** The `${method} ${endpoint}` merge kept the first row, so a
+  widget-discovered param colliding with a crud CREATE on the same endpoint was dropped instead of unioned. The
+  merge (and the intra-batch `--widgets` append) now UNION params by `in:name`.
+- Tests: dead-link no-starvation, `--owner` labelish guard (descriptive→null / bare kept), widget↔crud param union.
+  65 `.mjs` tests green.
+
+---
+
 ## [2.4.34] + playwright [0.2.9] — 2026-07-11
 
 ### Fixed / Added — /pentest:crud crawler review quick-wins (stability · performance · depth · params)

@@ -200,12 +200,14 @@ try {
   const MAX_STEPS = +a['max-steps'];
   const DLG = '[role="dialog"]:visible, mat-dialog-container:visible, .modal:visible, .cdk-dialog-container:visible, .cdk-overlay-pane:visible';
   let processedForms = 0;
-  const visited = new Set();
+  const visited = new Set();     // routeKeys already SELECTED as a nav target OR landed on — nav dedup
+  const processed = new Set();   // routeKeys whose forms/widgets we've exercised — page-work dedup (distinct!)
   const pagesVisited = [];
 
   const visitAndExercise = async () => {
     const key = routeKey(page.url());
-    if (visited.has(key)) return;
+    if (processed.has(key)) return;   // dedup page WORK on `processed`, not `visited` — a pre-selected target
+    processed.add(key);               // key may already be in `visited`, but its page still needs exercising.
     visited.add(key);
     pagesVisited.push(page.url());
     await processFormsOnPage(page);
@@ -216,6 +218,10 @@ try {
   for (let i = 0; i < maxViews; i++) {                   // navigation budget = --max-views, independent of --max-forms
     const target = await nextNavTarget(page, visited);
     if (!target) break;
+    // Mark the target visited BEFORE navigating: a dead SPA/hash link whose click doesn't change the URL would
+    // otherwise never be marked (visitAndExercise records the landed page, not the target) and get re-selected
+    // every iteration, burning the whole --max-views budget on one dead link.
+    try { visited.add(routeKey(new URL(target, page.url()).href)); } catch { /* keep going */ }
     try {
       if (!(await navigateTo(page, target))) continue;
       await settle(page);
