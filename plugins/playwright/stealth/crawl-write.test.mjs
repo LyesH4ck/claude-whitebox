@@ -585,3 +585,216 @@ test('G5: a submit that fires no network write → intent_blocked (with reason),
     assert.ok(blocked.some((b) => /Missing Tax|Contact Info/i.test(b.reason || '')), `intent_blocked carries the toast reason (got ${JSON.stringify(blocked)})`);
   } finally { server.close(); }
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+// Patch #2 — adversarial-review correctness fixes (F1–F5). Each stub reproduces a downstream-poisoning defect
+// found by 3 independent reviewers of the G1–G6 patch. Red before the P0/P1/P2 fixes, green after.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// T-F1/F4 — a submit that fires ONLY a non-persistent write (a preview/validation 200, no object created) must
+// NOT be recorded as `created`; it must be `blocked`. (On the real app: preview-doc-definition / activity-log /
+// ag-grid count POSTs all return 200 but persist nothing.)
+function startPreviewOnlyServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>New invoice</h1>
+      <input name="ref" placeholder="ref">
+      <div id="toast" role="alert" style="display:none">Please complete the required fields</div>
+      <button id="go" class="btn-primary">Create</button>
+      <script>
+        document.getElementById('go').addEventListener('click',()=>{
+          document.getElementById('toast').style.display='block';
+          fetch('/api/v1/invoices/preview-doc-definition',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ref:document.querySelector('[name=ref]').value})}); /* preview only — persists NOTHING */
+        });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/api/v1/invoices/preview-doc-definition') {
+      server._writes.push({ path: u.pathname }); res.writeHead(200,{'Content-Type':'application/json'});
+      return res.end(JSON.stringify({ items: [], total: 0, owner: { id: 700123 } }));
+    }
+    res.writeHead(404); res.end('nope');
+  });
+  server._writes = [];
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-F1/F4: a preview/validation-only 200 (no persistence) is NOT a create — it is blocked', async () => {
+  const server = await startPreviewOnlyServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--submit', '--marker', 'PENTEST-fp', '--max-forms', '2'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.equal(out.totals.created, 0, `no create recorded for a preview-only submit (actions=${JSON.stringify(out.actions)})`);
+    assert.ok((out.actions || []).length === 0, 'actions[] empty');
+    assert.ok((out.blocked || []).length >= 1, `submit recorded as blocked (got ${JSON.stringify(out.blocked)})`);
+  } finally { server.close(); }
+});
+
+// T-F2 — the created id must be the REAL object id (top-level, not echoed), never the auth company/user id that
+// the response happens to echo back (owner.id = the JWT tenant/company id). Poisoning that into crud-merge would derive
+// a cross-tenant DELETE against the real company.
+function startEchoIdServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>New vendor</h1>
+      <input name="name" placeholder="name">
+      <button id="go" class="btn-primary">Create</button>
+      <script>
+        document.getElementById('go').addEventListener('click',()=>{
+          fetch('/api/v1/vendor',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({name:document.querySelector('[name=name]').value, company_id:700123})})
+            .then(r=>r.json()).then(j=>{document.title='ok';});
+        });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/api/v1/vendor') {
+      res.writeHead(201,{'Content-Type':'application/json'});
+      // owner.id echoes the request tenant id (700123); the REAL created id is data.id
+      return res.end(JSON.stringify({ owner: { id: 700123 }, data: { id: 'ven-4242', name: 'x' } }));
+    }
+    res.writeHead(404); res.end('nope');
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-F2: findId returns the real object id (data.id), never the echoed auth/tenant id (700123)', async () => {
+  const server = await startEchoIdServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--submit', '--marker', 'PENTEST-f2'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    const act = (out.actions || []).find((a) => a.request.path === '/api/v1/vendor');
+    assert.ok(act, 'the 201 create was captured');
+    assert.notEqual(act.created && act.created.id, '700123', 'the echoed tenant id must NOT become the object id');
+    assert.notEqual(act.created && act.created.id, 700123, 'the echoed tenant id (number) must NOT become the object id');
+  } finally { server.close(); }
+});
+
+// T-F3 — a parent create whose terminal action returns 500 must NOT re-click the sub-entity Saves on each retry
+// step (write amplification → many objects for one form). Each sub-Save fires exactly once.
+function startAmplifyServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>New invoice</h1>
+      <div class="card"><input placeholder="Buyer" aria-label="buyer"><button class="rowsave" data-k="buyer">Save</button></div>
+      <div class="row"><input placeholder="Item" aria-label="item"><button class="rowsave" data-k="line">Save</button></div>
+      <button id="create" class="btn-primary">Create Invoice</button>
+      <script>
+        function save(k){ if(k==='buyer') fetch('/vendor',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"n":1}'});
+          else fetch('/inventories/1',{method:'PUT',headers:{'Content-Type':'application/json'},body:'{"n":1}'}); }
+        document.querySelectorAll('.rowsave').forEach(b=>b.addEventListener('click',()=>save(b.getAttribute('data-k'))));
+        document.getElementById('create').addEventListener('click',()=>{ fetch('/sales',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/vendor') { server._c.vendor++; res.writeHead(201,{'Content-Type':'application/json'}); return res.end('{"data":{"id":"ven-1"}}'); }
+    if (req.method === 'PUT' && u.pathname === '/inventories/1') { server._c.inv++; res.writeHead(200,{'Content-Type':'application/json'}); return res.end('{"code":"00"}'); }
+    if (req.method === 'POST' && u.pathname === '/sales') { server._c.sales++; res.writeHead(500,{'Content-Type':'application/json'}); return res.end('{"error":{"message":"Whoops"}}'); }
+    res.writeHead(404); res.end('nope');
+  });
+  server._c = { vendor: 0, inv: 0, sales: 0 };
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-F3: a 500 terminal does NOT amplify sub-entity Saves — each fires exactly once (1 object/form)', async () => {
+  const server = await startAmplifyServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--submit', '--marker', 'PENTEST-f3', '--max-forms', '2'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.equal(server._c.vendor, 1, `buyer sub-Save fired exactly once (got ${server._c.vendor})`);
+    assert.equal(server._c.inv, 1, `line sub-Save fired exactly once (got ${server._c.inv})`);
+    assert.equal(out.totals.created, 0, 'the 500 terminal is not a create');
+  } finally { server.close(); }
+});
+
+// T-F7 — a poisoned first option that rejects via a multilingual negated-valid toast ("non valide") AND an
+// detected so the harness cycles to the valid option. (Generic multilingual negated-valid + inline validation.)
+function startInlineValidServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>Pick party</h1>
+      <div id="cb" role="combobox" tabindex="0">Select party</div>
+      <div id="lb" role="listbox" style="display:none">
+        <div role="option" data-ok="0">Party bad</div>
+        <div role="option" data-ok="1">Party good</div></div>
+      <input id="taxid" aria-label="tax id">
+      <div id="toast" role="alert" style="display:none">id non valide</div>
+      <button id="go" class="btn-primary" disabled>Create</button>
+      <script>
+        const go=document.getElementById('go'),toast=document.getElementById('toast'),taxid=document.getElementById('taxid');
+        document.getElementById('cb').addEventListener('click',()=>{document.getElementById('lb').style.display='block';});
+        document.querySelectorAll('[role=option]').forEach(o=>o.addEventListener('click',()=>{
+          document.getElementById('lb').style.display='none';
+          if(o.getAttribute('data-ok')==='1'){ toast.style.display='none'; taxid.removeAttribute('aria-invalid'); go.disabled=false; }
+          else { toast.style.display='block'; taxid.setAttribute('aria-invalid','true'); go.disabled=true; }
+        }));
+        go.addEventListener('click',()=>{ if(go.disabled) return;
+          fetch('/api/v1/vendor',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"ok":1}'}).then(r=>r.json()).then(()=>{document.title='ok';}); });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/api/v1/vendor') { server._w.push(1); res.writeHead(201,{'Content-Type':'application/json'}); return res.end('{"data":{"id":"v9"}}'); }
+    res.writeHead(404); res.end('nope');
+  });
+  server._w = [];
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-F7: detects a negated-valid toast (non valide) + inline aria-invalid and cycles to the valid option, then submits', async () => {
+  const server = await startInlineValidServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--submit', '--marker', 'PENTEST-f7', '--max-options', '3'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.equal(server._w.length, 1, 'submitted after cycling to the valid party (not stuck on the invalid one)');
+  } finally { server.close(); }
+});
+
+// T-bug3 — a LIST page with a visible search input + a "+Add" button that opens a dialog holding a typeahead
+// widget: the read-only pass must still open the dialog and discover the widget's ?keyword param.
+function startListSearchServer() {
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/') return html(res, page(`
+      <input id="search" type="search" placeholder="Search invoices">
+      <button id="add">Add invoice</button>
+      <div id="dlg" role="dialog" style="display:none">
+        <div id="combo" role="combobox">Select item</div>
+        <div id="olb" role="listbox" style="display:none"><input id="s2" placeholder="Search items by name"></div>
+      </div>
+      <script>
+        document.getElementById('add').addEventListener('click',()=>{document.getElementById('dlg').style.display='block';});
+        document.getElementById('combo').addEventListener('click',()=>{document.getElementById('olb').style.display='block';});
+        document.getElementById('s2').addEventListener('input',(e)=>{ fetch('/api/items?keyword='+encodeURIComponent(e.target.value)); });
+      </script>`));
+    if (u.pathname === '/api/items') { res.writeHead(200,{'Content-Type':'application/json'}); return res.end('[]'); }
+    res.writeHead(404); res.end('nope');
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-bug3: read-only pass opens the +Add dialog on a list-with-search page and discovers the widget ?keyword', async () => {
+  const server = await startListSearchServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--max-widgets', '4'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    const items = (out.param_inventory || []).find((e) => e.endpoint === '/api/items');
+    assert.ok(items && items.params.some((p) => p.name === 'keyword'), `widget ?keyword discovered behind +Add (got ${JSON.stringify(out.param_inventory)})`);
+  } finally { server.close(); }
+});

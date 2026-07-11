@@ -91,6 +91,12 @@ const cssAttr = (s) => String(s).replace(/["\\]/g, '\\$&');
 // Never follow a link that would end the session or mutate state by navigation alone.
 const AVOID_LINK = /\b(logout|log-out|signout|sign-out|deconnex|déconnex|disconnect|delete|remove|supprim|drop|revoke)\b/i;
 const CREATEISH_LINK = /(create|\/new\b|\/add\b|nouveau|ajouter|créer|creer|register|inscription)/i;
+// F7/G3 — a blocking error can surface as a toast OR inline validation. Multilingual: match "invalid"/"error"/…
+// AND a generic "<negation> … valid" (e.g. "not a valid", "non valide", "nicht gültig") — no single language hard-coded.
+// (Defined here, before the main top-level-await block, so the hoisted helpers below can use them without a TDZ error.)
+const BLOCKING_RE = /(error|invalid|missing|required|mandatory|must\s+be|failed|failure|wrong|incomplete|not\s+valid)/i;
+const NEG_VALID_RE = /\b(tidak|not|non|no|nicht|geen|pas|niet|belum|ne|nem|inte)\b(?:\s+\S+){0,3}\s+valid/i;
+const isBlockingText = (t) => !!t && (BLOCKING_RE.test(t) || NEG_VALID_RE.test(t));
 
 // ── field-compliant, marker-tagged value synthesis ──────────────────────────────────────────────────────
 const today = () => new Date().toISOString().slice(0, 10);
@@ -119,17 +125,46 @@ function synthValue(f, n, salt = 0) {
   // text / textarea / search / default — marker-tagged, boundary-safe
   return clip(`${MARKER}-${n}${salt ? '-' + salt : ''}`);
 }
-// recursive id finder for the create RESPONSE body
-function findId(obj, prefix = '') {
-  if (obj && typeof obj === 'object') {
-    for (const [k, v] of Object.entries(obj)) {
-      const p = prefix ? `${prefix}.${k}` : k;
-      if (/^(id|_id|uuid|pk|guid|slug)$/i.test(k) && (typeof v === 'string' || typeof v === 'number') && String(v)) return { id: String(v), id_field: p };
-      if (v && typeof v === 'object') { const r = findId(v, p); if (r) return r; }
+// F2 — extract the CREATED object's id from the response, robustly. The old version returned the FIRST id found
+// at ANY depth, so a response echoing `owner:{id:<company_id>}` yielded the auth principal's id — which
+// crud-merge then turned into a cross-tenant GET/PUT/DELETE corpus (a DELETE against the real company). Now:
+//   • prefer a TOP-LEVEL id, or one under a standard result wrapper (data/result/…), shallow-first;
+//   • NEVER descend into an auth-principal node (owner/user/company/tenant/…) to read an id;
+//   • REJECT any value echoed from the request body (an id the client itself sent back is not proof of a new object).
+const ID_KEY = /^(id|_id|uuid|pk|guid|slug)$/i;
+const WRAP_KEY = /^(data|result|results|payload|item|object|record|entity|created|resource|response)$/i;
+const AUTH_WRAP = /^(owner|user|users|company|companies|tenant|account|author|creator|created_?by|principal|actor|org|organization|profile|parent)$/i;
+function findId(obj, echo, prefix = '', depth = 0) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj) || depth > 4) return null;
+  // 1) an id key at THIS level, not echoed from the request
+  for (const [k, v] of Object.entries(obj)) {
+    if (ID_KEY.test(k) && (typeof v === 'string' || typeof v === 'number') && String(v)) {
+      const val = String(v);
+      if (!(echo && echo.has(val))) return { id: val, id_field: prefix ? `${prefix}.${k}` : k };
+    }
+  }
+  // 2) descend ONLY into standard result wrappers — never into an auth-principal node
+  for (const [k, v] of Object.entries(obj)) {
+    if (v && typeof v === 'object' && !Array.isArray(v) && WRAP_KEY.test(k) && !AUTH_WRAP.test(k)) {
+      const r = findId(v, echo, prefix ? `${prefix}.${k}` : k, depth + 1); if (r) return r;
     }
   }
   return null;
 }
+// values the client SENT (request body leaves) — a response id equal to one of these is an echo, not a new id.
+function collectEchoValues(reqBodyStr) {
+  const set = new Set();
+  if (!reqBodyStr) return set;
+  try {
+    (function walk(o) { if (o == null) return; if (typeof o === 'object') { for (const v of Object.values(o)) walk(v); } else set.add(String(o)); })(JSON.parse(reqBodyStr));
+  } catch { for (const kv of String(reqBodyStr).split('&')) { const v = kv.split('=')[1]; if (v) { try { set.add(decodeURIComponent(v)); } catch { set.add(v); } } } }
+  return set;
+}
+// F1 — path fragments that denote a NON-persistent write (preview / validation / telemetry / list-read POST).
+// Token-matched (split on /-_.) so `preview-doc-definition`, `create-activity-log`, `.../count` are caught while
+// `/accounts` (contains "count" as a substring) is NOT. A write to such a path never counts as a create.
+const NON_PERSIST_TOKENS = new Set(['preview','validate','validation','validations','check','checks','activity','analytics','telemetry','search','autocomplete','typeahead','suggest','suggestion','suggestions','count','list','listing','export','download','log','logs','logging','track','tracking','trace','metric','metrics','ping','heartbeat','health']);
+const isNonPersistPath = (pathname) => String(pathname).toLowerCase().split(/[/\-_.]+/).filter(Boolean).some((t) => NON_PERSIST_TOKENS.has(t));
 function idFromLocation(loc) { if (!loc) return null; const seg = String(loc).split('?')[0].replace(/\/$/, '').split('/').pop(); return seg && /[0-9a-f-]{2,}/i.test(seg) ? { id: seg, id_field: 'Location' } : null; }
 
 // ── DOM introspection: enumerate a form's fillable named fields (runs in the page) ───────────────────────
@@ -224,8 +259,12 @@ try {
     } catch { /* ignore */ }
   });
 
-  // a write "landed" = a non-GET/HEAD in-scope response — used to await each create / sub-entity commit.
+  // a write "landed" = a non-GET/HEAD in-scope response — used to await each sub-entity commit.
   const writePredicate = (r) => { try { const rq = r.request(); return rq.method() !== 'GET' && rq.method() !== 'HEAD' && inScope(new URL(rq.url()).hostname.toLowerCase()); } catch { return false; } };
+  // F1 — a candidate CREATE write: a POST/PUT/PATCH to an in-scope PERSISTING path (not a preview/validation/
+  // telemetry/list-read POST). Waiting on THIS (not any write) means a preview/activity-log 200 never satisfies
+  // the create wait and get mis-recorded as a create.
+  const mutationWritePredicate = (r) => { try { const rq = r.request(); if (!/^(POST|PUT|PATCH)$/i.test(rq.method())) return false; const u = new URL(rq.url()); return inScope(u.hostname.toLowerCase()) && !isNonPersistPath(u.pathname); } catch { return false; } };
 
   const page = await ctx.newPage();
   await page.goto(a.url, { waitUntil: 'domcontentloaded', timeout }).catch(() => {});
@@ -380,7 +419,7 @@ try {
           if (!(await opt.isVisible().catch(() => false))) continue;
           await opt.click({ timeout: 1500 }).catch(() => {});
           await settle(pg);
-          if (await hasBlockingError(pg)) { await c.click({ timeout: 1000 }).catch(() => {}); await settle(pg); continue; }
+          if (await hasBlockingError(pg, scopeLoc)) { await c.click({ timeout: 1000 }).catch(() => {}); await settle(pg); continue; }
           picked = true;
         }
         if (!picked) await pg.keyboard.press('Escape').catch(() => {});
@@ -423,36 +462,44 @@ try {
       await fillWidgets(scopeLoc, pg);
       const submitLoc = await pickSubmit(scopeLoc, isDialog);
       // G4 — a parent create form can hold sub-entities that each persist via their OWN Save (e.g. a related-party
-      // sub-form → its POST, each line-item row → its PUT); the parent may stay incomplete until they commit. Click
-      // those per-card/row Saves in DOM order BEFORE the parent's terminal action — their writes are captured by the
-      // session listener. Fully generic: keyed on create-hint buttons inside repeated containers, no app-specific name.
-      await commitSubEntities(scopeLoc, pg, submitLoc);
+      // sub-form → its POST, each line-item row → its PUT). Commit them in DOM order BEFORE the parent's terminal
+      // action. F3 — run this ONCE per form (step 0 only); re-running it on each validation-retry step (or on a
+      // terminal ≥400) re-clicked the sub-Saves → many objects for one form. Enforces the "1 object/form" cap.
+      if (step === 0) await commitSubEntities(scopeLoc, pg, submitLoc);
       if (!submitLoc) break;
       clickedSubmit = true;
       const [resp] = await Promise.all([
-        // a create POST fires within a few seconds of the click; keep this short so a multi-step wizard doesn't
-        // burn the full timeout per non-final step (a "Next" fires no write and we want to advance quickly).
-        pg.waitForResponse(writePredicate, { timeout: Math.min(timeout, 5000) }).catch(() => null),
+        // wait for a CANDIDATE-CREATE write (persisting POST/PUT/PATCH), not any write — a preview/validation/
+        // telemetry 200 must not satisfy this and be mis-recorded as a create.
+        pg.waitForResponse(mutationWritePredicate, { timeout: Math.min(timeout, 5000) }).catch(() => null),
         submitLoc.click({ timeout: 3000 }).catch(() => {}),
       ]);
       await settle(pg);
       if (resp) {
         const rq = resp.request(); const status = resp.status(); const u = new URL(rq.url());
-        // G5 — a real create is a 2xx write. A 4xx/5xx is NOT a create: retry earlier steps, else stop (the
-        // session listener already logged it as a finding) and fall through to the blocked-record below.
-        if (status >= 400) { if (step < MAX_STEPS - 1) continue; break; }
+        // A 4xx is a client/validation error → retry earlier steps with fresh values; a 5xx is a server error →
+        // stop (retry is pointless, and re-clicking would amplify). Never a create.
+        if (status >= 400) { if (status < 500 && step < MAX_STEPS - 1) continue; break; }
         const bodyText = await resp.text().catch(() => '');
-        let body; try { body = rq.postData() ? JSON.parse(rq.postData()) : undefined; } catch { body = rq.postData() || undefined; }
+        const reqBodyStr = (() => { try { return rq.postData() || ''; } catch { return ''; } })();
+        const echo = collectEchoValues(reqBodyStr);
+        let body; try { body = reqBodyStr ? JSON.parse(reqBodyStr) : undefined; } catch { body = reqBodyStr || undefined; }
         let respJson; try { respJson = JSON.parse(bodyText); } catch { respJson = null; }
-        const created = findId(respJson, '') || idFromLocation(resp.headers()['location']) || idFromUrlChange(pg.url(), u.pathname) || {};
-        if (resp.headers()['location'] && !created.location) created.location = resp.headers()['location'];
+        const loc = resp.headers()['location'];
+        const idInfo = findId(respJson, echo, '') || idFromLocation(loc) || idFromUrlChange(pg.url(), u.pathname);
+        // F1 — a REAL create needs a POSITIVE persistence signal: HTTP 201, a Location header, a URL change to a
+        // detail route, or a NON-echoed id in the response. A bare 200 with none of these is a preview/no-op →
+        // fall through to `blocked`, never a phantom `created`.
+        if (!(status === 201 || !!loc || !!idInfo)) break;
+        const created = idInfo || {};
+        if (loc && !created.location) created.location = loc;
         actions.push({ resource, action: 'create', owner: a.owner || null, identity: a.owner || null, marker: `${MARKER}-${resource}-1`, ui_route: routeOf(pg.url()),
           request: { method: rq.method(), host: u.hostname, path: u.pathname, content_type: (rq.headers()['content-type'] || '').split(';')[0] || null, body },
           created: Object.keys(created).length ? created : undefined, response_status: status, fields: filledFields, steps: step + 1 });
         return true;
       }
-      // no write fired: a "Next" may have advanced the wizard, or validation blocked. If fillable controls
-      // remain in scope, loop (complete the next step); otherwise give up on this form.
+      // no candidate-create write fired: a "Next" may have advanced the wizard, or validation blocked. If fillable
+      // controls remain in scope, loop (complete the next step); otherwise give up on this form.
       if (!((await scopeLoc.locator('input, select, textarea, [role="combobox"], mat-select').count().catch(() => 0)) > 0)) break;
     }
     // G5 — state-delta oracle: we clicked a submit but NO 2xx create landed (a client no-op, an Rp-0/empty total,
@@ -479,7 +526,19 @@ try {
                        ((await h.getAttribute('aria-label').catch(() => '')) || '')).trim();
         if (!CREATE_HINT.test(label) || CANCEL_BACK.test(label) || DESTRUCTIVE.test(label)) continue;
         if (submitHandle && (await h.evaluate((el, s) => el === s, submitHandle).catch(() => false))) continue;  // not the parent submit
-        if (!(await h.evaluate((el) => !!el.closest('[class*="card"],[class*="row"],[class*="line"],[class*="item"],li,tr')).catch(() => false))) continue;
+        // G4-sel — the Save must live in a genuine REPEATED sub-container (a card/row/line/item, li, tr). Match by
+        // WORD, not substring: `[class*="item"]` wrongly matched Tailwind `items-center`, `row`→`ag-row`,
+        // `line`→`inline`. And the sub-container must NOT contain the parent's terminal submit — otherwise it is
+        // the whole form region, and clicking its "create-hint" button here would fire the parent create early.
+        const okContainer = await h.evaluate((el, submitEl) => {
+          const RE = /\b(card|row|line|item|entry)\b/i;
+          for (let n = el.parentElement; n; n = n.parentElement) {
+            const isRep = n.tagName === 'LI' || n.tagName === 'TR' || RE.test(n.getAttribute('class') || '');
+            if (isRep) return !(submitEl && n.contains(submitEl));   // a real sub-region does not hold the parent submit
+          }
+          return false;
+        }, submitHandle).catch(() => false);
+        if (!okContainer) continue;
         await Promise.all([
           pg.waitForResponse(writePredicate, { timeout: Math.min(timeout, 4000) }).catch(() => null),
           h.click({ timeout: 2500 }).catch(() => {}),
@@ -534,8 +593,10 @@ try {
         if (!(await t.isVisible().catch(() => false))) continue;
         await t.click({ timeout: 1500 });
         await settle(pg);
-        // 1) typeahead: a search input revealed in the open overlay → type a probe (captures ?keyword=…)
-        const search = pg.locator('.cdk-overlay-container input, [role="listbox"] input, [role="dialog"] input[placeholder*="search" i], input[placeholder*="find" i], input[placeholder*="search" i]').first();
+        // 1) typeahead: a search input revealed in the open OVERLAY → type a probe (captures ?keyword=…). Scope to
+        // the overlay/dialog/listbox/menu (NOT page-wide): an unscoped `input[placeholder*=search]` let `.first()`
+        // grab a LIST page's own search box (bug#3) and type into the wrong field, firing nothing.
+        const search = pg.locator('.cdk-overlay-container input, .cdk-overlay-pane input, [role="listbox"] input, [role="dialog"] input, .v-menu__content input, .v-overlay__content input').first();
         if ((await search.count().catch(() => 0)) && (await search.isVisible().catch(() => false))) {
           await search.pressSequentially('a', { timeout: 1500 }).catch(() => {});
           await settle(pg);
@@ -558,10 +619,14 @@ try {
     }
   }
   async function openAddDialogs(pg) {
-    // If a form-region is already visible — native fillable fields OR a custom widget (combobox/mat-select) — do
-    // NOT click create-hint buttons: one of them is likely the region's OWN submit, and clicking it here would fire
-    // a stray/duplicate write. Add-dialog openers only matter on a list page where the create form isn't present yet.
-    if ((await introspectFields(pg, null)).length) return;
+    // If a CREATE form-region is already visible — NON-search fillable fields, or a custom widget (combobox/
+    // mat-select) — do NOT click create-hint buttons: one of them is likely the region's OWN submit, and clicking
+    // it here would fire a stray/duplicate write. bug#3 — a lone *search* box on a LIST page must NOT count as a
+    // form-region (else the "+Add" dialog is never opened and its inner widgets/params go undiscovered), so
+    // search-like fields are excluded from the guard.
+    const SEARCHISH = /search|find|filter|query|lookup|recherche|cari|cerca|buscar/i;
+    const visibleFields = await introspectFields(pg, null);
+    if (visibleFields.some((f) => !(SEARCHISH.test(f.name || '') || f.type === 'search'))) return;
     if (await pg.locator('[role="combobox"]:visible, mat-select:visible, [aria-haspopup="listbox"]:visible').count().catch(() => 0)) return;
     const btns = pg.locator('button, [role="button"]');
     const n = Math.min(await btns.count().catch(() => 0), 15);
@@ -619,11 +684,19 @@ async function readToast(page) {
     });
   } catch { return null; }
 }
-// G3 — is a BLOCKING (error) message showing? A validation/rejection toast means the current option/values are
-// bad; the caller should try the next option rather than stop at the first (the poisoned-first-option failure).
-async function hasBlockingError(page) {
-  const t = await readToast(page);
-  return !!t && /\b(error|invalid|missing|required|must|gagal|failed|whoops|wrong|not\s*valid|incomplete|belum|wajib)\b/i.test(t);
+// F7/G3 — a blocking error can surface as a toast OR as INLINE validation (aria-invalid, a Vuetify/Material
+// error alert, an error helper-text). (BLOCKING_RE/NEG_VALID_RE/isBlockingText live near the top — TDZ safety.)
+async function hasBlockingError(page, scopeLoc) {
+  const t = await readToast(page);                    // 1) a blocking toast/snackbar/alert
+  if (isBlockingText(t)) return true;
+  const scope = scopeLoc || page;                     // 2) inline validation within the form scope
+  try {
+    if (await scope.locator('[aria-invalid="true"]:visible').count().catch(() => 0)) return true;
+    const alerts = scope.locator('.v-alert:visible, .v-messages__message:visible, .mat-error:visible, [class*="error"]:visible, [class*="invalid-feedback"]:visible');
+    const n = Math.min(await alerts.count().catch(() => 0), 6);
+    for (let i = 0; i < n; i++) { const tx = ((await alerts.nth(i).textContent().catch(() => '')) || '').trim(); if (isBlockingText(tx)) return true; }
+  } catch { /* ignore */ }
+  return false;
 }
 // G1 — collect ALL navigable in-scope routes from the current page. Harvests BEYOND `a[href]`: SPA/micro-frontend
 // nav lives in framework attributes (routerlink, data-href/route/to) and clickable launcher tiles (role=link),

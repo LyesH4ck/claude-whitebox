@@ -4,6 +4,40 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.38] + playwright [0.2.12] — 2026-07-11
+
+### Fixed — crawl-write.mjs patch #2: adversarial-review correctness fixes (F1–F5)
+A 3-reviewer adversarial review of the G1–G6 patch found **3 critical correctness defects** that poison the
+downstream testers (idor-bola / injection) with phantom, wrong, or duplicated seeds, plus robustness gaps. Each
+fix is red-before/green-after tested; genericity preserved. See `stealth/PATCH-NOTES-2.md`.
+
+- **F1/F4 [CRITICAL] — G5 was not a persistence oracle.** It recorded a create on the FIRST 2xx non-GET write, so
+  a preview/validation/telemetry 200 (or an ag-grid `count` POST) became a false `created` and `blocked` was
+  unreachable. Now waits for a **candidate-create** write (`mutationWritePredicate` = POST/PUT/PATCH to a
+  non-denylisted path) and requires a **positive persistence signal** (201 / `Location` / URL→detail / non-echoed
+  response id) — else `blocked` with the read reason. Generic token denylist for non-persistent paths.
+- **F2 [CRITICAL] — `findId` picked the wrong id.** It returned the first id at any depth, so `owner:{id:<company>}`
+  yielded the auth principal id → crud-merge derived a cross-tenant GET/PUT/**DELETE** corpus. Now prefers a
+  top-level (or `data`/`result`-wrapped) id, never descends into an auth-principal node, and rejects any value
+  echoed from the request body.
+- **F3 [CRITICAL] — G4 amplified writes.** `commitSubEntities` ran every step + a terminal ≥400 re-looped → sub-Saves
+  clicked up to 4× (many objects/form). Now runs once per form (step 0); 4xx retries the parent only, 5xx stops.
+- **G4-sel [MEDIUM]** — sub-entity container matched by word boundary (`\b(card|row|line|item|entry)\b`, not
+  `[class*=]` which hit Tailwind `items-center`/`ag-row`/`inline`) and must not contain the parent submit.
+- **F7/G3 [MEDIUM]** — blocking detection now covers a multilingual `<negation> … valid` (e.g. "non valide") AND
+  inline validation (`aria-invalid`, `.v-alert`/`.mat-error`/error helper-text), not just an `invalid` toast.
+- **bug#3 [MEDIUM]** — read-only discovery: the `openAddDialogs` guard ignores search-like fields (a list page's
+  search box no longer blocks the +Add dialog), and the typeahead probe is scoped to the open overlay (an unscoped
+  `input[placeholder*=search]` was typing into the page's own list-search box).
+- **F5 [MEDIUM]** — `crud-merge.mjs` gains `--session-writes`: the intermediate/nested writes (`session_writes[]`)
+  are seeded as extra BOLA/BOPLA requests, mutation-filtered (telemetry/preview/count/non-2xx/GET dropped);
+  `actions[]` stays the primary source. `crud-exerciser.md` passes it and documents the new oracle.
+- Fixed a latent TDZ bug (blocking-regex consts moved above the top-level-await block). Tests: +5 harness gap tests
+  + F5 merge test; all suites green (stealth 23, crud-merge 8). **Authenticated live re-benchmark NOT run — the
+  provided cookie is expired; a fresh operator cookie is required to re-validate the authenticated nested flow.**
+
+---
+
 ## [2.4.37] + playwright [0.2.11] — 2026-07-11
 
 ### Fixed / Added — crawl-write.mjs SPA / micro-frontend nested-form support (G1–G6)
