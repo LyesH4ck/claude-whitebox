@@ -4,6 +4,35 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.34] + playwright [0.2.9] — 2026-07-11
+
+### Fixed / Added — /pentest:crud crawler review quick-wins (stability · performance · depth · params)
+From a multi-agent review of the whole `/pentest:crud` pathway (36 challenge-verified findings). The quick-wins pack:
+- **D1 [depth/params, flagship] — capture request BODY params, not just query.** The read-side listener recorded
+  only `{method,host,path,query}`, and the widget inventory hard-coded `in:'query'` — so ALL body params (nested
+  JSON, GraphQL `variables`, form) were dropped, and body-only endpoints were filtered out entirely. It is the
+  only param artifact produced in the default (dry-run) mode. Now captures `req.postData()`, folds JSON leaves via
+  `flattenParams` (`in:json`) / form keys (`in:form`), keys endpoints by `normPath`, and dedups by
+  `bodySignature` — reusing the vendored `op-signature.mjs` kernel (D6/D7). Typeahead-POST / ag-grid / GraphQL
+  params are now inventoried.
+- **D2 [params] — `--owner <label>`.** `owner` was hard-coded `null`, silently disabling the crud→idor BOLA
+  foreign-data oracle (`run.mjs` gates it on a real owner). The tool now stamps `--owner` on every action/intent.
+- **C1 [depth] — decoupled `--max-forms` from navigation.** `processedForms` was incremented on EVERY page
+  (incl. formless), capping the crawl at ~6 views regardless of `--max-views=15`. Now `--max-forms` bounds
+  submissions only (a page counts only if a form did real work); navigation is bounded by `--max-views`.
+- **D3 [depth] — hash-router SPAs no longer collapse to one page.** `routeKey` used pathname only, so `/#/vendors`
+  and `/#/customers` shared key `/` → the crawl stopped after one page. `routeKey` now includes a route hash
+  (`#/…`), and `nextNavTarget` no longer pre-drops relative/hash hrefs (scope is checked on the resolved URL).
+- **B1 [performance] — bounded `settle()`.** `networkidle(3000)+400ms` × ~80 widget settles/page made the crawl
+  look stuck on chatty SPAs. Now `networkidle(800)+250ms` (a debounced typeahead XHR still dispatches in-window).
+- **D4 [params plumbing] — `crud-merge --widgets <file>`.** The `widget-param-inventory.json` (produced even in
+  dry-run) had no deterministic consumer. `crud-merge` now merges it (and runs without `--crud`).
+- **D9 — fixed the dead `num()` ternary** (both branches returned `v`, so `salt` never varied a numeric field on retry).
+- Tests: body-param (nested JSON `in:json`) capture, `--owner` stamping, `crud-merge --widgets` merge + the
+  no-args error. 62 `.mjs` tests green.
+
+---
+
 ## playwright [0.2.8] — 2026-07-11
 
 ### Fixed

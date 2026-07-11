@@ -261,7 +261,7 @@ test('armed: opens dialog → fills custom widget → advances a step → submit
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
     const { stdout } = await execFileP(process.execPath,
-      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--submit', '--marker', 'PENTEST-flow', '--max-steps', '4'],
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--submit', '--marker', 'PENTEST-flow', '--owner', 'A', '--max-steps', '4'],
       { maxBuffer: 32 * 1024 * 1024 });
     const out = JSON.parse(stdout.trim());
     assert.equal(out.ok, true);
@@ -276,5 +276,43 @@ test('armed: opens dialog → fills custom widget → advances a step → submit
     const act = out.actions.find((a) => a.request.path === '/api/sales');
     assert.ok(act, 'create captured');
     assert.ok(act.steps >= 2, `multi-step completion recorded (steps=${act && act.steps})`);
+    assert.equal(act.owner, 'A', '--owner stamped on the action (feeds the BOLA oracle)');
+  } finally { server.close(); }
+});
+
+// D1: body params. A POST typeahead / GraphQL-style search echoes its term into the JSON BODY (not the query
+// string). The read-only discovery must inventory those body params (in:json), incl. nested ones — the injection
+// surface a query-only capture drops entirely.
+function startBodyParamServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/') return html(res, page(`
+      <div id="cb" role="combobox" onclick="document.getElementById('lb').style.display='block'">Search</div>
+      <div id="lb" role="listbox" style="display:none"><input id="s" placeholder="Search items"></div>
+      <script>
+        document.getElementById('s').addEventListener('input', (e) => {
+          fetch('/api/graphql', { method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ query:'q', variables:{ filter:{ keyword: e.target.value } }, page:1 }) });
+        });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/api/graphql') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('{}'); }
+    res.writeHead(404); res.end('nope');
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('read-only discovery captures POST BODY params (nested json), not just query (D1)', async () => {
+  const server = await startBodyParamServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--max-widgets', '3'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    const gql = (out.param_inventory || []).find((e) => e.endpoint === '/api/graphql');
+    assert.ok(gql, `POST /api/graphql inventoried despite no query params (got ${JSON.stringify(out.param_inventory)})`);
+    assert.ok(gql.params.some((p) => p.name === 'variables.filter.keyword' && p.in === 'json'), 'nested body param captured as in:json');
+    assert.ok(gql.params.some((p) => p.name === 'page' && p.in === 'json'), 'top-level body param captured');
   } finally { server.close(); }
 });

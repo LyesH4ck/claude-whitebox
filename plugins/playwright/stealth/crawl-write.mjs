@@ -30,6 +30,7 @@ import { parseArgs } from 'node:util';
 import { mkdir, writeFile, access } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bodySignature, flattenParams, normPath } from './op-signature.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const emit = (o) => process.stdout.write(JSON.stringify(o, null, 2) + '\n');
@@ -42,6 +43,7 @@ try {
   ({ values: a } = parseArgs({ allowNegative: true, options: {
     url:      { type: 'string' },
     marker:   { type: 'string' },
+    owner:    { type: 'string' },   // identity label to stamp on captured creates (feeds the BOLA oracle via crud-merge)
     scope:    { type: 'string' },
     state:    { type: 'string' },
     cookie:   { type: 'string' },
@@ -98,9 +100,11 @@ function synthValue(f, n, salt = 0) {
   const tag = f.tag;
   const clip = (s) => (f.maxlength && f.maxlength > 0 ? s.slice(0, f.maxlength) : s);
   const num = () => {
-    let v = Number.isFinite(f.min) ? f.min : 1;
-    if (Number.isFinite(f.max) && v > f.max) v = f.max;
-    return String(v + salt >= (Number.isFinite(f.max) ? f.max : Infinity) ? v : v);
+    // vary with salt (the retry/step index) so a unique-constrained numeric field gets a fresh value on retry,
+    // while staying within [min, max]. (The old ternary returned v on both branches → salt was dead.)
+    let v = (Number.isFinite(f.min) ? f.min : 1) + salt;
+    if (Number.isFinite(f.max)) v = Math.min(v, f.max);
+    return String(v);
   };
   if (t === 'email' || /e-?mail/.test(name)) return `${MARKER}+${n}${salt || ''}@example.com`;
   if (t === 'number' || t === 'range' || /(amount|price|qty|quantity|count|total|number|montant|prix)/.test(name)) return num();
@@ -162,9 +166,10 @@ try {
   for (const h of (a.header || [])) { const i = h.indexOf(':'); if (i > 0) extraHeaders[h.slice(0, i).trim()] = h.slice(i + 1).trim(); }
   const ctx = await newStealthContext(browser, { insecure: a.insecure, viewport, storageState: a.state || undefined, extraHeaders: Object.keys(extraHeaders).length ? extraHeaders : undefined });
 
-  // Read-only data-request capture (for widget/typeahead param discovery): record in-scope XHR/fetch with their
-  // query params, deduped. A dropdown search (?keyword=…) or an option selection (?name=…) becomes an
-  // inventoried, testable parameter here — the surface a native-<select> scrape and a path-crawl both miss.
+  // Read-only data-request capture (for widget/typeahead param discovery): record in-scope XHR/fetch WITH their
+  // request BODY, deduped by operation signature. A dropdown search (?keyword=…), an option select (?name=…),
+  // OR a POST-body param (typeahead POST, ag-grid filterModel.keyword, GraphQL variables) becomes an inventoried,
+  // testable parameter here — the injection surface a native-<select> scrape and a path-crawl both miss.
   const captured = [];
   const seenReq = new Set();
   ctx.on('request', (req) => {
@@ -172,9 +177,12 @@ try {
       if (!['xhr', 'fetch'].includes(req.resourceType())) return;
       const u = new URL(req.url());
       if (!inScope(u.hostname.toLowerCase())) return;
-      const key = req.method() + ' ' + u.host + u.pathname + u.search;
+      const post = req.postData() || null;
+      // dedup by operation signature (method + normalized path + body shape + query) — the same canonical kernel
+      // the recon crawler uses, so filter/sort variants of one grid POST stay distinct while pagination collapses.
+      const key = bodySignature(req.method(), normPath(u.pathname), post, u.search);
       if (seenReq.has(key)) return; seenReq.add(key);
-      captured.push({ method: req.method(), host: u.hostname, path: u.pathname, query: u.search });
+      captured.push({ method: req.method(), host: u.hostname, path: u.pathname, query: u.search, post_data: post });
     } catch { /* ignore */ }
   });
 
@@ -205,7 +213,7 @@ try {
   };
 
   await visitAndExercise();                              // start page
-  for (let i = 0; i < maxViews && processedForms < maxForms; i++) {
+  for (let i = 0; i < maxViews; i++) {                   // navigation budget = --max-views, independent of --max-forms
     const target = await nextNavTarget(page, visited);
     if (!target) break;
     try {
@@ -215,16 +223,24 @@ try {
     } catch { /* stale/blocked link — keep going */ }
   }
 
-  // ── widget/typeahead discovery → param inventory (query params on the captured data endpoints) ──
+  // ── widget/typeahead discovery → param inventory (query AND body params, normalized-path keyed) ──
+  const safeDecode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
   const epMap = new Map();
   for (const r of captured) {
-    const k = `${r.host} ${r.method} ${r.path}`;
-    if (!epMap.has(k)) epMap.set(k, { host: r.host, method: r.method, path: r.path, params: new Set() });
-    if (r.query) for (const key of new URLSearchParams(r.query).keys()) epMap.get(k).params.add(key);
+    const np = normPath(r.path);                          // /api/vendors/42/x → /api/vendors/{id}/x (dedup)
+    const k = `${r.host} ${r.method} ${np}`;
+    if (!epMap.has(k)) epMap.set(k, { host: r.host, method: r.method, path: np, params: new Set() });
+    const e = epMap.get(k);
+    if (r.query) for (const key of new URLSearchParams(r.query).keys()) e.params.add('query:' + key);
+    if (r.post_data) {                                    // BODY params — json leaves (nested) or form keys
+      try { const j = JSON.parse(r.post_data); const s = new Set(); flattenParams(j, '', s); for (const p of s) e.params.add('json:' + p); }
+      catch { for (const kv of r.post_data.split('&')) if (kv.split('=')[0]) e.params.add('form:' + safeDecode(kv.split('=')[0])); }
+    }
   }
   const discovered = [...epMap.values()].map((e) => ({ host: e.host, method: e.method, path: e.path, params: [...e.params] }));
   const paramInv = discovered.filter((e) => e.params.length)
-    .map((e) => ({ endpoint: e.path, method: e.method, host: e.host, params: e.params.map((name) => ({ name, in: 'query', sample: null })) }));
+    .map((e) => ({ endpoint: e.path, method: e.method, host: e.host,
+      params: e.params.map((p) => { const [loc, ...rest] = p.split(':'); return { name: rest.join(':'), in: loc, sample: null }; }) }));
 
   emitOut.totals = { pages_visited: pagesVisited.length, forms_processed: processedForms, created: actions.length,
     dry_run_intents: intents.length, data_endpoints: discovered.length, param_endpoints: paramInv.length };
@@ -236,7 +252,9 @@ try {
   async function processFormsOnPage(pg) {
     const n = await pg.locator('form').count().catch(() => 0);
     const useN = n > 0 ? n : 1;                          // formless SPA page → treat the page as one pseudo-form
-    for (let fi = 0; fi < useN && processedForms < maxForms; fi++) { await processForm(pg, n > 0 ? fi : null); processedForms++; }
+    // --max-forms bounds SUBMISSIONS, not page visits: only count a form that did REAL work (had fields / a
+    // dialog to complete) — so a formless dashboard never burns the budget before we reach a real create form.
+    for (let fi = 0; fi < useN && processedForms < maxForms; fi++) { if (await processForm(pg, n > 0 ? fi : null)) processedForms++; }
   }
   emitOut.actions = actions;
   if (!armed) emitOut.intents = intents;
@@ -294,15 +312,15 @@ try {
     else scopeLoc = pg;
     const scopeEl = async () => (scopeLoc === pg ? null : await scopeLoc.elementHandle().catch(() => null));
     const fields0 = await introspectFields(pg, await scopeEl());
-    if (!fields0.length && !(armed && (await scopeLoc.locator('[role="combobox"], mat-select').count().catch(() => 0)))) return;
+    if (!fields0.length && !(armed && (await scopeLoc.locator('[role="combobox"], mat-select').count().catch(() => 0)))) return false;
     const resource = guessResource(pg.url(), fields0);
     const filledFields = [];
 
     if (!armed) {   // dry-run: preview native fields, submit NOTHING (widget discovery runs read-only elsewhere)
       await fillFields(scopeLoc, fields0, 0, filledFields);
-      intents.push({ resource, ui_route: routeOf(pg.url()), owner: null, marker: `${MARKER}-${resource}-1`,
+      intents.push({ resource, ui_route: routeOf(pg.url()), owner: a.owner || null, marker: `${MARKER}-${resource}-1`,
         fields: filledFields, planned_values: fields0.map((f, i) => ({ name: f.name, value: synthValue(f, i + 1, 0) })) });
-      return;
+      return true;
     }
 
     // ARMED — complete the form like a user testing it, WITHIN the dialog scope: fill native fields + drive
@@ -330,15 +348,16 @@ try {
         let respJson; try { respJson = JSON.parse(bodyText); } catch { respJson = null; }
         const created = findId(respJson, '') || idFromLocation(resp.headers()['location']) || idFromUrlChange(pg.url(), u.pathname) || {};
         if (resp.headers()['location'] && !created.location) created.location = resp.headers()['location'];
-        actions.push({ resource, action: 'create', owner: null, identity: null, marker: `${MARKER}-${resource}-1`, ui_route: routeOf(pg.url()),
+        actions.push({ resource, action: 'create', owner: a.owner || null, identity: a.owner || null, marker: `${MARKER}-${resource}-1`, ui_route: routeOf(pg.url()),
           request: { method: rq.method(), host: u.hostname, path: u.pathname, content_type: (rq.headers()['content-type'] || '').split(';')[0] || null, body },
           created: Object.keys(created).length ? created : undefined, response_status: status, fields: filledFields, steps: step + 1 });
-        return;
+        return true;
       }
       // no write fired: a "Next" may have advanced the wizard, or validation blocked. If fillable controls
       // remain in scope, loop (complete the next step); otherwise give up on this form.
       if (!((await scopeLoc.locator('input, select, textarea, [role="combobox"], mat-select').count().catch(() => 0)) > 0)) break;
     }
+    return true;   // did real work (filled a form) even if no write fired
   }
 
   async function labelOf(loc) {
@@ -437,8 +456,12 @@ process.exit(emitOut.ok ? 0 : 1);
 
 // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────────
 async function settle(page) {
-  await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
-  await page.waitForTimeout(400);
+  // bounded-adaptive: return as soon as the network is quiet, but CAP the wait — networkidle can NEVER fire on a
+  // chatty SPA (SSE / long-poll / heartbeat), and a flat ~3.4s × ~80 widget settles/page made the crawl look
+  // stuck. The short tail still lets a debounced typeahead XHR (~200-500ms) dispatch (the listener records at
+  // dispatch, so we don't need to wait for the response).
+  await page.waitForLoadState('networkidle', { timeout: 800 }).catch(() => {});
+  await page.waitForTimeout(250);
 }
 async function nextNavTarget(page, visited) {
   const baseUrl = page.url();
@@ -446,7 +469,9 @@ async function nextNavTarget(page, visited) {
   try {
     links = await page.evaluate(() => Array.from(document.querySelectorAll('a[href]'))
       .map((el) => ({ href: el.getAttribute('href'), text: (el.textContent || '').trim().slice(0, 60) }))
-      .filter((l) => l.href && l.href.startsWith('/') && !l.href.startsWith('//')));
+      // keep relative + hash-route hrefs (drop only obviously-external / no-op) — scope is checked on the
+      // RESOLVED URL below, so a hash-router SPA (#/vendors) and relative links are no longer thrown away.
+      .filter((l) => l.href && l.href !== '#' && !/^(javascript:|mailto:|tel:|data:)/i.test(l.href) && !l.href.startsWith('//')));
   } catch { return null; }
   // create-labelled links first, then the rest — so forms are reached quickly but nothing is left unexplored
   links.sort((x, y) => (CREATEISH_LINK.test(y.href + ' ' + y.text) ? 1 : 0) - (CREATEISH_LINK.test(x.href + ' ' + x.text) ? 1 : 0));
@@ -463,7 +488,9 @@ async function navigateTo(page, href) {
   try { await page.click(`a[href="${cssAttr(href)}"]`, { timeout: 2500 }); return true; } catch {}
   try { await page.goto(new URL(href, page.url()).toString(), { waitUntil: 'domcontentloaded', timeout }); return true; } catch { return false; }
 }
-function routeKey(u) { try { return new URL(u).pathname; } catch { return u; } }
+// route identity = pathname + a ROUTE hash (#/… or #!/…) so a hash-router SPA's routes stay distinct; a bare
+// anchor (#top, #section) is NOT part of the key (else same-page anchors would each burn a nav-view budget).
+function routeKey(u) { try { const x = new URL(u); return x.pathname + (/^#!?\//.test(x.hash) ? x.hash : ''); } catch { return u; } }
 function idFromUrlChange(urlAfter, createPath) {
   try {
     const after = new URL(urlAfter).pathname.replace(/\/$/, '');
