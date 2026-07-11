@@ -133,23 +133,35 @@ function findId(obj, prefix = '') {
 function idFromLocation(loc) { if (!loc) return null; const seg = String(loc).split('?')[0].replace(/\/$/, '').split('/').pop(); return seg && /[0-9a-f-]{2,}/i.test(seg) ? { id: seg, id_field: 'Location' } : null; }
 
 // ── DOM introspection: enumerate a form's fillable named fields (runs in the page) ───────────────────────
+// G2 — a "form region" is a cluster of fillable controls, with or without a <form>. Enumerate native inputs
+// AND framework controls (contenteditable, role=textbox/spinbutton — the Vuetify/React shape that has no
+// <form> and often no name), derive a name from aria-label/placeholder so NAMELESS fields stay typeable, and
+// tag each element with data-cx-field so we can locate it reliably regardless of name/id.
 const INTROSPECT = `(formEl) => {
   const F = formEl || document;
+  // clear stale tags first so re-introspection (each step) never collides two elements on one data-cx-field.
+  document.querySelectorAll('[data-cx-field]').forEach((e) => e.removeAttribute('data-cx-field'));
   const out = [];
-  for (const el of F.querySelectorAll('input, select, textarea')) {
+  let idx = 0;
+  for (const el of F.querySelectorAll('input, select, textarea, [contenteditable="true"], [role="textbox"], [role="spinbutton"]')) {
     const tag = el.tagName.toLowerCase();
-    const type = (el.getAttribute('type') || (tag === 'select' ? 'select' : tag === 'textarea' ? 'textarea' : 'text')).toLowerCase();
+    const role = el.getAttribute('role') || '';
+    const ce = el.getAttribute('contenteditable') === 'true' || role === 'textbox' || role === 'spinbutton';
+    const type = ce ? (role === 'spinbutton' ? 'number' : 'text')
+                    : (el.getAttribute('type') || (tag === 'select' ? 'select' : tag === 'textarea' ? 'textarea' : 'text')).toLowerCase();
     if (['hidden', 'submit', 'button', 'reset', 'image', 'file'].includes(type)) continue; // skip: tokens kept as-is, files unsafe
-    const name = el.getAttribute('name') || el.getAttribute('id') || '';
+    const name = el.getAttribute('name') || el.getAttribute('id') || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '';
     if (!name) continue;
-    const style = el.offsetParent === null && type !== 'radio' && type !== 'checkbox';
-    if (style) continue; // not visible
+    const hidden = el.offsetParent === null && type !== 'radio' && type !== 'checkbox';
+    if (hidden) continue; // not visible
+    el.setAttribute('data-cx-field', String(idx));
     const opts = tag === 'select' ? Array.from(el.options).map((o) => o.value).filter((v) => v !== '') : null;
     const min = el.getAttribute('min'), max = el.getAttribute('max'), ml = el.getAttribute('maxlength');
-    out.push({ name, tag, type, required: el.hasAttribute('required'),
+    out.push({ cx: idx, name, tag, type, ce, required: el.hasAttribute('required') || el.getAttribute('aria-required') === 'true',
       pattern: el.getAttribute('pattern') || null, options: opts,
       min: min != null ? Number(min) : null, max: max != null ? Number(max) : null,
       maxlength: ml != null ? Number(ml) : null });
+    idx++;
   }
   return out;
 }`;
@@ -158,6 +170,9 @@ const { launch, newStealthContext } = await import('./browser.mjs');
 const emitOut = { ok: true, armed, marker: armed ? MARKER : null, mode: armed ? 'submit' : 'dry-run', start_url: a.url, scope: SCOPE };
 const actions = [];
 const intents = [];
+const blocked = [];        // G5: submits that fired no real write (client no-op / validation block) + the read reason
+const sessionWrites = [];  // G6: every in-scope write seen this session (seeds for BOLA/injection), incl. intermediate
+const findings = [];       // G6: 4xx/5xx writes (endpoint contract + server bug), never silently dropped
 let browser;
 try {
   browser = await launch({ headless: a.headless, proxy: a.proxy || null });
@@ -186,9 +201,35 @@ try {
     } catch { /* ignore */ }
   });
 
+  // G6 — WRITE capture (all statuses): every in-scope non-GET/HEAD response becomes a seed; 4xx/5xx also
+  // becomes a `finding` (endpoint contract + server bug). This captures the INTERMEDIATE writes of a nested
+  // form (a buyer-create POST, a line PUT) — not just the terminal create — and the errors the app leaks.
+  const seenWrite = new Set();
+  ctx.on('response', async (resp) => {
+    try {
+      const rq = resp.request(); const m = rq.method();
+      if (m === 'GET' || m === 'HEAD') return;
+      const u = new URL(rq.url());
+      if (!inScope(u.hostname.toLowerCase())) return;
+      const status = resp.status();
+      const key = `${m} ${u.hostname}${normPath(u.pathname)} ${status}`;
+      if (seenWrite.has(key)) return; seenWrite.add(key);
+      const ct = (resp.headers()['content-type'] || '').split(';')[0] || null;
+      let reqBody; try { reqBody = rq.postData() || undefined; } catch { reqBody = undefined; }
+      sessionWrites.push({ method: m, host: u.hostname, path: u.pathname, status, content_type: ct });
+      if (status >= 400) {
+        let snippet = ''; try { snippet = (await resp.text()).slice(0, 300); } catch { /* body unavailable */ }
+        findings.push({ type: 'error_write', method: m, host: u.hostname, path: u.pathname, status, request_body: reqBody, snippet });
+      }
+    } catch { /* ignore */ }
+  });
+
+  // a write "landed" = a non-GET/HEAD in-scope response — used to await each create / sub-entity commit.
+  const writePredicate = (r) => { try { const rq = r.request(); return rq.method() !== 'GET' && rq.method() !== 'HEAD' && inScope(new URL(rq.url()).hostname.toLowerCase()); } catch { return false; } };
+
   const page = await ctx.newPage();
   await page.goto(a.url, { waitUntil: 'domcontentloaded', timeout }).catch(() => {});
-  await settle(page);
+  await mountSettle(page);   // G1: wait for the SPA shell + micro-app to mount before introspecting
 
   // Breadth-first navigation: follow the links we find (create-labelled ones FIRST, then any in-scope
   // internal link) and discover/exercise forms on EVERY page we land on — not just the start page. Bounded
@@ -214,18 +255,31 @@ try {
     await enumerateWidgets(page);   // read-only: custom dropdowns / typeaheads → option-driven param discovery
   };
 
+  // G1 — GLOBAL BFS frontier (not just the current page's links). A dead-end route (a 404 tile, an empty SPA
+  // stub) visited first would otherwise stall the crawl before a real form is reached; a persistent queue of all
+  // discovered in-scope routes (create-ish first) survives dead-ends. navigateTo() reaches non-anchor routes via goto.
+  const frontier = [];
+  const enqueued = new Set();
+  const harvest = async () => {
+    const found = await collectRoutes(page);   // broadened attr harvest → absolute, in-scope, non-avoid routes
+    found.sort((x, y) => (CREATEISH_LINK.test(y.href + ' ' + y.text) ? 1 : 0) - (CREATEISH_LINK.test(x.href + ' ' + x.text) ? 1 : 0));
+    for (const l of found) { const k = routeKey(l.href); if (!enqueued.has(k) && !visited.has(k)) { enqueued.add(k); frontier.push(l.href); } }
+  };
+
   await visitAndExercise();                              // start page
-  for (let i = 0; i < maxViews; i++) {                   // navigation budget = --max-views, independent of --max-forms
-    const target = await nextNavTarget(page, visited);
-    if (!target) break;
-    // Mark the target visited BEFORE navigating: a dead SPA/hash link whose click doesn't change the URL would
-    // otherwise never be marked (visitAndExercise records the landed page, not the target) and get re-selected
-    // every iteration, burning the whole --max-views budget on one dead link.
-    try { visited.add(routeKey(new URL(target, page.url()).href)); } catch { /* keep going */ }
+  await harvest();
+  let views = 0;
+  while (views < maxViews && frontier.length) {          // navigation budget = --max-views, independent of --max-forms
+    const target = frontier.shift();
+    const k = routeKey(target);
+    if (visited.has(k)) continue;                        // already landed here via another link
+    visited.add(k);                                      // mark BEFORE navigating so a dead/hash link can't be re-queued
+    views++;
     try {
       if (!(await navigateTo(page, target))) continue;
-      await settle(page);
+      await mountSettle(page);   // G1: SPA route change re-mounts a micro-app — wait for it before exercising
       await visitAndExercise();
+      await harvest();                                   // discover routes revealed by THIS page too
     } catch { /* stale/blocked link — keep going */ }
   }
 
@@ -249,9 +303,13 @@ try {
       params: e.params.map((p) => { const [loc, ...rest] = p.split(':'); return { name: rest.join(':'), in: loc, sample: null }; }) }));
 
   emitOut.totals = { pages_visited: pagesVisited.length, forms_processed: processedForms, created: actions.length,
-    dry_run_intents: intents.length, data_endpoints: discovered.length, param_endpoints: paramInv.length };
+    dry_run_intents: intents.length, data_endpoints: discovered.length, param_endpoints: paramInv.length,
+    session_writes: sessionWrites.length, findings: findings.length, blocked: blocked.length };
   emitOut.discovered_endpoints = discovered;
   emitOut.param_inventory = paramInv;
+  emitOut.session_writes = sessionWrites;   // G6 — all in-scope writes (seeds), incl. intermediate sub-entity writes
+  emitOut.findings = findings;              // G6 — 4xx/5xx writes (endpoint contract + server bug)
+  emitOut.blocked = blocked;                // G5 — submits that produced no real create + the read reason
   // discovery output is written even in dry-run (read-only) — it feeds /pentest:sql etc.
   if (a.out && paramInv.length) { await mkdir(a.out, { recursive: true }); await writeFile(path.join(a.out, 'widget-param-inventory.json'), JSON.stringify(paramInv, null, 2)); }
 
@@ -264,7 +322,13 @@ try {
   }
   emitOut.actions = actions;
   if (!armed) emitOut.intents = intents;
-  if (a.out && armed && actions.length) { await mkdir(a.out, { recursive: true }); await writeFile(path.join(a.out, 'crud-exercise.json'), JSON.stringify(actions, null, 2)); }
+  if (a.out) {
+    const wrote = [];
+    if (armed && actions.length) wrote.push(['crud-exercise.json', actions]);
+    if (sessionWrites.length) wrote.push(['session-writes.json', sessionWrites]);   // seeds for BOLA/injection
+    if (findings.length) wrote.push(['findings.json', findings]);                    // 4xx/5xx endpoint bugs
+    if (wrote.length) { await mkdir(a.out, { recursive: true }); for (const [f, d] of wrote) await writeFile(path.join(a.out, f), JSON.stringify(d, null, 2)); }
+  }
 
   // introspect fillable fields WITHIN a scope element (the open dialog or the <form>) — null = whole document.
   async function introspectFields(pg, scopeEl) {
@@ -273,11 +337,18 @@ try {
   async function fillFields(scopeLoc, fields, salt, record) {
     let n = 0;
     for (const f of fields) {
-      const loc = scopeLoc.locator(`[name="${cssAttr(f.name)}"], [id="${cssAttr(f.name)}"]`).first();
+      // locate by the data-cx-field tag INTROSPECT stamped (works for nameless fields); fall back to name/id.
+      const loc = f.cx != null
+        ? scopeLoc.locator(`[data-cx-field="${f.cx}"]`).first()
+        : scopeLoc.locator(`[name="${cssAttr(f.name)}"], [id="${cssAttr(f.name)}"]`).first();
       const val = synthValue(f, ++n, salt);
       try {
         if (f.tag === 'select') { if (f.options && f.options.length) await loc.selectOption(f.options[Math.min(salt, f.options.length - 1)] || f.options[0], { timeout: 1500 }); }
         else if (f.type === 'checkbox' || f.type === 'radio') { if (f.required) await loc.check({ timeout: 1500 }); }
+        else if (f.ce) { // contenteditable / role=textbox — not a real <input>: set text + fire input so the app reacts
+          await loc.click({ timeout: 1500 }).catch(() => {});
+          await loc.evaluate((el, v) => { el.textContent = v; el.dispatchEvent(new Event('input', { bubbles: true })); }, String(val)).catch(() => {});
+        }
         else { await loc.fill(String(val), { timeout: 1500 }); }
         if (record) record.push({ name: f.name, type: f.type, required: !!f.required });
       } catch { /* not interactable — skip */ }
@@ -298,16 +369,29 @@ try {
         if ((await search.count().catch(() => 0)) && (await search.isVisible().catch(() => false))) {
           await search.pressSequentially('a', { timeout: 1500 }).catch(() => {}); await settle(pg);
         }
-        const opt = pg.locator('[role="option"], .mat-option, [role="listbox"] li').first();
-        if ((await opt.count().catch(() => 0)) && (await opt.isVisible().catch(() => false))) { await opt.click({ timeout: 1500 }).catch(() => {}); await settle(pg); }
-        else await pg.keyboard.press('Escape').catch(() => {});
+        // G3 — validation-aware selection: the FIRST option can be poisoned (e.g. a party with an invalid tax id
+        // → a blocking toast and an inert submit). After each pick, re-read state; if a blocking error shows, drop
+        // it, reopen the widget, and try the NEXT option instead of stopping at the first.
+        const OPT = '[role="option"], .mat-option, [role="listbox"] li';
+        const on = Math.min(await pg.locator(OPT).count().catch(() => 0), Math.max(MAX_OPTIONS, 1));
+        let picked = false;
+        for (let j = 0; j < on && !picked; j++) {
+          const opt = pg.locator(OPT).nth(j);
+          if (!(await opt.isVisible().catch(() => false))) continue;
+          await opt.click({ timeout: 1500 }).catch(() => {});
+          await settle(pg);
+          if (await hasBlockingError(pg)) { await c.click({ timeout: 1000 }).catch(() => {}); await settle(pg); continue; }
+          picked = true;
+        }
+        if (!picked) await pg.keyboard.press('Escape').catch(() => {});
       } catch { /* widget not interactable — skip */ }
     }
   }
 
   async function processForm(pg, formIndex) {
     // For a page-level (pseudo-form) create, the form usually lives in a dialog opened by a +add BUTTON — open it
-    // first so the fields are in the DOM. (Real <form> elements already present are handled as-is.)
+    // first so the fields are in the DOM. (openAddDialogs self-guards: it does nothing when a form-region is
+    // already visible, so it never fires a formless region's own submit prematurely.)
     if (armed && formIndex == null) await openAddDialogs(pg);
     // SCOPE all interaction to the open create dialog when there is one — this is the safety-critical part:
     // filling/clicking PAGE-WIDE lets pickSubmit grab a nav/menu button and fillWidgets open filter dropdowns,
@@ -330,15 +414,21 @@ try {
     }
 
     // ARMED — complete the form like a user testing it, WITHIN the dialog scope: fill native fields + drive
-    // custom widgets, ADVANCE through multi-step (a "Next"/"Continue" is just the primary action of that step),
-    // then SUBMIT via the primary action — label-AGNOSTIC but only when scoped to a dialog (safe). Capture the write.
-    const writePredicate = (r) => { try { const rq = r.request(); return rq.method() !== 'GET' && rq.method() !== 'HEAD' && inScope(new URL(rq.url()).hostname.toLowerCase()); } catch { return false; } };
+    // custom widgets, COMMIT nested sub-entities (each with its own Save), ADVANCE through multi-step, then
+    // SUBMIT via the primary action — label-AGNOSTIC but only clicked page-wide where it is safe. Capture the write.
+    let clickedSubmit = false;
     for (let step = 0; step < MAX_STEPS; step++) {
       const fields = step === 0 ? fields0 : await introspectFields(pg, await scopeEl());   // re-introspect each step
       await fillFields(scopeLoc, fields, step, step === 0 ? filledFields : null);
       await fillWidgets(scopeLoc, pg);
       const submitLoc = await pickSubmit(scopeLoc, isDialog);
+      // G4 — a parent create form can hold sub-entities that each persist via their OWN Save (e.g. a related-party
+      // sub-form → its POST, each line-item row → its PUT); the parent may stay incomplete until they commit. Click
+      // those per-card/row Saves in DOM order BEFORE the parent's terminal action — their writes are captured by the
+      // session listener. Fully generic: keyed on create-hint buttons inside repeated containers, no app-specific name.
+      await commitSubEntities(scopeLoc, pg, submitLoc);
       if (!submitLoc) break;
+      clickedSubmit = true;
       const [resp] = await Promise.all([
         // a create POST fires within a few seconds of the click; keep this short so a multi-step wizard doesn't
         // burn the full timeout per non-final step (a "Next" fires no write and we want to advance quickly).
@@ -348,9 +438,11 @@ try {
       await settle(pg);
       if (resp) {
         const rq = resp.request(); const status = resp.status(); const u = new URL(rq.url());
+        // G5 — a real create is a 2xx write. A 4xx/5xx is NOT a create: retry earlier steps, else stop (the
+        // session listener already logged it as a finding) and fall through to the blocked-record below.
+        if (status >= 400) { if (step < MAX_STEPS - 1) continue; break; }
         const bodyText = await resp.text().catch(() => '');
         let body; try { body = rq.postData() ? JSON.parse(rq.postData()) : undefined; } catch { body = rq.postData() || undefined; }
-        if (status >= 400 && step < MAX_STEPS - 1) continue;   // validation error → keep completing / retry values
         let respJson; try { respJson = JSON.parse(bodyText); } catch { respJson = null; }
         const created = findId(respJson, '') || idFromLocation(resp.headers()['location']) || idFromUrlChange(pg.url(), u.pathname) || {};
         if (resp.headers()['location'] && !created.location) created.location = resp.headers()['location'];
@@ -363,7 +455,38 @@ try {
       // remain in scope, loop (complete the next step); otherwise give up on this form.
       if (!((await scopeLoc.locator('input, select, textarea, [role="combobox"], mat-select').count().catch(() => 0)) > 0)) break;
     }
+    // G5 — state-delta oracle: we clicked a submit but NO 2xx create landed (a client no-op, an Rp-0/empty total,
+    // or a validation block). An enabled button and a 200 are NOT proof — record an intent_blocked with the read
+    // toast/reason instead of a phantom `created`, so the missed create surfaces as a signal, never a false positive.
+    if (clickedSubmit) blocked.push({ resource, ui_route: routeOf(pg.url()), owner: a.owner || null,
+      reason: (await readToast(pg)) || 'submit fired no in-scope 2xx write (client no-op / validation block)' });
     return true;   // did real work (filled a form) even if no write fired
+  }
+
+  // G4 — commit nested sub-entities before the parent's terminal action. A sub-entity Save is a create-hint
+  // button (NOT the terminal submit, NOT destructive/cancel) that lives inside a REPEATED sub-container
+  // (card / row / line / list-item / table row). Snapshot the handles first so clicking one does not shift the
+  // rest, and click each in DOM order; the session listener records the write each one fires.
+  async function commitSubEntities(scopeLoc, pg, submitLoc) {
+    const submitHandle = submitLoc ? await submitLoc.elementHandle().catch(() => null) : null;
+    let handles = [];
+    try { handles = await scopeLoc.locator('button, [role="button"], input[type="button"]').elementHandles(); } catch { return; }
+    for (const h of handles) {
+      try {
+        if (!(await h.isVisible().catch(() => false)) || !(await h.isEnabled().catch(() => true))) continue;
+        const label = (((await h.getAttribute('value').catch(() => '')) || '') + ' ' +
+                       ((await h.textContent().catch(() => '')) || '') + ' ' +
+                       ((await h.getAttribute('aria-label').catch(() => '')) || '')).trim();
+        if (!CREATE_HINT.test(label) || CANCEL_BACK.test(label) || DESTRUCTIVE.test(label)) continue;
+        if (submitHandle && (await h.evaluate((el, s) => el === s, submitHandle).catch(() => false))) continue;  // not the parent submit
+        if (!(await h.evaluate((el) => !!el.closest('[class*="card"],[class*="row"],[class*="line"],[class*="item"],li,tr')).catch(() => false))) continue;
+        await Promise.all([
+          pg.waitForResponse(writePredicate, { timeout: Math.min(timeout, 4000) }).catch(() => null),
+          h.click({ timeout: 2500 }).catch(() => {}),
+        ]);
+        await settle(pg);
+      } catch { /* sub-save not clickable — skip */ }
+    }
   }
 
   async function labelOf(loc) {
@@ -435,6 +558,11 @@ try {
     }
   }
   async function openAddDialogs(pg) {
+    // If a form-region is already visible — native fillable fields OR a custom widget (combobox/mat-select) — do
+    // NOT click create-hint buttons: one of them is likely the region's OWN submit, and clicking it here would fire
+    // a stray/duplicate write. Add-dialog openers only matter on a list page where the create form isn't present yet.
+    if ((await introspectFields(pg, null)).length) return;
+    if (await pg.locator('[role="combobox"]:visible, mat-select:visible, [aria-haspopup="listbox"]:visible').count().catch(() => 0)) return;
     const btns = pg.locator('button, [role="button"]');
     const n = Math.min(await btns.count().catch(() => 0), 15);
     let opened = 0;
@@ -469,25 +597,61 @@ async function settle(page) {
   await page.waitForLoadState('networkidle', { timeout: 800 }).catch(() => {});
   await page.waitForTimeout(250);
 }
-async function nextNavTarget(page, visited) {
+async function mountSettle(page) {
+  // G1 — SPA/micro-frontend mount is slower than a plain DOM load: the shell bootstraps, then the micro-app
+  // fetches and renders its route. Wait for the network to quiet with a LARGER cap than the per-interaction
+  // settle (a stub mounts instantly so tests stay fast; a real SPA gets the time it needs), then a paint delay.
+  await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+  await page.waitForTimeout(400);
+}
+// G3/G5 — read a visible toast/snackbar/alert (the app's own rejection message). Returns its text or null.
+async function readToast(page) {
+  try {
+    return await page.evaluate(() => {
+      const SEL = '[role="alert"], .v-snackbar__content, .v-snackbar--active, .snackbar, .toast, [class*="snackbar"], [class*="toast"], [class*="notification"]';
+      for (const el of document.querySelectorAll(SEL)) {
+        const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+        if (r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none') {
+          const t = (el.textContent || '').trim(); if (t) return t.slice(0, 200);
+        }
+      }
+      return null;
+    });
+  } catch { return null; }
+}
+// G3 — is a BLOCKING (error) message showing? A validation/rejection toast means the current option/values are
+// bad; the caller should try the next option rather than stop at the first (the poisoned-first-option failure).
+async function hasBlockingError(page) {
+  const t = await readToast(page);
+  return !!t && /\b(error|invalid|missing|required|must|gagal|failed|whoops|wrong|not\s*valid|incomplete|belum|wajib)\b/i.test(t);
+}
+// G1 — collect ALL navigable in-scope routes from the current page. Harvests BEYOND `a[href]`: SPA/micro-frontend
+// nav lives in framework attributes (routerlink, data-href/route/to) and clickable launcher tiles (role=link),
+// which an anchor-only BFS never sees — that is why the old crawl stalled at 2 pages. Returns {href (absolute), text}.
+async function collectRoutes(page) {
   const baseUrl = page.url();
   let links = [];
   try {
-    links = await page.evaluate(() => Array.from(document.querySelectorAll('a[href]'))
-      .map((el) => ({ href: el.getAttribute('href'), text: (el.textContent || '').trim().slice(0, 60) }))
-      // keep relative + hash-route hrefs (drop only obviously-external / no-op) — scope is checked on the
-      // RESOLVED URL below, so a hash-router SPA (#/vendors) and relative links are no longer thrown away.
-      .filter((l) => l.href && l.href !== '#' && !/^(javascript:|mailto:|tel:|data:)/i.test(l.href) && !l.href.startsWith('//')));
-  } catch { return null; }
-  // create-labelled links first, then the rest — so forms are reached quickly but nothing is left unexplored
-  links.sort((x, y) => (CREATEISH_LINK.test(y.href + ' ' + y.text) ? 1 : 0) - (CREATEISH_LINK.test(x.href + ' ' + x.text) ? 1 : 0));
+    links = await page.evaluate(() => {
+      const ATTRS = ['href', 'data-href', 'data-route', 'data-to', 'to', 'routerlink', 'routerLink'];
+      const seen = new Set(); const out = [];
+      const push = (href, text) => { if (href && !seen.has(href)) { seen.add(href); out.push({ href, text: (text || '').trim().slice(0, 60) }); } };
+      for (const el of document.querySelectorAll('a[href]')) push(el.getAttribute('href'), el.textContent);
+      for (const el of document.querySelectorAll('[data-href],[data-route],[data-to],[to],[routerlink],[routerLink],[role="link"]')) {
+        for (const attr of ATTRS) { const v = el.getAttribute && el.getAttribute(attr); if (v) { push(v, el.textContent); break; } }
+      }
+      return out;
+    });
+  } catch { return []; }
+  const out = [];
   for (const l of links) {
-    if (AVOID_LINK.test(l.href) || AVOID_LINK.test(l.text)) continue;
+    if (!l.href || l.href === '#' || /^(javascript:|mailto:|tel:|data:)/i.test(l.href) || l.href.startsWith('//')) continue;
+    if (AVOID_LINK.test(l.href) || AVOID_LINK.test(l.text)) continue;   // never a logout/delete route
     let abs; try { abs = new URL(l.href, baseUrl); } catch { continue; }
-    if (!inScope(abs.hostname.toLowerCase())) continue;
-    if (!visited.has(routeKey(abs.href))) return l.href;
+    if (!inScope(abs.hostname.toLowerCase())) continue;                 // scope checked on the RESOLVED URL
+    out.push({ href: abs.href, text: l.text });
   }
-  return null;
+  return out;
 }
 async function navigateTo(page, href) {
   // prefer CLICKING the real link (keeps SPA state/auth); fall back to goto for plain MPAs

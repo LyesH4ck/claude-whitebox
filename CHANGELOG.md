@@ -4,6 +4,39 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.37] + playwright [0.2.11] — 2026-07-11
+
+### Fixed / Added — crawl-write.mjs SPA / micro-frontend nested-form support (G1–G6)
+The `/pentest:crud` harness stalled on SPA / micro-frontend apps with nested forms (baseline on the demo
+target: `pages_visited:2, forms_processed:1 (login only), created:0`). Test-driven from a reference crawler +
+ground truth; each gap is a regression test in `crawl-write.test.mjs` (red before / green after), genericity
+preserved (no target-specific selector in the harness). Live dry-run after: `pages_visited 2→6, forms 1→3`.
+
+- **G1 — SPA route discovery.** `nextNavTarget` read only `a[href]` from the current page → stalled at 2 pages.
+  Now `collectRoutes` harvests `routerlink`/`data-href`/`data-route`/`role=link` tiles, a **global BFS frontier**
+  queue survives dead-end routes, and `mountSettle` waits for the micro-app to mount before introspecting.
+- **G2 — formless form-regions.** `INTROSPECT` keyed on named `input/select/textarea` → 0 fields on a Vuetify/
+  React region (no `<form>`, `role=combobox/textbox/spinbutton`, `contenteditable`, nameless). Now enumerates
+  those, derives a name from `aria-label`/`placeholder`, tags each with `data-cx-field` for reliable locating,
+  and fills `contenteditable`. `openAddDialogs` self-guards so it never fires a visible region's own submit.
+- **G3 — validation-aware option selection.** `fillWidgets` took the first option; the first can be poisoned
+  (blocking toast / inert submit). Now re-reads state after each pick and advances to the next option on a
+  blocking error (`readToast`/`hasBlockingError`).
+- **G4 — nested sub-entity commit order.** `commitSubEntities` clicks per-card/row Save buttons (create-hint,
+  not the terminal submit, inside a `card/row/line/item/li/tr`) in DOM order before the parent's terminal action
+  — the buyer→`POST /vendor`, line→`PUT /inventories/{id}` chain a linear wizard missed.
+- **G5 — state-delta oracle (`200 ≠ created`).** A create is recorded ONLY on a real 2xx in-scope write; a
+  submit that fired no 2xx write → `blocked[]` (`intent_blocked`) with the read toast reason, never a phantom
+  `created`; a 4xx/5xx response is never a create.
+- **G6 — intermediate writes + errors.** A session-wide `response` listener records every in-scope write
+  (`session_writes[]` seeds, incl. intermediate sub-entity writes) and routes 4xx/5xx to `findings[]`
+  (endpoint contract + server bug). New `session-writes.json` / `findings.json` outputs (additive; `crud-merge`
+  still consumes `actions[]`/`intents[]` unchanged). `crud-exerciser.md` phases 2–3 document the new behavior.
+- Tests: +5 gap tests (G1–G5), all `stealth/` suites green (18 assertions). See `stealth/PATCH-NOTES.md`.
+  Live end-to-end completion of the deepest fully-nested form remains best-effort; mechanisms are unit-proven.
+
+---
+
 ## [2.4.36] — 2026-07-11
 
 ### Fixed — adversarial multi-agent self-review of the plugin (prompts · code · orchestration)

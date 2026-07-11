@@ -161,7 +161,7 @@ test('a validation error triggers a retry that then succeeds', async () => {
   assert.equal(out.actions[0].response_status, 201);
 });
 
-// Reproduces the real-world Vue pattern (app.demo-achilles.id /transaction sale +add): a custom dropdown
+// Reproduces the real-world Vue pattern (a micro-frontend sale/create +add dialog): a custom dropdown
 // (role=combobox, NOT a native <select>) inside an add-dialog, hiding a searchable typeahead. Typing fires
 // ?keyword=…, selecting an option echoes its value into ?name=… — both invisible to native-<select> scraping
 // and path-crawl. Asserts the read-only widget pass discovers those endpoints/params.
@@ -342,5 +342,246 @@ test('a dead SPA/hash link does not starve navigation — a real page behind it 
     const out = JSON.parse(stdout.trim());
     assert.equal(out.ok, true);
     assert.ok(server._hits.length >= 1, 'the /real create form was reached + submitted (not starved by the dead #/new link)');
+  } finally { server.close(); }
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SPA / micro-frontend nested-form gaps (G1–G6) — each stub reproduces a real-world Vue/React failure mode
+// (client routing, formless regions, poisoned options, nested sub-entities). Red before the patch, green after.
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// G1 — SPA route discovery. A launcher whose tiles are NOT <a href> but [routerlink]/[data-href]/[role=link]
+// (Angular/Vue routing) → the old `a[href]`-only BFS stalls on the launcher and never reaches the create form.
+function startSpaRouteServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/') return html(res, page(`
+      <h1>All products</h1>
+      <div class="tile" role="link" routerlink="/transaction/sale/new">Invoices</div>
+      <span class="tile" data-href="/vendors/new">Vendors</span>
+      <div class="tile" data-route="/misc">Misc</div>`));
+    if (u.pathname === '/vendors/new') return html(res, createForm('/api/v1/vendors'));
+    if (req.method === 'POST' && u.pathname === '/api/v1/vendors') {
+      const body = await readBody(req); server._writes.push({ path: u.pathname, body });
+      res.writeHead(201, { 'Content-Type': 'application/json', Location: '/api/v1/vendors/9001' });
+      return res.end(JSON.stringify({ id: 9001 }));
+    }
+    res.writeHead(404); res.end('nope');
+  });
+  server._writes = [];
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('G1: follows non-anchor SPA routes ([routerlink]/[data-href]) to reach a create form the a[href] BFS misses', async () => {
+  const server = await startSpaRouteServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--submit', '--marker', 'PENTEST-g1', '--max-views', '6'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.ok(out.totals.pages_visited >= 2, `navigated past the launcher (pages=${out.totals.pages_visited})`);
+    assert.ok(server._writes.some((w) => w.path === '/api/v1/vendors'), 'reached the create form behind a routerlink tile');
+  } finally { server.close(); }
+});
+
+// G2 — formless form-region. No <form>, and the inputs have NO name/id — only placeholder/aria-label (the real
+// Vuetify shape: form_inventory.json shows "forms":[] with randomized/absent names). The old INTROSPECT keys on
+// name||id and finds nothing → forms_processed:0.
+function startFormlessServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/') return html(res, page(`
+      <h1>New vendor (no &lt;form&gt;)</h1>
+      <input placeholder="Vendor name" aria-label="name">
+      <input placeholder="Amount" type="number" min="1">
+      <div contenteditable="true" role="textbox" aria-label="notes"></div>
+      <button id="go">Create</button>
+      <script>
+        document.getElementById('go').addEventListener('click', () => {
+          const name = document.querySelector('[aria-label=name]').value;
+          const amount = Number(document.querySelector('[type=number]').value);
+          const notes = document.querySelector('[role=textbox]').textContent;
+          fetch('/api/v1/vendors', { method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ name, amount, notes }) }).then(r=>r.json()).then(j=>{document.title='ok'+j.id;});
+        });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/api/v1/vendors') {
+      const body = await readBody(req); server._writes.push({ path: u.pathname, body });
+      res.writeHead(201, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ id: 'v-77' }));
+    }
+    res.writeHead(404); res.end('nope');
+  });
+  server._writes = [];
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('G2: detects a formless region (no <form>, nameless placeholder/aria-label inputs + contenteditable) and completes it', async () => {
+  const server = await startFormlessServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    // dry-run first: the region must be RECOGNIZED (forms_processed >= 1) even read-only
+    const dry = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x'], { maxBuffer: 32 * 1024 * 1024 });
+    const outDry = JSON.parse(dry.stdout.trim());
+    assert.ok(outDry.totals.forms_processed >= 1, `formless region recognized in dry-run (forms=${outDry.totals.forms_processed})`);
+    // armed: fills the nameless fields (marker) + contenteditable → POST fires
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--submit', '--marker', 'PENTEST-g2'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.equal(server._writes.length, 1, 'formless region submitted exactly one create');
+    const sent = JSON.parse(server._writes[0].body);
+    assert.match(sent.name, /^PENTEST-g2/, 'nameless input filled via placeholder/aria-label');
+  } finally { server.close(); }
+});
+
+// G3 — validation-aware option selection. The FIRST combobox option is poisoned (fires a blocking toast +
+// disables the submit); the SECOND is valid. The old fillWidgets takes .first() → stuck on the poison → no write.
+function startPoisonOptionServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/') return html(res, page(`
+      <h1>Pick a buyer</h1>
+      <div id="cb" role="combobox" tabindex="0">Select buyer</div>
+      <div id="lb" role="listbox" style="display:none">
+        <div role="option" data-ok="0">Invalid party (bad tax id)</div>
+        <div role="option" data-ok="1">Valid party</div>
+      </div>
+      <div id="toast" role="alert" style="display:none">Missing Tax and Contact Info</div>
+      <button id="go" disabled>Create</button>
+      <script>
+        const go=document.getElementById('go'), toast=document.getElementById('toast');
+        document.getElementById('cb').addEventListener('click',()=>{document.getElementById('lb').style.display='block';});
+        document.querySelectorAll('[role=option]').forEach(o=>o.addEventListener('click',()=>{
+          document.getElementById('lb').style.display='none';
+          if(o.getAttribute('data-ok')==='1'){ toast.style.display='none'; go.disabled=false; }
+          else { toast.style.display='block'; go.disabled=true; }
+        }));
+        go.addEventListener('click',()=>{ if(go.disabled) return;
+          fetch('/api/ok',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"buyer":"valid"}'})
+            .then(r=>r.json()).then(j=>{document.title='ok'+j.id;}); });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/api/ok') {
+      const body = await readBody(req); server._writes.push({ path: u.pathname, body });
+      res.writeHead(201, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ id: 'ok-1' }));
+    }
+    res.writeHead(404); res.end('nope');
+  });
+  server._writes = [];
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('G3: advances past a poisoned first option (blocking toast / disabled submit) to a valid one, then submits', async () => {
+  const server = await startPoisonOptionServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--submit', '--marker', 'PENTEST-g3', '--max-options', '3'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.equal(server._writes.length, 1, 'submitted after selecting the VALID (2nd) option, not stuck on the poison');
+    assert.ok(out.actions.some((x) => x.request.path === '/api/ok'), 'create captured after option recovery');
+  } finally { server.close(); }
+});
+
+// G4 + G6 — nested sub-entity commit order + intermediate-write capture. A parent create with a buyer sub-card
+// (own Save → POST /vendor 201) and a line row (own Save → PUT /inventories/1 200); the parent "Create Invoice"
+// (→ POST /sales) only succeeds AFTER both sub-saves. The old MAX_STEPS wizard loop never clicks the per-card Saves.
+function startNestedServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>New invoice</h1>
+      <div class="card" id="buyer"><input placeholder="Buyer name" aria-label="buyer">
+        <button class="rowsave" data-k="buyer">Save</button></div>
+      <div class="row" id="line"><input placeholder="Item" aria-label="item">
+        <button class="rowsave" data-k="line">Save</button></div>
+      <div class="card" id="cf"><span>custom fields</span>
+        <button class="rowsave" data-k="cf">Save</button></div>
+      <button id="create" class="btn-primary">Create Invoice</button>
+      <div id="log"></div>
+      <script>
+        let buyerOk=false, lineOk=false;
+        function save(k,el){ if(k==='buyer'){ fetch('/vendor',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({name:document.querySelector('[aria-label=buyer]').value})}).then(()=>{buyerOk=true;}); }
+          else if(k==='line'){ fetch('/inventories/1',{method:'PUT',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({item:document.querySelector('[aria-label=item]').value})}).then(()=>{lineOk=true;}); }
+          else { fetch('/api/v1/custom-field/contents',{method:'POST',headers:{'Content-Type':'application/json'},body:'[]'}); } }
+        document.querySelectorAll('.rowsave').forEach(b=>b.addEventListener('click',()=>save(b.getAttribute('data-k'))));
+        document.getElementById('create').addEventListener('click',()=>{ if(!(buyerOk&&lineOk)) return; // no-op until sub-saves done
+          fetch('/sales',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"final":true}'})
+            .then(r=>r.json()).then(j=>{document.title='ok'+j.id;}); });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/vendor') { const b=await readBody(req); server._writes.push({m:'POST',path:'/vendor',status:201,body:b}); res.writeHead(201,{'Content-Type':'application/json'}); return res.end(JSON.stringify({data:{name:'x'},id:'ven-1'})); }
+    if (req.method === 'PUT' && u.pathname === '/inventories/1') { const b=await readBody(req); server._writes.push({m:'PUT',path:'/inventories/1',status:200,body:b}); res.writeHead(200,{'Content-Type':'application/json'}); return res.end(JSON.stringify({code:'00',data:'updated'})); }
+    if (req.method === 'POST' && u.pathname === '/api/v1/custom-field/contents') { server._writes.push({m:'POST',path:'/api/v1/custom-field/contents',status:500}); res.writeHead(500,{'Content-Type':'application/json'}); return res.end(JSON.stringify({error:{code:'90',message:'Whoops! Something went wrong!'}})); }
+    if (req.method === 'POST' && u.pathname === '/sales') { const b=await readBody(req); server._writes.push({m:'POST',path:'/sales',status:201,body:b}); res.writeHead(201,{'Content-Type':'application/json'}); return res.end(JSON.stringify({id:'sale-9'})); }
+    res.writeHead(404); res.end('nope');
+  });
+  server._writes = [];
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('G4+G6: commits nested sub-entities (buyer Save→POST, line Save→PUT) before the parent Create; captures the whole write chain', async () => {
+  const server = await startNestedServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--submit', '--marker', 'PENTEST-g4', '--max-forms', '2'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    const paths = server._writes.map((w) => w.path);
+    assert.ok(paths.includes('/vendor') && paths.includes('/inventories/1'), `sub-entity writes fired (got ${paths})`);
+    assert.ok(paths.includes('/sales'), 'parent create fired after sub-saves');
+    assert.ok(paths.indexOf('/sales') > paths.indexOf('/vendor'), 'parent create came AFTER the buyer sub-save');
+    // G6: intermediate writes surfaced as seeds (session_writes), not just the terminal create
+    const sw = out.session_writes || [];
+    assert.ok(sw.some((w) => w.path === '/vendor' && w.status === 201), `vendor write captured as a seed (got ${JSON.stringify(sw)})`);
+    assert.ok(sw.some((w) => w.path === '/inventories/1' && w.method === 'PUT'), 'inventory PUT captured as a seed');
+    // G6: a 4xx/5xx sub-write is routed to findings (endpoint contract + server bug), not silently dropped
+    const findings = out.findings || [];
+    assert.ok(findings.some((f) => f.status === 500 && /custom-field/.test(f.path)), `5xx write surfaced as a finding (got ${JSON.stringify(findings)})`);
+  } finally { server.close(); }
+});
+
+// G5 — state-delta oracle. The submit is ENABLED and clicking it fires ZERO network writes (client no-op) and
+// shows a blocking toast → the old code returned "did work" silently. There must be NO false `created`, and the
+// block reason (the read toast) must be recorded. (The 5xx→findings path is covered by the G4+G6 test, where a
+// write actually fires an error.)
+function startNoopServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>New sale</h1>
+      <input name="ref" placeholder="ref">
+      <div id="toast" role="alert" style="display:none">Missing Tax and Contact Info</div>
+      <button id="go" class="btn-primary">Create</button>
+      <script>
+        document.getElementById('go').addEventListener('click',()=>{ document.getElementById('toast').style.display='block'; /* NO fetch: pure client no-op */ });
+      </script>`));
+    res.writeHead(404); res.end('nope');
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('G5: a submit that fires no network write → intent_blocked (with reason), no false created', async () => {
+  const server = await startNoopServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--submit', '--marker', 'PENTEST-g5', '--max-forms', '3'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    // a 200/enabled button is NOT proof — no create must be emitted for the no-op form
+    assert.ok(!out.actions.some((a) => a.action === 'create' && a.response_status < 400), 'no false `created` for the no-write submit');
+    // the block is recorded with the toast reason
+    const blocked = out.blocked || [];
+    assert.ok(blocked.some((b) => /Missing Tax|Contact Info/i.test(b.reason || '')), `intent_blocked carries the toast reason (got ${JSON.stringify(blocked)})`);
   } finally { server.close(); }
 });
