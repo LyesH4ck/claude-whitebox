@@ -40,3 +40,18 @@ export function flattenParams(v, prefix, out) {
   if (prefix) out.add(prefix);
 }
 export const normPath = (p) => p.replace(/\/\d+(?=\/|$)/g, '/{id}').replace(/\/[0-9a-f]{8,}(?=\/|$)/gi, '/{id}');
+const safeDecode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+// Collect tagged param names from a request's query + body into a Set: `query:k`, `json:a.b[].c` (nested leaves),
+// or `form:k`. The canonical extraction every recon source shares (crawl / crawl-write / burp-import).
+export function collectParams(query, postData, into = new Set()) {
+  if (query) { try { for (const k of new URLSearchParams(query).keys()) into.add('query:' + k); } catch { /* skip */ } }
+  if (postData) {
+    try { const j = JSON.parse(postData); const s = new Set(); flattenParams(j, '', s); for (const p of s) into.add('json:' + p); }
+    catch { for (const kv of postData.split('&')) { const k = kv.split('=')[0]; if (k) into.add('form:' + safeDecode(k)); } }
+  }
+  return into;
+}
+// Expand tagged param names (Set/array) into inventory rows [{name, in, sample:null}].
+export function paramRows(tags) {
+  return [...tags].map((p) => { const i = p.indexOf(':'); return { name: p.slice(i + 1), in: p.slice(0, i), sample: null }; });
+}

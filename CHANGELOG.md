@@ -4,6 +4,55 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.36] — 2026-07-11
+
+### Fixed — adversarial multi-agent self-review of the plugin (prompts · code · orchestration)
+From a 6-dimension review (find → adversarially-verify → synthesize); 21 raw findings, 3 refuted, 18 confirmed.
+The theme was **incomplete propagation of good patterns already in-tree**, not conceptual gaps.
+
+- **[HIGH] csrf-tester was the lone verification/safety outlier — now aligned with every sibling tester.**
+  It confirmed CSRF on HTTP status alone (a 2xx/302 "success" is routinely a silent reject / redirect-to-login /
+  no-op) and fired 5 real account mutations *before* its approval gate. Rewrote it around a **state-delta oracle**
+  (re-read the field through a legitimate path; `before != after` is the only proof — else `probable`), a
+  **Phase-0 RoE/env gate** (forge submits run only against a controlled test account, mirroring `crud-exerciser`),
+  a **write ledger + revert**, and a reconciled confirmation bar (curl oracle confirms; `poc.html` is the
+  cross-site repro artifact, not the proof — the agent has no browser).
+- **[HIGH] idor-bola-tester ran its core authz-matrix engine via a bare path** — no repo-then-newest-cache
+  fallback, so from a cache install the BOLA/BFLA oracle (the agent's whole purpose) silently no-op'd while the
+  run reported complete. Ported the `injection-tester` resolver (`$AUTHZ_RUN`) + a coverage-gap-if-unresolved line.
+- **[MEDIUM] `<playwright-plugin>` / `<pentest-plugin>` placeholders reached `node` verbatim** in
+  `crud-exerciser`, `pentester-executor`, `inventory-javascript-mapper`, `recon.md`, and `pentest.md` — the
+  write-surface/stealth harness chain failed on a cache install. Added repo-then-newest-cache resolver blocks
+  (`$PW_STEALTH` / `$PENTEST_PLUGIN`) at first use in each.
+- **[MEDIUM] authz-matrix `run.mjs` aborted the entire cross-identity replay** (even `--dry-run`) on a single
+  host-less request with no `base_url` — an uncaught `TypeError` from `new URL()` outside the try/catch. It now
+  degrades that one cell to `{status:0, error:'unresolvable URL …'}` and the run continues. Regression test added.
+- **[MEDIUM] Flagship `/pentest:pentest` never exercised the write surface** — it deployed only the read-only
+  inventory agents, silently dropping the BOLA corpus + write-body injection params (no coverage gap). Added a
+  gated **Step 6.3b CRUD-exercise** sub-phase mirroring `/pentest:recon` Step 6b (RoE/env hard gate → deploy
+  `crud-exerciser`, else record an explicit coverage gap).
+- **[LOW] param-mine dropped single-char query params** (`?q=`, `?s=`) from the flat inventory (the `< 2` floor).
+  Lowered the floor to 1 for `where === 'query'` only (body/shorthand keeps floor 2 as noise-guard). Test added.
+- **[LOW] op-signature drift-guard was RED** — the vendored playwright copy had diverged from the canonical
+  (added `safeDecode`/`collectParams`/`paramRows`). Re-synced byte-for-byte (canonical now carries the same
+  functions); drift guard green.
+- **Docs drift:** `HYBRID_HANDOFF_SPEC` header (PROPOSITION → IMPLÉMENTÉ), `TEST_PLAN_FORMAT` (deprecated
+  "planner deploys / recursive spawning" → the planner/command split + quota model), `pentest-attacks` +
+  `TEST_PLAN_FORMAT` (added business-modeler/-tester + idor-bola-tester), `WORKFLOWS` + `CLAUDE.md` (added the
+  Step 6.3b CRUD + Step 6.3.4 hybrid-handoff lifecycle stages).
+- **Self-review round (`/code-review` on the diff) — 3 regressions in the above fixes caught and closed:**
+  (1) the new `$AUTHZ_RUN` / `$PW_STEALTH` vars were resolved in one Bash block but reused in a later one —
+  shell state does not persist across Bash calls, so the second block ran `node ""`; every execution block is
+  now **self-contained** (re-resolves in-block). (2) The single-char query floor was scoped to *all* `query`
+  adds, letting the noise-prone global text scan leak `?e=` phantoms from minified ternaries — floor-1 is now
+  confined to params pulled from a **real URL query string** (`force` flag), global scan keeps floor 2.
+  (3) Resolvers now validate the **actual `.mjs` with `-f`** (not just the plugin dir) and all carry the
+  coverage-gap guard uniformly (`pentester-executor`, `recon.md` no longer omit it).
+- Tests: +4 regression assertions (single-char query floor, ternary-phantom rejection, host-less-URL non-abort,
+  op-signature drift). All `.mjs` suites green (7 files, 54 assertions).
+
+---
+
 ## [2.4.35] + playwright [0.2.10] — 2026-07-11
 
 ### Fixed — code-review of the 2.4.34 quick-wins (3 confirmed self-inflicted regressions)
