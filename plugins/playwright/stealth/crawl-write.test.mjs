@@ -224,6 +224,8 @@ function startFlowServer() {
   const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/') return html(res, page(`
+      <button id="logout" onclick="fetch('/logout')">Logout</button>
+      <button id="menu" onclick="fetch('/menu')">Menu</button>
       <button id="add" onclick="document.getElementById('d1').style.display='block'">Add sale</button>
       <div id="d1" role="dialog" style="display:none">
         <div id="cb" role="combobox" onclick="document.getElementById('lb').style.display='block'">Pick buyer</div>
@@ -247,6 +249,7 @@ function startFlowServer() {
       const body = await readBody(req); writes.push({ path: u.pathname, body });
       res.writeHead(201, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ id: 'sale-1' }));
     }
+    if (u.pathname === '/logout' || u.pathname === '/menu') { writes.push({ path: u.pathname, body: '' }); res.writeHead(200); return res.end('x'); }
     res.writeHead(404); res.end('nope');
   });
   server._writes = writes;
@@ -262,8 +265,12 @@ test('armed: opens dialog → fills custom widget → advances a step → submit
       { maxBuffer: 32 * 1024 * 1024 });
     const out = JSON.parse(stdout.trim());
     assert.equal(out.ok, true);
-    assert.equal(server._writes.length, 1, 'exactly one create POST (the 確定 action, not Cancel/Continue)');
-    const sent = JSON.parse(server._writes[0].body);
+    // *** regression guard *** — completion is scoped to the dialog, so the page-level Logout/Menu buttons are
+    // NEVER clicked (page-wide "last button" picking used to derail real apps into these).
+    assert.ok(!server._writes.some((w) => w.path === '/logout' || w.path === '/menu'), 'page-level nav buttons not clicked');
+    const posts = server._writes.filter((w) => w.path === '/api/sales');
+    assert.equal(posts.length, 1, 'exactly one create POST (the 確定 action, not Cancel/Continue/nav)');
+    const sent = JSON.parse(posts[0].body);
     assert.match(sent.ref, /^PENTEST-flow/, 'step-1 field filled with the marker');
     assert.match(sent.note, /^PENTEST-flow/, 'step-2 field filled after advancing');
     const act = out.actions.find((a) => a.request.path === '/api/sales');

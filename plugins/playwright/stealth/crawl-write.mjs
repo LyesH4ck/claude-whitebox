@@ -83,7 +83,7 @@ const viewport = a.viewport ? { width: +a.viewport.split('x')[0], height: +a.vie
 const DESTRUCTIVE = /\b(delete|remove|supprim|effac|drop|purge|reset|clear|bulk|deactivate|revoke|hapus)\b/i;
 // The submit is chosen LABEL-AGNOSTICALLY: we don't match the action's name (Save/Submit/Valider/Kirim/Simpan/
 // 確定/…) — we EXCLUDE these cancel/back/close labels (multilingual) and take the primary action among the rest.
-const CANCEL_BACK = /\b(cancel|annul|close|fermer|ferme|back|retour|previous|préc[eé]dent|precedent|dismiss|discard|batal|tutup|kembali|abort)\b/i;
+const CANCEL_BACK = /\b(cancel|annul|close|fermer|ferme|back|retour|previous|préc[eé]dent|precedent|dismiss|discard|batal|tutup|kembali|abort|logout|log-out|signout|sign-out|deconnex|déconnex|menu|help|aide)\b/i;
 const CREATE_HINT = /\b(save|submit|create|add|new|nouveau|créer|creer|ajouter|enregistrer|valider|confirm|simpan|kirim|buat|tambah)\b/i;
 const cssAttr = (s) => String(s).replace(/["\\]/g, '\\$&');
 // Never follow a link that would end the session or mutate state by navigation alone.
@@ -190,6 +190,7 @@ try {
   const MAX_WIDGETS = +a['max-widgets'];
   const MAX_OPTIONS = +a['max-options'];
   const MAX_STEPS = +a['max-steps'];
+  const DLG = '[role="dialog"]:visible, mat-dialog-container:visible, .modal:visible, .cdk-dialog-container:visible, .cdk-overlay-pane:visible';
   let processedForms = 0;
   const visited = new Set();
   const pagesVisited = [];
@@ -241,9 +242,9 @@ try {
   if (!armed) emitOut.intents = intents;
   if (a.out && armed && actions.length) { await mkdir(a.out, { recursive: true }); await writeFile(path.join(a.out, 'crud-exercise.json'), JSON.stringify(actions, null, 2)); }
 
-  async function readFields(pg, formIndex) {
-    const formEl = formIndex == null ? null : await pg.locator('form').nth(formIndex).elementHandle().catch(() => null);
-    return await pg.evaluate(new Function('formEl', `return (${INTROSPECT})(formEl);`), formEl).catch(() => []);
+  // introspect fillable fields WITHIN a scope element (the open dialog or the <form>) — null = whole document.
+  async function introspectFields(pg, scopeEl) {
+    return await pg.evaluate(new Function('formEl', `return (${INTROSPECT})(formEl);`), scopeEl).catch(() => []);
   }
   async function fillFields(scopeLoc, fields, salt, record) {
     let n = 0;
@@ -284,9 +285,16 @@ try {
     // For a page-level (pseudo-form) create, the form usually lives in a dialog opened by a +add BUTTON — open it
     // first so the fields are in the DOM. (Real <form> elements already present are handled as-is.)
     if (armed && formIndex == null) await openAddDialogs(pg);
-    const scopeLoc = formIndex == null ? pg : pg.locator('form').nth(formIndex);
-    const fields0 = await readFields(pg, formIndex);
-    if (!fields0.length && !(armed && await scopeLoc.locator('[role="combobox"], mat-select').count().catch(() => 0))) return;
+    // SCOPE all interaction to the open create dialog when there is one — this is the safety-critical part:
+    // filling/clicking PAGE-WIDE lets pickSubmit grab a nav/menu button and fillWidgets open filter dropdowns,
+    // which derails the crawl on a real app. A <form> scopes itself; otherwise prefer the visible dialog.
+    let scopeLoc, isDialog = false;
+    if (formIndex != null) scopeLoc = pg.locator('form').nth(formIndex);
+    else if (armed && (await pg.locator(DLG).count().catch(() => 0))) { scopeLoc = pg.locator(DLG).last(); isDialog = true; }
+    else scopeLoc = pg;
+    const scopeEl = async () => (scopeLoc === pg ? null : await scopeLoc.elementHandle().catch(() => null));
+    const fields0 = await introspectFields(pg, await scopeEl());
+    if (!fields0.length && !(armed && (await scopeLoc.locator('[role="combobox"], mat-select').count().catch(() => 0)))) return;
     const resource = guessResource(pg.url(), fields0);
     const filledFields = [];
 
@@ -297,15 +305,15 @@ try {
       return;
     }
 
-    // ARMED — complete the form like a user testing it: fill native fields + drive custom widgets, ADVANCE
-    // through multi-step (a "Next"/"Continue" is just the primary action of that step), then SUBMIT via the
-    // primary action button — chosen label-AGNOSTICALLY (Save/Submit/Valider/Kirim/Simpan/…). Capture the write.
+    // ARMED — complete the form like a user testing it, WITHIN the dialog scope: fill native fields + drive
+    // custom widgets, ADVANCE through multi-step (a "Next"/"Continue" is just the primary action of that step),
+    // then SUBMIT via the primary action — label-AGNOSTIC but only when scoped to a dialog (safe). Capture the write.
     const writePredicate = (r) => { try { const rq = r.request(); return rq.method() !== 'GET' && rq.method() !== 'HEAD' && inScope(new URL(rq.url()).hostname.toLowerCase()); } catch { return false; } };
     for (let step = 0; step < MAX_STEPS; step++) {
-      const fields = step === 0 ? fields0 : await readFields(pg, formIndex);   // re-introspect each step
+      const fields = step === 0 ? fields0 : await introspectFields(pg, await scopeEl());   // re-introspect each step
       await fillFields(scopeLoc, fields, step, step === 0 ? filledFields : null);
       await fillWidgets(scopeLoc, pg);
-      const submitLoc = await pickSubmit(scopeLoc);
+      const submitLoc = await pickSubmit(scopeLoc, isDialog);
       if (!submitLoc) break;
       const [resp] = await Promise.all([
         // a create POST fires within a few seconds of the click; keep this short so a multi-step wizard doesn't
@@ -338,18 +346,18 @@ try {
             ((await loc.textContent().catch(() => '')) || '') + ' ' +
             ((await loc.getAttribute('aria-label').catch(() => '')) || '')).trim();
   }
-  async function pickSubmit(scopeLoc) {
-    // 1) canonical submit — label-agnostic (any type=submit that is not a cancel/destructive control).
+  async function pickSubmit(scopeLoc, allowLast) {
+    // 1) canonical submit — any type=submit that is not a cancel/destructive control.
     const explicit = scopeLoc.locator('button[type="submit"], input[type="submit"]').first();
     if (await explicit.count().catch(() => 0)) {
       const label = await labelOf(explicit);
       if (!CANCEL_BACK.test(label) && !DESTRUCTIVE.test(label)) return explicit;
     }
-    // 2) otherwise the PRIMARY action — we do NOT match its name; we EXCLUDE cancel/back/close/destructive and
-    //    take the primary-styled button, else the LAST enabled one (dialog footers put the confirming action last).
+    // 2) among the scope's buttons (excluding cancel/back/close/destructive), collect the primary-styled one,
+    //    the first create-hinted one, and the last one.
     const buttons = scopeLoc.locator('button, [role="button"], input[type="button"]');
     const n = await buttons.count().catch(() => 0);
-    let primary = null, last = null;
+    let primary = null, hinted = null, last = null;
     for (let i = 0; i < n; i++) {
       const b = buttons.nth(i);
       if (!(await b.isVisible().catch(() => false)) || !(await b.isEnabled().catch(() => true))) continue;
@@ -358,8 +366,12 @@ try {
       last = b;
       const cls = (await b.getAttribute('class').catch(() => '')) || '';
       if (!primary && /(primary|btn-primary|is-primary|_primary|confirm|submit)/i.test(cls)) primary = b;
+      if (!hinted && CREATE_HINT.test(label)) hinted = b;
     }
-    return primary || last;
+    // A primary-styled or create-hinted button is safe anywhere. The bare "last non-cancel button" is only safe
+    // INSIDE A DIALOG (a footer holds just form actions); page-wide it grabs nav/menu buttons and derails — so
+    // it is gated on `allowLast` (true only when scoped to a dialog). Label-agnostic where it is safe to be.
+    return primary || hinted || (allowLast ? last : null);
   }
 
   // ── READ-ONLY widget/typeahead enumeration (param discovery — never submits a form) ──────────────────────

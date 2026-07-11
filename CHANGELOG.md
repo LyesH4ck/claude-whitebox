@@ -4,6 +4,25 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## playwright [0.2.8] — 2026-07-11
+
+### Fixed
+- **`crawl-write.mjs` — the 0.2.7 generic completion was too aggressive and derailed real apps ("le crud exit").**
+  The armed completion ran PAGE-WIDE: `pickSubmit` would take "the last non-cancel button" anywhere on the page
+  (grabbing a nav/menu/logout button) and `fillWidgets` opened every dropdown on the page (nav/filters), so the
+  crawl wandered off the create flow and captured little. Fixes:
+  - **Scope all armed interaction to the open create dialog** (`[role=dialog]:visible`, mat-dialog, .modal, cdk
+    overlay) when there is one — fill/submit/widgets operate inside it, never on page-level chrome.
+  - **`pickSubmit` is conservative page-wide**: only a primary-styled or create-hinted button; the bare
+    "last non-cancel button" fallback is gated to `allowLast` (true ONLY inside a dialog, where a footer holds
+    just form actions). Label-agnostic where it is safe to be, not everywhere.
+  - Added `logout`/`signout`/`menu`/`help` to the excluded-labels set (a "Logout" button matched neither
+    destructive nor cancel before).
+  - Regression test: a page with page-level Logout/Menu buttons + the dialog create flow — asserts the nav
+    buttons are NEVER clicked and only the dialog's create fires.
+
+---
+
 ## [2.4.33] + playwright [0.2.7] — 2026-07-10
 
 ### Added
