@@ -143,28 +143,41 @@ function findId(obj, echo, prefix = '', depth = 0) {
       if (!(echo && echo.has(val))) return { id: val, id_field: prefix ? `${prefix}.${k}` : k };
     }
   }
-  // 2) descend ONLY into standard result wrappers — never into an auth-principal node
+  // 2) descend ONLY into standard result wrappers — never into an auth-principal node. Handle both an object
+  //    wrapper (`{data:{id}}`) and an ARRAY wrapper (`{data:[{id}]}` — the created object as the first element).
   for (const [k, v] of Object.entries(obj)) {
-    if (v && typeof v === 'object' && !Array.isArray(v) && WRAP_KEY.test(k) && !AUTH_WRAP.test(k)) {
-      const r = findId(v, echo, prefix ? `${prefix}.${k}` : k, depth + 1); if (r) return r;
-    }
+    if (!v || typeof v !== 'object' || !WRAP_KEY.test(k) || AUTH_WRAP.test(k)) continue;
+    const child = Array.isArray(v) ? v[0] : v;
+    const childField = Array.isArray(v) ? `${prefix ? prefix + '.' : ''}${k}[0]` : (prefix ? `${prefix}.${k}` : k);
+    const r = findId(child, echo, childField, depth + 1); if (r) return r;
   }
   return null;
 }
-// values the client SENT (request body leaves) — a response id equal to one of these is an echo, not a new id.
+// F2 — a response id is an ECHO (not a new object id) only when the SAME value was sent under an AUTH-PRINCIPAL
+// key (company/tenant/owner/user/…). The patch #2 version collected EVERY request leaf, so it wrongly rejected a
+// legitimate client-supplied id (a UUID, an idempotency key, a low integer that collides with a submitted number)
+// → `created` without an id → an EMPTY BOLA corpus. Restrict the echo set to auth-principal fields only.
+const AUTH_PRINCIPAL_KEY = /^(company|companies|tenant|org|organization|owner|user|users|account|principal|actor|created_?by)(_?id)?$/i;
 function collectEchoValues(reqBodyStr) {
   const set = new Set();
   if (!reqBodyStr) return set;
+  const add = (k, v) => { if ((typeof v === 'string' || typeof v === 'number') && AUTH_PRINCIPAL_KEY.test(String(k))) set.add(String(v)); };
   try {
-    (function walk(o) { if (o == null) return; if (typeof o === 'object') { for (const v of Object.values(o)) walk(v); } else set.add(String(o)); })(JSON.parse(reqBodyStr));
-  } catch { for (const kv of String(reqBodyStr).split('&')) { const v = kv.split('=')[1]; if (v) { try { set.add(decodeURIComponent(v)); } catch { set.add(v); } } } }
+    (function walk(o) { if (o == null || typeof o !== 'object') return; for (const [k, v] of Object.entries(o)) { if (v && typeof v === 'object') walk(v); else add(k, v); } })(JSON.parse(reqBodyStr));
+  } catch { for (const kv of String(reqBodyStr).split('&')) { const [k, v] = kv.split('='); if (v) { try { add(k, decodeURIComponent(v)); } catch { add(k, v); } } } }
   return set;
 }
-// F1 — path fragments that denote a NON-persistent write (preview / validation / telemetry / list-read POST).
-// Token-matched (split on /-_.) so `preview-doc-definition`, `create-activity-log`, `.../count` are caught while
-// `/accounts` (contains "count" as a substring) is NOT. A write to such a path never counts as a create.
-const NON_PERSIST_TOKENS = new Set(['preview','validate','validation','validations','check','checks','activity','analytics','telemetry','search','autocomplete','typeahead','suggest','suggestion','suggestions','count','list','listing','export','download','log','logs','logging','track','tracking','trace','metric','metrics','ping','heartbeat','health']);
-const isNonPersistPath = (pathname) => String(pathname).toLowerCase().split(/[/\-_.]+/).filter(Boolean).some((t) => NON_PERSIST_TOKENS.has(t));
+// F1 — token fragments that HINT a non-persistent write (preview / validation / telemetry / typeahead). This is
+// now ADVISORY: a strong positive signal (201 / Location / non-echoed id) overrides it. Checked on the TERMINAL
+// path segment ONLY (a create nested under `.../vendor/` is not disqualified by a parent segment), and the
+// lottery singular/plural tokens the review flagged (check(s), list, activity, log(s), track, trace, count,
+// health) are removed — they wrongly disqualified real creates.
+import { NON_PERSIST_TOKENS } from './non-persist-tokens.mjs';
+const isNonPersistTerminal = (pathname) => {
+  const segs = String(pathname).toLowerCase().replace(/\/+$/, '').split('/').filter(Boolean);
+  const last = segs[segs.length - 1] || '';
+  return last.split(/[-_.]+/).filter(Boolean).some((t) => NON_PERSIST_TOKENS.has(t));
+};
 function idFromLocation(loc) { if (!loc) return null; const seg = String(loc).split('?')[0].replace(/\/$/, '').split('/').pop(); return seg && /[0-9a-f-]{2,}/i.test(seg) ? { id: seg, id_field: 'Location' } : null; }
 
 // ── DOM introspection: enumerate a form's fillable named fields (runs in the page) ───────────────────────
@@ -211,10 +224,12 @@ const findings = [];       // G6: 4xx/5xx writes (endpoint contract + server bug
 let browser;
 try {
   browser = await launch({ headless: a.headless, proxy: a.proxy || null });
+  // --header goes into extraHTTPHeaders (Authorization Bearer etc. — browser-honored); --cookie is injected as
+  // REAL cookies via addCookies (P0: a Cookie HEADER is dropped on HTTPS+proxy and invisible to document.cookie).
   const extraHeaders = {};
-  if (a.cookie) extraHeaders.Cookie = a.cookie;
   for (const h of (a.header || [])) { const i = h.indexOf(':'); if (i > 0) extraHeaders[h.slice(0, i).trim()] = h.slice(i + 1).trim(); }
-  const ctx = await newStealthContext(browser, { insecure: a.insecure, viewport, storageState: a.state || undefined, extraHeaders: Object.keys(extraHeaders).length ? extraHeaders : undefined });
+  const ctx = await newStealthContext(browser, { insecure: a.insecure, viewport, storageState: a.state || undefined,
+    extraHeaders: Object.keys(extraHeaders).length ? extraHeaders : undefined, cookie: a.cookie || undefined, cookieScope: SCOPE[0] });
 
   // Read-only data-request capture (for widget/typeahead param discovery): record in-scope XHR/fetch WITH their
   // request BODY, deduped by operation signature. A dropdown search (?keyword=…), an option select (?name=…),
@@ -251,7 +266,13 @@ try {
       if (seenWrite.has(key)) return; seenWrite.add(key);
       const ct = (resp.headers()['content-type'] || '').split(';')[0] || null;
       let reqBody; try { reqBody = rq.postData() || undefined; } catch { reqBody = undefined; }
-      sessionWrites.push({ method: m, host: u.hostname, path: u.pathname, status, content_type: ct });
+      // F5 — classify each write so crud-merge seeds only real MUTATIONS, not read-POSTs (a GraphQL query, an
+      // ag-grid list POST, a search). Signal = method + status + form: PUT/PATCH/DELETE always mutate; a POST is a
+      // mutation only on a 201, a Location, or a 2xx to a non-preview/search/telemetry terminal segment.
+      const loc = resp.headers()['location'] || null;
+      const mutation = /^(PUT|PATCH|DELETE)$/i.test(m)
+        || (m === 'POST' && (status === 201 || !!loc || (status >= 200 && status < 300 && !isNonPersistTerminal(u.pathname))));
+      sessionWrites.push({ method: m, host: u.hostname, path: u.pathname, status, content_type: ct, mutation });
       if (status >= 400) {
         let snippet = ''; try { snippet = (await resp.text()).slice(0, 300); } catch { /* body unavailable */ }
         findings.push({ type: 'error_write', method: m, host: u.hostname, path: u.pathname, status, request_body: reqBody, snippet });
@@ -261,10 +282,6 @@ try {
 
   // a write "landed" = a non-GET/HEAD in-scope response — used to await each sub-entity commit.
   const writePredicate = (r) => { try { const rq = r.request(); return rq.method() !== 'GET' && rq.method() !== 'HEAD' && inScope(new URL(rq.url()).hostname.toLowerCase()); } catch { return false; } };
-  // F1 — a candidate CREATE write: a POST/PUT/PATCH to an in-scope PERSISTING path (not a preview/validation/
-  // telemetry/list-read POST). Waiting on THIS (not any write) means a preview/activity-log 200 never satisfies
-  // the create wait and get mis-recorded as a create.
-  const mutationWritePredicate = (r) => { try { const rq = r.request(); if (!/^(POST|PUT|PATCH)$/i.test(rq.method())) return false; const u = new URL(rq.url()); return inScope(u.hostname.toLowerCase()) && !isNonPersistPath(u.pathname); } catch { return false; } };
 
   const page = await ctx.newPage();
   await page.goto(a.url, { waitUntil: 'domcontentloaded', timeout }).catch(() => {});
@@ -468,38 +485,55 @@ try {
       if (step === 0) await commitSubEntities(scopeLoc, pg, submitLoc);
       if (!submitLoc) break;
       clickedSubmit = true;
-      const [resp] = await Promise.all([
-        // wait for a CANDIDATE-CREATE write (persisting POST/PUT/PATCH), not any write — a preview/validation/
-        // telemetry 200 must not satisfy this and be mis-recorded as a create.
-        pg.waitForResponse(mutationWritePredicate, { timeout: Math.min(timeout, 5000) }).catch(() => null),
+      // COLLECT every mutating in-scope write this submit fires — a submit typically triggers several (telemetry,
+      // a preview, THEN the real create). Judging only the FIRST would mis-classify. Gather them all, then choose
+      // the best create candidate. (F1 — the persistence oracle is applied to the SET, not the first write.)
+      const raw = [];
+      const onResp = (resp) => {
+        try {
+          const rq = resp.request(); if (!/^(POST|PUT|PATCH)$/i.test(rq.method())) return;
+          const uu = new URL(rq.url()); if (!inScope(uu.hostname.toLowerCase())) return;
+          raw.push({ resp, rq, u: uu, status: resp.status(), loc: resp.headers()['location'] || null });
+        } catch { /* ignore */ }
+      };
+      pg.on('response', onResp);
+      await Promise.all([
+        pg.waitForResponse((r) => { try { const rq = r.request(); return /^(POST|PUT|PATCH)$/i.test(rq.method()) && inScope(new URL(rq.url()).hostname.toLowerCase()); } catch { return false; } }, { timeout: Math.min(timeout, 5000) }).catch(() => null),
         submitLoc.click({ timeout: 3000 }).catch(() => {}),
       ]);
       await settle(pg);
-      if (resp) {
-        const rq = resp.request(); const status = resp.status(); const u = new URL(rq.url());
-        // A 4xx is a client/validation error → retry earlier steps with fresh values; a 5xx is a server error →
-        // stop (retry is pointless, and re-clicking would amplify). Never a create.
-        if (status >= 400) { if (status < 500 && step < MAX_STEPS - 1) continue; break; }
-        const bodyText = await resp.text().catch(() => '');
-        const reqBodyStr = (() => { try { return rq.postData() || ''; } catch { return ''; } })();
-        const echo = collectEchoValues(reqBodyStr);
+      pg.off('response', onResp);
+
+      // resolve each write's persistence signals (body id / Location), then classify.
+      const collected = [];
+      for (const c of raw) {
+        const reqBodyStr = (() => { try { return c.rq.postData() || ''; } catch { return ''; } })();
+        let respJson = null; try { respJson = JSON.parse(await c.resp.text()); } catch { /* non-JSON */ }
+        const idInfo = findId(respJson, collectEchoValues(reqBodyStr), '') || idFromLocation(c.loc);
+        // F1 — a POSITIVE persistence signal (201 / Location / non-echoed response id) makes it a create and
+        // OVERRIDES the non-persistent token; the token (checked on the TERMINAL segment only) is advisory — it
+        // just deprioritizes an ambiguous write when a cleaner create exists.
+        collected.push({ ...c, reqBodyStr, idInfo,
+          denyTerminal: isNonPersistTerminal(c.u.pathname),
+          positive: c.status >= 200 && c.status < 300 && (c.status === 201 || !!c.loc || !!idInfo) });
+      }
+      const positives = collected.filter((c) => c.positive);
+      const createCand = positives.find((c) => !c.denyTerminal) || positives[0];   // positive overrides token; prefer clean path
+      if (createCand) {
+        const { rq, u, status, loc, idInfo, reqBodyStr } = createCand;
         let body; try { body = reqBodyStr ? JSON.parse(reqBodyStr) : undefined; } catch { body = reqBodyStr || undefined; }
-        let respJson; try { respJson = JSON.parse(bodyText); } catch { respJson = null; }
-        const loc = resp.headers()['location'];
-        const idInfo = findId(respJson, echo, '') || idFromLocation(loc) || idFromUrlChange(pg.url(), u.pathname);
-        // F1 — a REAL create needs a POSITIVE persistence signal: HTTP 201, a Location header, a URL change to a
-        // detail route, or a NON-echoed id in the response. A bare 200 with none of these is a preview/no-op →
-        // fall through to `blocked`, never a phantom `created`.
-        if (!(status === 201 || !!loc || !!idInfo)) break;
         const created = idInfo || {};
         if (loc && !created.location) created.location = loc;
+        if (!created.id) { const uid = idFromUrlChange(pg.url(), u.pathname); if (uid) Object.assign(created, uid); }   // URL→detail id, if the body gave none
         actions.push({ resource, action: 'create', owner: a.owner || null, identity: a.owner || null, marker: `${MARKER}-${resource}-1`, ui_route: routeOf(pg.url()),
           request: { method: rq.method(), host: u.hostname, path: u.pathname, content_type: (rq.headers()['content-type'] || '').split(';')[0] || null, body },
           created: Object.keys(created).length ? created : undefined, response_status: status, fields: filledFields, steps: step + 1 });
         return true;
       }
-      // no candidate-create write fired: a "Next" may have advanced the wizard, or validation blocked. If fillable
-      // controls remain in scope, loop (complete the next step); otherwise give up on this form.
+      // no create: a 4xx is a validation error → retry with fresh values; a 5xx is a server error → stop (the
+      // session listener logged it as a finding). Otherwise (only weak 200s / no write) keep completing if controls remain.
+      if (collected.some((c) => c.status >= 400 && c.status < 500) && step < MAX_STEPS - 1) continue;
+      if (collected.some((c) => c.status >= 500)) break;
       if (!((await scopeLoc.locator('input, select, textarea, [role="combobox"], mat-select').count().catch(() => 0)) > 0)) break;
     }
     // G5 — state-delta oracle: we clicked a submit but NO 2xx create landed (a client no-op, an Rp-0/empty total,
@@ -511,40 +545,62 @@ try {
   }
 
   // G4 — commit nested sub-entities before the parent's terminal action. A sub-entity Save is a create-hint
-  // button (NOT the terminal submit, NOT destructive/cancel) that lives inside a REPEATED sub-container
-  // (card / row / line / list-item / table row). Snapshot the handles first so clicking one does not shift the
-  // rest, and click each in DOM order; the session listener records the write each one fires.
+  // button (NOT the terminal submit, NOT destructive/cancel) in a genuine REPEATED sub-container. F3 — RE-QUERY
+  // the handles after EVERY commit: a Vue/React re-render detaches the old elementHandles, and the next line may
+  // only appear after the previous one commits (sequential revelation). Dedup by a stable signature so a Save is
+  // never clicked twice (no amplification). Bounded passes.
+  function subSaveSig(el) {   // stable-ish identity of a sub-save: its repeated container sibling-index + text
+    const RE = /\b(card|row|line|item|entry)\b/;
+    let c = el;
+    for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+      if (n.tagName === 'LI' || n.tagName === 'TR' || RE.test((n.className || '').toLowerCase())) { c = n; break; }
+    }
+    const p = c.parentElement; const idx = p ? Array.prototype.indexOf.call(p.children, c) : -1;
+    return (c.className || c.tagName) + '#' + idx + '|' + (el.textContent || '').trim().slice(0, 24);
+  }
+  function subSaveOkContainer(el, submitEl) {
+    const RE = /\b(card|row|line|item|entry)\b/;
+    const repTok = (n) => ((n.getAttribute && n.getAttribute('class')) || '').toLowerCase().split(/\s+/).find((c) => RE.test(c)) || null;
+    for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+      const liTr = n.tagName === 'LI' || n.tagName === 'TR';
+      const tok = repTok(n);
+      if (!liTr && !tok) continue;
+      if (submitEl && n.contains(submitEl)) return false;
+      const sibs = Array.from((n.parentElement && n.parentElement.children) || []).filter((s) => s !== n);
+      return liTr ? sibs.some((s) => s.tagName === n.tagName)
+                  : sibs.some((s) => ((s.getAttribute('class') || '').toLowerCase().split(/\s+/).includes(tok)));
+    }
+    return false;
+  }
   async function commitSubEntities(scopeLoc, pg, submitLoc) {
     const submitHandle = submitLoc ? await submitLoc.elementHandle().catch(() => null) : null;
-    let handles = [];
-    try { handles = await scopeLoc.locator('button, [role="button"], input[type="button"]').elementHandles(); } catch { return; }
-    for (const h of handles) {
-      try {
-        if (!(await h.isVisible().catch(() => false)) || !(await h.isEnabled().catch(() => true))) continue;
-        const label = (((await h.getAttribute('value').catch(() => '')) || '') + ' ' +
-                       ((await h.textContent().catch(() => '')) || '') + ' ' +
-                       ((await h.getAttribute('aria-label').catch(() => '')) || '')).trim();
-        if (!CREATE_HINT.test(label) || CANCEL_BACK.test(label) || DESTRUCTIVE.test(label)) continue;
-        if (submitHandle && (await h.evaluate((el, s) => el === s, submitHandle).catch(() => false))) continue;  // not the parent submit
-        // G4-sel — the Save must live in a genuine REPEATED sub-container (a card/row/line/item, li, tr). Match by
-        // WORD, not substring: `[class*="item"]` wrongly matched Tailwind `items-center`, `row`→`ag-row`,
-        // `line`→`inline`. And the sub-container must NOT contain the parent's terminal submit — otherwise it is
-        // the whole form region, and clicking its "create-hint" button here would fire the parent create early.
-        const okContainer = await h.evaluate((el, submitEl) => {
-          const RE = /\b(card|row|line|item|entry)\b/i;
-          for (let n = el.parentElement; n; n = n.parentElement) {
-            const isRep = n.tagName === 'LI' || n.tagName === 'TR' || RE.test(n.getAttribute('class') || '');
-            if (isRep) return !(submitEl && n.contains(submitEl));   // a real sub-region does not hold the parent submit
-          }
-          return false;
-        }, submitHandle).catch(() => false);
-        if (!okContainer) continue;
-        await Promise.all([
-          pg.waitForResponse(writePredicate, { timeout: Math.min(timeout, 4000) }).catch(() => null),
-          h.click({ timeout: 2500 }).catch(() => {}),
-        ]);
-        await settle(pg);
-      } catch { /* sub-save not clickable — skip */ }
+    const committed = new Set();
+    for (let pass = 0; pass < 12; pass++) {
+      let handles = [];
+      try { handles = await scopeLoc.locator('button, [role="button"], input[type="button"]').elementHandles(); } catch { break; }
+      let did = false;
+      for (const h of handles) {
+        try {
+          if (!(await h.isVisible().catch(() => false)) || !(await h.isEnabled().catch(() => true))) continue;
+          const label = (((await h.getAttribute('value').catch(() => '')) || '') + ' ' +
+                         ((await h.textContent().catch(() => '')) || '') + ' ' +
+                         ((await h.getAttribute('aria-label').catch(() => '')) || '')).trim();
+          if (!CREATE_HINT.test(label) || CANCEL_BACK.test(label) || DESTRUCTIVE.test(label)) continue;
+          if (submitHandle && (await h.evaluate((el, s) => el === s, submitHandle).catch(() => false))) continue;
+          const sig = await h.evaluate(subSaveSig).catch(() => null);
+          if (sig && committed.has(sig)) continue;
+          if (!(await h.evaluate(subSaveOkContainer, submitHandle).catch(() => false))) continue;
+          if (sig) committed.add(sig);
+          await Promise.all([
+            pg.waitForResponse(writePredicate, { timeout: Math.min(timeout, 4000) }).catch(() => null),
+            h.click({ timeout: 2500 }).catch(() => {}),
+          ]);
+          await settle(pg);
+          did = true;
+          break;
+        } catch { /* sub-save not clickable — skip */ }
+      }
+      if (!did) break;
     }
   }
 

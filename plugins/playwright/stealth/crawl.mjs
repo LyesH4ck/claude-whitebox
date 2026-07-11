@@ -82,13 +82,15 @@ try {
   browser = await launch({ headless: a.headless, proxy: a.proxy || null });
   // authenticated session (so data POSTs don't 401 and get dropped) — a pasted Cookie/header works directly,
   // and applies across all in-scope hosts/frames (send the app session even from a micro-frontend origin).
+  // --header → extraHTTPHeaders (browser-honored); --cookie → real cookies via addCookies (P0: a Cookie HEADER is
+  // dropped on HTTPS+proxy and invisible to document.cookie, so the SPA's client auth guard redirects to login).
   const extraHeaders = {};
-  if (a.cookie) extraHeaders.Cookie = a.cookie;
   for (const h of (a.header || [])) { const i = h.indexOf(':'); if (i > 0) extraHeaders[h.slice(0, i).trim()] = h.slice(i + 1).trim(); }
   const ctx = await newStealthContext(browser, {
     insecure: a.insecure, viewport,
     storageState: a.state || undefined,
     extraHeaders: Object.keys(extraHeaders).length ? extraHeaders : undefined,
+    cookie: a.cookie || undefined, cookieScope: SCOPE[0],
   });
 
   // ── context-level capture: ALL methods, ALL frames, with request bodies (fixes the frame + body gaps) ──

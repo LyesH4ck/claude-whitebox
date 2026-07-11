@@ -496,11 +496,11 @@ function startNestedServer() {
     const u = new URL(req.url, 'http://x');
     if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
       <h1>New invoice</h1>
-      <div class="card" id="buyer"><input placeholder="Buyer name" aria-label="buyer">
+      <div class="line-item" id="buyer"><input placeholder="Buyer name" aria-label="buyer">
         <button class="rowsave" data-k="buyer">Save</button></div>
-      <div class="row" id="line"><input placeholder="Item" aria-label="item">
+      <div class="line-item" id="line"><input placeholder="Item" aria-label="item">
         <button class="rowsave" data-k="line">Save</button></div>
-      <div class="card" id="cf"><span>custom fields</span>
+      <div class="line-item" id="cf"><span>custom fields</span>
         <button class="rowsave" data-k="cf">Save</button></div>
       <button id="create" class="btn-primary">Create Invoice</button>
       <div id="log"></div>
@@ -684,8 +684,8 @@ function startAmplifyServer() {
     const u = new URL(req.url, 'http://x');
     if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
       <h1>New invoice</h1>
-      <div class="card"><input placeholder="Buyer" aria-label="buyer"><button class="rowsave" data-k="buyer">Save</button></div>
-      <div class="row"><input placeholder="Item" aria-label="item"><button class="rowsave" data-k="line">Save</button></div>
+      <div class="line-item"><input placeholder="Buyer" aria-label="buyer"><button class="rowsave" data-k="buyer">Save</button></div>
+      <div class="line-item"><input placeholder="Item" aria-label="item"><button class="rowsave" data-k="line">Save</button></div>
       <button id="create" class="btn-primary">Create Invoice</button>
       <script>
         function save(k){ if(k==='buyer') fetch('/vendor',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"n":1}'});
@@ -796,5 +796,120 @@ test('T-bug3: read-only pass opens the +Add dialog on a list-with-search page an
     assert.equal(out.ok, true);
     const items = (out.param_inventory || []).find((e) => e.endpoint === '/api/items');
     assert.ok(items && items.params.some((p) => p.name === 'keyword'), `widget ?keyword discovered behind +Add (got ${JSON.stringify(out.param_inventory)})`);
+  } finally { server.close(); }
+});
+
+// ── Patch #3 (P1) — the patch #2 over-correction (false negatives) is undone ────────────────────────────────
+
+// T-P1-F1 — a REAL create whose endpoint's terminal segment happens to be a non-persist TOKEN (e.g.
+// `/vendor/id-validation`, `/checks`, `/lists`) but returns 201 must be recorded as `created`, NOT `blocked`:
+// a strong positive signal (201/Location/id) OVERRIDES the advisory token.
+function startTokenPathCreateServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>New vendor</h1>
+      <input name="name" placeholder="name">
+      <button id="go" class="btn-primary">Create</button>
+      <script>
+        document.getElementById('go').addEventListener('click',()=>{
+          fetch('/api/v1/vendor/id-validation',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({name:document.querySelector('[name=name]').value})})
+            .then(r=>r.json()).then(j=>{document.title='ok'+j.id;});
+        });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/api/v1/vendor/id-validation') {
+      server._writes.push(1); res.writeHead(201, { 'Content-Type': 'application/json' });   // a REAL 201 on a "validation" path
+      return res.end(JSON.stringify({ data: { id: 'ven-88' } }));
+    }
+    res.writeHead(404); res.end('nope');
+  });
+  server._writes = [];
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-P1-F1: a real 201 create on a token-named path (id-validation) is `created`, not `blocked` (positive overrides token)', async () => {
+  const server = await startTokenPathCreateServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--submit', '--marker', 'PENTEST-p1a'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    const act = (out.actions || []).find((a) => a.request.path === '/api/v1/vendor/id-validation');
+    assert.ok(act, `the 201 create was recorded (actions=${JSON.stringify(out.actions)}, blocked=${JSON.stringify(out.blocked)})`);
+    assert.equal(act.created && act.created.id, 'ven-88', 'the real object id was captured');
+  } finally { server.close(); }
+});
+
+// T-P1-F2 — a legitimate CLIENT-SUPPLIED id echoed back (a UUID / idempotency key under a NON-auth key) must be
+// KEPT as the created id; only an AUTH-PRINCIPAL echo (company/tenant/owner id) is rejected.
+function startClientIdServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>New doc</h1>
+      <input name="title" placeholder="title">
+      <button id="go" class="btn-primary">Create</button>
+      <script>
+        document.getElementById('go').addEventListener('click',()=>{
+          // client supplies its own resource id (idempotency) AND its tenant id
+          fetch('/api/v1/doc',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({title:document.querySelector('[name=title]').value, client_ref:'c-9f8e', company_id:700123})})
+            .then(r=>r.json()).then(j=>{document.title='ok';});
+        });
+      </script>`));
+    if (req.method === 'POST' && u.pathname === '/api/v1/doc') {
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      // response echoes the client_ref as the object id, and the tenant id under owner
+      return res.end(JSON.stringify({ id: 'c-9f8e', owner: { id: 700123 } }));
+    }
+    res.writeHead(404); res.end('nope');
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-P1-F2: a client-supplied resource id (non-auth key) echoed back is KEPT; the tenant id is not', async () => {
+  const server = await startClientIdServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--submit', '--marker', 'PENTEST-p1b'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    const act = (out.actions || []).find((a) => a.request.path === '/api/v1/doc');
+    assert.ok(act, 'the create was recorded');
+    assert.equal(act.created && act.created.id, 'c-9f8e', 'the client-supplied id was kept (not wrongly rejected as an echo)');
+    assert.notEqual(act.created && act.created.id, '700123', 'the tenant id was NOT used as the object id');
+  } finally { server.close(); }
+});
+
+// T-P2-array — findId must also read the created id from an ARRAY wrapper: `{data:[{id:…}]}` (APIs that return
+// the created object as the first element of a list).
+function startArrayIdServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>New</h1><input name="name" placeholder="name"><button id="go" class="btn-primary">Create</button>
+      <script>document.getElementById('go').addEventListener('click',()=>{fetch('/api/v1/thing',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"name":"x"}'}).then(r=>r.json()).then(()=>{document.title='ok';});});</script>`));
+    if (req.method === 'POST' && u.pathname === '/api/v1/thing') { res.writeHead(201, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ data: [{ id: 'arr-7', name: 'x' }] })); }
+    res.writeHead(404); res.end('nope');
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-P2-array: findId reads the created id from an array wrapper {data:[{id}]}', async () => {
+  const server = await startArrayIdServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--submit', '--marker', 'PENTEST-p2arr'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    const act = (out.actions || []).find((a) => a.request.path === '/api/v1/thing');
+    assert.ok(act, 'create captured');
+    assert.equal(act.created && act.created.id, 'arr-7', 'id read from data[0].id');
   } finally { server.close(); }
 });

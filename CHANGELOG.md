@@ -4,6 +4,38 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.39] + playwright [0.2.13] — 2026-07-11
+
+### Fixed — crawl-write.mjs patch #3: authenticated-browser blocker (P0) + patch #2 over-correction (P1) + hygiene (P2)
+A 3-reviewer review + an authenticated live run found the reason patches #1/#2 could never be validated on a
+real target, plus false negatives from patch #2. See `stealth/PATCH-NOTES-3.md`.
+
+- **P0 [BLOCKING] — cookie auth via `ctx.addCookies`, not `extraHTTPHeaders`.** A manual `Cookie` header is
+  dropped by the browser on HTTPS-through-a-proxy and never populates `document.cookie`, so a SPA's client-side
+  auth guard redirected to login — the harness never reached authenticated forms. `browser.mjs` now injects
+  `--cookie` as real cookies on the registrable domain (IP/localhost → exact domain); `extraHTTPHeaders` keeps
+  `--header` only; `--state` unchanged. Same fix in `crawl.mjs`. **Live-proven:** authenticated app routes
+  reached (`data_endpoints 1→15`), no login fallback. Unblocks the whole plugin in browser mode.
+- **P1/F1 — the non-persistent denylist is ADVISORY.** The submit now COLLECTS every mutating write and a strong
+  positive signal (201 / Location / URL→detail / non-echoed id) OVERRIDES the token (a real 201 on a
+  `…/validation`-named path is a create again, not `blocked`); the token is terminal-segment-only and the lottery
+  tokens (check/list/activity/log/track/trace/count/health) were removed.
+- **P1/F2 — reject an echoed id only when AUTH-PRINCIPAL.** Patch #2 rejected any request-echoed id → legit
+  client ids (UUID/idempotency key/low-int collision) lost → empty BOLA corpus. The echo set is now restricted to
+  values sent under `company/tenant/owner/user`-type keys; resource ids are kept.
+- **P1 — session-writes filtered by FORM, not token.** The harness tags each session write with a `mutation` flag
+  (method+status+form); `crud-merge` seeds only mutations (a GraphQL/ag-grid read-POST is no longer replayed).
+- **P1/G4-sel** — a sub-entity Save must sit in a genuine repeated group (`<li>`/`<tr>` with a sibling, or a
+  repeat-classed element with a same-class sibling); a lone `ag-row`/`form-row`/`flex-row` no longer qualifies.
+- **P2** — `NON_PERSIST_TOKENS` extracted to `non-persist-tokens.mjs` (no more crawl-write/crud-merge drift);
+  `findId` reads `{data:[{id}]}` arrays; `commitSubEntities` re-queries handles after each commit (Vue/React
+  re-render / sequential row revelation) with signature dedup (no amplification).
+- Tests: +P0 cookie (document.cookie discriminator), T-P1-F1, T-P1-F2, T-P2-array, crud-merge mutation flag; all
+  suites green (stealth 29, crud-merge 8). Deepest nested-form end-to-end completion remains best-effort; the
+  generic machinery is unit-proven and now runs authenticated.
+
+---
+
 ## [2.4.38] + playwright [0.2.12] — 2026-07-11
 
 ### Fixed — crawl-write.mjs patch #2: adversarial-review correctness fixes (F1–F5)
