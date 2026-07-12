@@ -4,6 +4,31 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.45] — 2026-07-12
+
+### Added — deterministic DOM-XSS coverage (source→sink static inventory)
+Completes the DOM-XSS reproducibility work: 2.4.44 made the per-URL *verdict* deterministic (`domxss-detect.mjs`);
+this makes *which pages/sources get tested* deterministic too, so coverage no longer drifts with the agent's
+ad-hoc choices — the second structural cause of "found one scan, missed the next".
+
+- **New `plugins/pentest/skills/pentest/attacks/client-side/dom-based/domxss-sources/domxss-sources.mjs` (+test).**
+  A zero-dep static scanner: it reads JS + HTML bodies from the crawl HAR (recordHar embeds every response body)
+  and/or a directory, inventories DOM-XSS **sources** (`location.hash/search`, `window.name`, `postMessage`,
+  `document.referrer/cookie`, generic URL reads) and **sinks** (`innerHTML`/`outerHTML`, `document.write`,
+  `insertAdjacentHTML`, `eval`/`Function`, string `setTimeout`, jQuery `html()`/`append()`, React
+  `dangerouslySetInnerHTML`, Vue `v-html`, Angular `[innerHTML]`, JS-URL navigation), and emits a reproducible
+  `domxss-worklist.json`: `{sources_present, sinks_present, detectable_sources, manual_review_sources, worklist:[
+  {url, sources[], priority}]}`. One worklist entry per in-scope document × the sources the code actually reads;
+  pages that co-locate a source and a sink are ranked `high`. Scope-filtered; `referrer`/`cookie` are separated
+  as manual-review (the backbone can't set them).
+- **`xss-tester` agent:** the DOM-XSS phase now builds the worklist from the recon HAR **first** (`domxss-sources`,
+  resolved repo-then-cache), then runs `domxss-detect.mjs` over **every** worklist entry (high-priority first)
+  with that entry's sources — coverage derived from the app's own code, not guessed.
+- Tests: +3 (directory scan with source→sink co-occurrence + priority, manual-vs-detectable source separation,
+  HAR parse with in-/out-of-scope attribution). Fully generic (0 engagement tokens).
+
+---
+
 ## [2.4.44] + playwright [0.2.18] — 2026-07-12
 
 ### Fixed — DOM-XSS detection was not reproducible across scans
