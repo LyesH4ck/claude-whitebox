@@ -4,6 +4,32 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.41] + playwright [0.2.15] — 2026-07-12
+
+### Added — two-tier CRUD crawler: deterministic backbone + AI form-driver handoff
+The deep-CRUD limitation (the single most complex real form not completed purely generically) is now handled by a
+two-tier handoff instead of being a dead end.
+
+- **Tier 1 — `crawl-write.mjs` emits `forms_to_drive[]`** (`+ forms-to-drive.json`): armed-only, a form-region the
+  deterministic filler DETECTED but did not complete is flagged on two independent triggers — `submit-no-write`
+  (clicked submit, captured no write — any form) and `picker-first` (a picker + a create-hint primary action never
+  driven to a write). Each entry carries `{route, url, reason, detected:{pickers, primary_action, candidate_actions},
+  background_writes}` (the load-time telemetry/preview writes the driver must NOT count as creates). Proven live on
+  the heavy Vuetify form.
+- **Tier 2 — new `form-driver` agent** (`agents/form-driver.md`): adaptive AI driver for ONE flagged form —
+  same hard Phase-0 gate (env + RoE), authenticated+proxied browser via `addCookies`, picks a VALID counterparty,
+  commits sub-rows before the parent submit, applies the persistence oracle (a 2xx is not a create), and returns
+  seeds in the backbone's exact shape (`actions[]`/`session_writes[]`/`findings[]`) with a hard `crud-merge`
+  contract (bare-label owner, real `created.id`, `mutation` flag). Parallelizable per form.
+- **Orchestration** — `crud-exerciser.md` Phase 3 and `commands/crud.md` wire the handoff: after the backbone run,
+  read `forms-to-drive.json` and drive each flagged form (inline or by fanning out `form-driver` subagents), then
+  merge. The crud summary now reports "complex forms driven by AI".
+- Agent count 19 → **20** (docs/CLAUDE.md + READMEs en/fr/zh).
+- Tests: +3 (`forms_to_drive` emission; no emission in dry-run; a no-picker gated form flagged via submit-no-write).
+  Stealth suite 36/0, crud-merge 8/0, all green.
+
+---
+
 ## [2.4.40] + playwright [0.2.14] — 2026-07-12
 
 ### Added / Fixed — crawl-write.mjs patch #4: reach & engage real SPA forms (G1 seeds, G2 picker) + regressions

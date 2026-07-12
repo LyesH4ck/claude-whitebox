@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    为 Claude Code 打造的白盒源码审计 + 黑盒渗透测试 —— 10 个 codeaudit 审计 agent 覆盖 10 个 OWASP 领域，以及一个包含 19 个 agent、64 个攻击类别的渗透测试框架（集成 Kali MCP）。
+    为 Claude Code 打造的白盒源码审计 + 黑盒渗透测试 —— 10 个 codeaudit 审计 agent 覆盖 10 个 OWASP 领域，以及一个包含 20 个 agent、64 个攻击类别的渗透测试框架（集成 Kali MCP）。
     <br />
     结构化、人工介入（human-in-the-loop）、以证据为驱动。
   </p>
@@ -733,7 +733,7 @@ claude-whitebox/
 │   └── pentest/
 │       ├── .claude-plugin/
 │       │   └── plugin.json          # 插件元数据（MIT）
-│       ├── agents/                  # 19 个 agent .md 文件
+│       ├── agents/                  # 20 个 agent .md 文件
 │       ├── docs/
 │       │   ├── CLAUDE.md            # agent 架构概览
 │       │   ├── WORKFLOWS.md         # 规划与批准工作流参考

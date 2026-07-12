@@ -59,6 +59,10 @@ function startServer() {
     }
     if (req.method === 'GET' && u.pathname === '/vendors/new') return html(res, createForm('/api/v1/vendors'));
     if (req.method === 'GET' && u.pathname === '/strict/new') return html(res, createForm('/api/v1/strict'));
+    // picker-first form the deterministic filler cannot complete (a combobox + a primary action, no fillable inputs)
+    if (req.method === 'GET' && u.pathname === '/picker/new') return html(res, page('<h1>New invoice</h1><div role="combobox" aria-label="Search a Buyer"><input aria-autocomplete="list" placeholder="Search a Buyer"></div><button type="button" id="c">Create Invoice</button>'));
+    // complex NO-PICKER form the backbone clicks-submits but that fires no write (validation-gated) → submit-no-write
+    if (req.method === 'GET' && u.pathname === '/gated/new') return html(res, page('<h1>Wire transfer</h1><form onsubmit="return false"><input name="beneficiary" required><input name="iban" required><button type="button" id="g">Save</button></form>'));
     if (req.method === 'GET' && u.pathname === '/danger/new') return html(res, page('<form onsubmit="return false"><input name="name"><button type="button" id="d">Delete</button></form>'));
     if (req.method === 'POST' && u.pathname === '/api/v1/vendors') {
       const body = await readBody(req); writes.push({ path: u.pathname, body });
@@ -93,6 +97,30 @@ async function run(startPath, extraArgs = []) {
     return { out, writes: server._writes, crudFile };
   } finally { rmSync(dir, { recursive: true, force: true }); server.close(); }
 }
+
+test('emits forms_to_drive[] for a picker-first form the filler cannot complete (AI-tier handoff)', async () => {
+  const { out } = await run('/picker/new', ['--submit', '--marker', 'PENTEST-ftd']);
+  assert.ok(Array.isArray(out.forms_to_drive), 'forms_to_drive present in output');
+  assert.ok(out.forms_to_drive.length >= 1, 'the picker-first form is flagged for the AI tier');
+  const f = out.forms_to_drive[0];
+  assert.match(f.route, /\/picker\/new/, 'route recorded');
+  assert.ok(/picker-first|submit-no-write/.test(f.reason), 'reason set');
+  assert.ok(f.detected && /Create/i.test(f.detected.primary_action || ''), 'primary action detected');
+  assert.equal(out.totals.forms_to_drive, out.forms_to_drive.length, 'totals mirrors the list');
+});
+
+test('does NOT emit forms_to_drive in dry-run (driving is armed-only, so no picker/list noise)', async () => {
+  const { out } = await run('/picker/new');   // no --submit → dry-run
+  assert.equal((out.forms_to_drive || []).length, 0, 'no handoff emitted in dry-run');
+});
+
+test('flags a complex NO-PICKER form the backbone could not submit (submit-no-write → AI tier)', async () => {
+  const { out } = await run('/gated/new', ['--submit', '--marker', 'PENTEST-gate']);
+  const f = (out.forms_to_drive || []).find((x) => /\/gated\/new/.test(x.route));
+  assert.ok(f, 'a no-picker gated form is handed off to the AI tier');
+  assert.equal(f.reason, 'submit-no-write', 'reason is submit-no-write');
+  assert.equal(f.detected.pickers.length, 0, 'no picker present — flagged on the submit-no-write trigger, not pickers');
+});
 
 test('dry-run (default) submits nothing but previews marker-tagged values', async () => {
   const { out, writes } = await run('/vendors/new');

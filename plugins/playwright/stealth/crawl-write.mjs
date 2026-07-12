@@ -246,6 +246,8 @@ const intents = [];
 const blocked = [];        // G5: submits that fired no real write (client no-op / validation block) + the read reason
 const sessionWrites = [];  // G6: every in-scope write seen this session (seeds for BOLA/injection), incl. intermediate
 const findings = [];       // G6: 4xx/5xx writes (endpoint contract + server bug), never silently dropped
+const formsToDrive = [];   // HANDOFF: complex/picker-first form-regions the deterministic filler did NOT complete
+                           // — emitted for the AI tier (crud-exerciser / form-driver) to drive adaptively.
 let browser;
 try {
   browser = await launch({ headless: a.headless, proxy: a.proxy || null });
@@ -333,7 +335,33 @@ try {
     processed.add(key);               // key may already be in `visited`, but its page still needs exercising.
     visited.add(key);
     pagesVisited.push(page.url());
+    const beforeA = actions.length, beforeB = blocked.length;
     await processFormsOnPage(page);
+    // HANDOFF (armed only — driving is state-changing, so "could not complete" is meaningless in dry-run where the
+    // filler completes nothing). Flag a form-region the backbone did NOT complete, on two INDEPENDENT triggers:
+    //  - submit-no-write: it clicked submit and captured no write (ANY form, picker or not) — the hardest forms;
+    //  - picker-first:   a picker + a create-hint primary action it never drove to a write.
+    try {
+      if (armed && actions.length === beforeA && !formsToDrive.some((f) => f.url === page.url())) {
+        const submittedNoWrite = blocked.length > beforeB;
+        const pickers = await page.$$eval(PICKER_SEL_VIS, (els) => els.slice(0, 6)
+          .map((e) => (e.getAttribute('placeholder') || e.getAttribute('aria-label') || e.tagName).trim().slice(0, 60)).filter(Boolean));
+        const btns = await page.$$eval('button,[role="button"]', (els) => els
+          .map((e) => (e.innerText || e.getAttribute('aria-label') || '').trim()).filter(Boolean).slice(0, 60)).catch(() => []);
+        const cands = [...new Set(btns.filter((t) => CREATE_HINT.test(t) && !CANCEL_BACK.test(t) && !DESTRUCTIVE.test(t)))];
+        // prefer the PARENT submit over a sub-entity add ("new line item", "add another", "add documents", …)
+        const primary = cands.find((t) => !/\b(new line|add (item|line|row|another|documents?))\b/i.test(t)) || cands[cands.length - 1] || null;
+        if (submittedNoWrite || (pickers.length && primary)) {
+          formsToDrive.push({
+            id: 'ff-' + (formsToDrive.length + 1), route: routeOf(page.url()), url: page.url(),
+            reason: submittedNoWrite ? 'submit-no-write' : 'picker-first',
+            detected: { pickers, primary_action: primary, candidate_actions: cands.slice(0, 8) },
+            // recent in-scope writes = the load-time telemetry/preview endpoints the driver must NOT count as creates
+            background_writes: sessionWrites.slice(-10).map((w) => ({ method: w.method, host: w.host, path: w.path, status: w.status, mutation: w.mutation })),
+          });
+        }
+      }
+    } catch { /* detection best-effort */ }
     await enumerateWidgets(page);   // read-only: custom dropdowns / typeaheads → option-driven param discovery
   };
 
@@ -408,6 +436,8 @@ try {
   emitOut.session_writes = sessionWrites;   // G6 — all in-scope writes (seeds), incl. intermediate sub-entity writes
   emitOut.findings = findings;              // G6 — 4xx/5xx writes (endpoint contract + server bug)
   emitOut.blocked = blocked;                // G5 — submits that produced no real create + the read reason
+  emitOut.forms_to_drive = formsToDrive;    // HANDOFF — complex forms for the AI tier to drive (see ARCHITECTURE)
+  emitOut.totals.forms_to_drive = formsToDrive.length;
   // discovery output is written even in dry-run (read-only) — it feeds /pentest:sql etc.
   if (a.out && paramInv.length) { await mkdir(a.out, { recursive: true }); await writeFile(path.join(a.out, 'widget-param-inventory.json'), JSON.stringify(paramInv, null, 2)); }
 
@@ -425,6 +455,7 @@ try {
     if (armed && actions.length) wrote.push(['crud-exercise.json', actions]);
     if (sessionWrites.length) wrote.push(['session-writes.json', sessionWrites]);   // seeds for BOLA/injection
     if (findings.length) wrote.push(['findings.json', findings]);                    // 4xx/5xx endpoint bugs
+    if (formsToDrive.length) wrote.push(['forms-to-drive.json', formsToDrive]);       // HANDOFF to the AI tier
     if (wrote.length) { await mkdir(a.out, { recursive: true }); for (const [f, d] of wrote) await writeFile(path.join(a.out, f), JSON.stringify(d, null, 2)); }
   }
 
