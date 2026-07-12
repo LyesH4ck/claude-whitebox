@@ -4,6 +4,37 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.40] + playwright [0.2.14] — 2026-07-12
+
+### Added / Fixed — crawl-write.mjs patch #4: reach & engage real SPA forms (G1 seeds, G2 picker) + regressions
+With auth unblocked (patch #3), this patch makes the harness able to REACH create views on a micro-frontend
+launcher and ENGAGE picker-first forms, and fixes two residual regressions. See `stealth/PATCH-NOTES-4.md`.
+Genericity preserved (`--seed-route` is operator input). **Live-validated authenticated.**
+
+- **G1 — `--seed-route <route>` (repeatable) / `--seeds <file>`.** Operator-supplied create routes are resolved,
+  scope-checked, and enqueued FIRST in the BFS frontier — the reliable way to reach a create view on a launcher
+  with no crawlable `<a href>`. Emits `seed_routes`. **Live:** the seed page is now reached (`pages_visited 1→2`).
+- **G2 — picker-first / multi-step forms.** A shared `PICKER_SEL` broadens picker recognition (Vuetify
+  v-autocomplete/v-select, Material mat-select, ARIA comboboxes, typeaheads); after a valid option is selected the
+  step loop re-introspects and commits the revealed rows; `pickSubmit` no longer grabs a sub-entity Save, and the
+  parent submit is re-picked after the rows commit (it is often disabled until then). Unit-proven (T-G2-picker).
+- **bug#1** — `idFromUrlChange` restored to the `positive` signal: a create proven only by navigating to `/…/{id}`
+  (POST 200, no id/Location) is `created` again, not `blocked`.
+- **bug#2** — read-POSTs classified `mutation:false` producer-side: a GraphQL query (`{query}` non-mutation, or a
+  `/graphql` terminal) and an ag-grid list POST (`filterModel`/`startRow`/`rowGroupCols`/`sortModel`) are never
+  seeded as mutations.
+- The shared `non-persist-tokens.mjs` set was restored to full breadth (incl. activity/log/count/list): the
+  create oracle's positive-override makes it safe, and it correctly marks a telemetry POST (e.g. an activity-log
+  200) as a non-mutation for session-write seeding — a mis-seed the live run caught.
+- `crud-exerciser.md` documents the **two-tier model** (authenticated mapper = reliable; deep CRUD = best-effort
+  via seed-routes + picker recognition) and `--seed-route` usage.
+- Tests: +T-G1-seed, T-G2-picker, T-bug1, T-bug2 (+ telemetry classification); stealth 33, crud-merge 8, all green.
+  **Honest status:** the authenticated mapper tier is solid and live-proven; the deep-CRUD tier reaches create
+  views and drives generic picker forms, but the single most complex real form is not yet completed purely
+  generically (heavy mount + dependent interactions) — the machinery is unit-proven.
+
+---
+
 ## [2.4.39] + playwright [0.2.13] — 2026-07-11
 
 ### Fixed — crawl-write.mjs patch #3: authenticated-browser blocker (P0) + patch #2 over-correction (P1) + hygiene (P2)

@@ -27,7 +27,7 @@
 //     [--viewport 1366x900] [--timeout 30000] [--no-headless] [--insecure]
 
 import { parseArgs } from 'node:util';
-import { mkdir, writeFile, access } from 'node:fs/promises';
+import { mkdir, writeFile, access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bodySignature, flattenParams, normPath } from './op-signature.mjs';
@@ -54,6 +54,8 @@ try {
     timeout:  { type: 'string', default: '30000' },
     'max-forms': { type: 'string', default: '6' },
     'max-views': { type: 'string', default: '15' },   // pages to visit while following links looking for forms
+    'seed-route': { type: 'string', multiple: true },  // G1 — operator-supplied create routes to visit (repeatable)
+    seeds: { type: 'string' },                         // G1 — a file of seed routes, one per line
     widgets:  { type: 'boolean', default: true },     // read-only: exercise custom dropdowns/typeaheads for param discovery
     'max-widgets': { type: 'string', default: '10' },
     'max-options': { type: 'string', default: '3' },  // option values to select per dropdown (each may echo a param)
@@ -91,6 +93,11 @@ const cssAttr = (s) => String(s).replace(/["\\]/g, '\\$&');
 // Never follow a link that would end the session or mutate state by navigation alone.
 const AVOID_LINK = /\b(logout|log-out|signout|sign-out|deconnex|déconnex|disconnect|delete|remove|supprim|drop|revoke)\b/i;
 const CREATEISH_LINK = /(create|\/new\b|\/add\b|nouveau|ajouter|créer|creer|register|inscription)/i;
+// G2 — custom pickers/typeaheads that act as a form ENTRY POINT (Vuetify v-autocomplete/v-select, Angular
+// Material mat-select, ARIA comboboxes, searchable typeaheads). Recognizing these is what lets the harness treat
+// a picker-first form (a buyer search that, once selected, REVEALS the rest of the form) as a form-region.
+const PICKER_SEL = '[role="combobox"], [aria-haspopup="listbox"], mat-select, .v-autocomplete, .v-select, .v-combobox, [class*="autocomplete"], [class*="typeahead"], input[aria-autocomplete]';
+const PICKER_SEL_VIS = PICKER_SEL.split(', ').map((s) => s + ':visible').join(', ');
 // F7/G3 — a blocking error can surface as a toast OR inline validation. Multilingual: match "invalid"/"error"/…
 // AND a generic "<negation> … valid" (e.g. "not a valid", "non valide", "nicht gültig") — no single language hard-coded.
 // (Defined here, before the main top-level-await block, so the hoisted helpers below can use them without a TDZ error.)
@@ -167,17 +174,35 @@ function collectEchoValues(reqBodyStr) {
   } catch { for (const kv of String(reqBodyStr).split('&')) { const [k, v] = kv.split('='); if (v) { try { add(k, decodeURIComponent(v)); } catch { add(k, v); } } } }
   return set;
 }
-// F1 — token fragments that HINT a non-persistent write (preview / validation / telemetry / typeahead). This is
-// now ADVISORY: a strong positive signal (201 / Location / non-echoed id) overrides it. Checked on the TERMINAL
-// path segment ONLY (a create nested under `.../vendor/` is not disqualified by a parent segment), and the
-// lottery singular/plural tokens the review flagged (check(s), list, activity, log(s), track, trace, count,
-// health) are removed — they wrongly disqualified real creates.
+// F1 — token fragments that HINT a non-persistent write (preview / validation / telemetry / typeahead / read).
+// For the CREATE oracle this is ADVISORY: a strong positive signal (201 / Location / URL→detail / non-echoed id)
+// OVERRIDES it, so a real 201 on a `…/validation` path is still a create. Checked on the TERMINAL segment ONLY
+// (a create nested under `.../vendor/` is not disqualified by a parent segment). The full set (incl. activity/
+// log/count/list) is kept because the collector's positive-override makes it safe, and it correctly marks a
+// telemetry POST (e.g. an activity-log 200) as a NON-mutation for session-write seeding. See non-persist-tokens.mjs.
 import { NON_PERSIST_TOKENS } from './non-persist-tokens.mjs';
 const isNonPersistTerminal = (pathname) => {
   const segs = String(pathname).toLowerCase().replace(/\/+$/, '').split('/').filter(Boolean);
   const last = segs[segs.length - 1] || '';
   return last.split(/[-_.]+/).filter(Boolean).some((t) => NON_PERSIST_TOKENS.has(t));
 };
+// bug#2 — a POST can be a READ, not a mutation: a GraphQL query (`{query, variables}` where the op is not a
+// `mutation`, or a `/graphql` terminal) or an ag-grid/datatable list POST (`filterModel`/`startRow`/`rowGroupCols`
+// /`sortModel`). Classify these as reads so crud-merge never replays them cross-identity as mutations.
+function isReadPost(pathname, reqBodyStr) {
+  const last = String(pathname).toLowerCase().replace(/\/+$/, '').split('/').filter(Boolean).pop() || '';
+  let graphqlTerminal = last === 'graphql';
+  if (!reqBodyStr) return graphqlTerminal;
+  try {
+    const j = JSON.parse(reqBodyStr);
+    if (j && typeof j === 'object') {
+      if (typeof j.query === 'string') return !/^\s*mutation\b/i.test(j.query);   // GraphQL: only `mutation …` writes
+      if (j.operationName && !('input' in j) && !('variables' in j && j.variables && j.variables.input)) return true;
+      if ('filterModel' in j || 'startRow' in j || 'endRow' in j || 'rowGroupCols' in j || 'sortModel' in j) return true;   // ag-grid list
+    }
+  } catch { /* form-encoded / non-JSON → not a recognizable read-POST */ }
+  return graphqlTerminal;
+}
 function idFromLocation(loc) { if (!loc) return null; const seg = String(loc).split('?')[0].replace(/\/$/, '').split('/').pop(); return seg && /[0-9a-f-]{2,}/i.test(seg) ? { id: seg, id_field: 'Location' } : null; }
 
 // ── DOM introspection: enumerate a form's fillable named fields (runs in the page) ───────────────────────
@@ -270,8 +295,9 @@ try {
       // ag-grid list POST, a search). Signal = method + status + form: PUT/PATCH/DELETE always mutate; a POST is a
       // mutation only on a 201, a Location, or a 2xx to a non-preview/search/telemetry terminal segment.
       const loc = resp.headers()['location'] || null;
+      // bug#2 — a GraphQL query / ag-grid list POST is a READ, never a mutation seed (even to a non-preview path).
       const mutation = /^(PUT|PATCH|DELETE)$/i.test(m)
-        || (m === 'POST' && (status === 201 || !!loc || (status >= 200 && status < 300 && !isNonPersistTerminal(u.pathname))));
+        || (m === 'POST' && !isReadPost(u.pathname, reqBody) && (status === 201 || !!loc || (status >= 200 && status < 300 && !isNonPersistTerminal(u.pathname))));
       sessionWrites.push({ method: m, host: u.hostname, path: u.pathname, status, content_type: ct, mutation });
       if (status >= 400) {
         let snippet = ''; try { snippet = (await resp.text()).slice(0, 300); } catch { /* body unavailable */ }
@@ -322,8 +348,24 @@ try {
     for (const l of found) { const k = routeKey(l.href); if (!enqueued.has(k) && !visited.has(k)) { enqueued.add(k); frontier.push(l.href); } }
   };
 
+  // G1 — SEED ROUTES: an operator-supplied list of known create routes (--seed-route, repeatable, and/or a
+  // --seeds file). On a micro-frontend launcher that exposes no crawlable `<a href>`, this is the most reliable
+  // way to reach a create view. Seeds are resolved against the start URL, scope-checked, and enqueued FIRST (they
+  // are the highest-value targets); auto-discovery still runs on top. Operator INPUT — never a hard-coded target.
+  const seedRoutes = [...(a['seed-route'] || [])];
+  if (a.seeds) { try { for (const line of (await readFile(a.seeds, 'utf8')).split(/\r?\n/)) { const s = line.trim(); if (s && !s.startsWith('#')) seedRoutes.push(s); } } catch { /* unreadable seeds file — ignore */ } }
+  const seedFrontier = [];
+  for (const s of seedRoutes) {
+    let abs; try { abs = new URL(s, a.url).href; } catch { continue; }
+    try { if (!inScope(new URL(abs).hostname.toLowerCase())) continue; } catch { continue; }
+    const k = routeKey(abs);
+    if (!enqueued.has(k) && !visited.has(k)) { enqueued.add(k); seedFrontier.push(abs); }
+  }
+  emitOut.seed_routes = seedFrontier.length;
+
   await visitAndExercise();                              // start page
   await harvest();
+  frontier.unshift(...seedFrontier);                     // seeds jump the queue — visit the known create routes first
   let views = 0;
   while (views < maxViews && frontier.length) {          // navigation budget = --max-views, independent of --max-forms
     const target = frontier.shift();
@@ -414,7 +456,7 @@ try {
   // (type a probe in a typeahead → pick the first result; else pick the first option). This is what satisfies
   // required custom selects so the primary/submit button enables. Complements native-<select> filling.
   async function fillWidgets(scopeLoc, pg) {
-    const SEL = '[role="combobox"], [aria-haspopup="listbox"], mat-select';
+    const SEL = PICKER_SEL;
     const cn = Math.min(await scopeLoc.locator(SEL).count().catch(() => 0), MAX_WIDGETS);
     for (let i = 0; i < cn; i++) {
       const c = scopeLoc.locator(SEL).nth(i);
@@ -458,7 +500,7 @@ try {
     else scopeLoc = pg;
     const scopeEl = async () => (scopeLoc === pg ? null : await scopeLoc.elementHandle().catch(() => null));
     const fields0 = await introspectFields(pg, await scopeEl());
-    if (!fields0.length && !(armed && (await scopeLoc.locator('[role="combobox"], mat-select').count().catch(() => 0)))) return false;
+    if (!fields0.length && !(armed && (await scopeLoc.locator(PICKER_SEL).count().catch(() => 0)))) return false;
     const resource = guessResource(pg.url(), fields0);
     const filledFields = [];
 
@@ -476,13 +518,16 @@ try {
     for (let step = 0; step < MAX_STEPS; step++) {
       const fields = step === 0 ? fields0 : await introspectFields(pg, await scopeEl());   // re-introspect each step
       await fillFields(scopeLoc, fields, step, step === 0 ? filledFields : null);
-      await fillWidgets(scopeLoc, pg);
-      const submitLoc = await pickSubmit(scopeLoc, isDialog);
+      await fillWidgets(scopeLoc, pg);   // G2 — drives a picker/typeahead; selecting a valid option may REVEAL more
+      let submitLoc = await pickSubmit(scopeLoc, isDialog);
       // G4 — a parent create form can hold sub-entities that each persist via their OWN Save (e.g. a related-party
       // sub-form → its POST, each line-item row → its PUT). Commit them in DOM order BEFORE the parent's terminal
       // action. F3 — run this ONCE per form (step 0 only); re-running it on each validation-retry step (or on a
       // terminal ≥400) re-clicked the sub-Saves → many objects for one form. Enforces the "1 object/form" cap.
       if (step === 0) await commitSubEntities(scopeLoc, pg, submitLoc);
+      // G2 — the parent action is often DISABLED until the sub-entities commit (a "Create Invoice" lights
+      // up only after the buyer + a line are saved). Re-pick after committing so a now-enabled submit is found.
+      if (!submitLoc) submitLoc = await pickSubmit(scopeLoc, isDialog);
       if (!submitLoc) break;
       clickedSubmit = true;
       // COLLECT every mutating in-scope write this submit fires — a submit typically triggers several (telemetry,
@@ -510,12 +555,15 @@ try {
         const reqBodyStr = (() => { try { return c.rq.postData() || ''; } catch { return ''; } })();
         let respJson = null; try { respJson = JSON.parse(await c.resp.text()); } catch { /* non-JSON */ }
         const idInfo = findId(respJson, collectEchoValues(reqBodyStr), '') || idFromLocation(c.loc);
-        // F1 — a POSITIVE persistence signal (201 / Location / non-echoed response id) makes it a create and
-        // OVERRIDES the non-persistent token; the token (checked on the TERMINAL segment only) is advisory — it
-        // just deprioritizes an ambiguous write when a cleaner create exists.
-        collected.push({ ...c, reqBodyStr, idInfo,
+        // F1 — a POSITIVE persistence signal (201 / Location / non-echoed response id / a URL change to a detail
+        // route) makes it a create and OVERRIDES the non-persistent token; the token (checked on the TERMINAL
+        // segment only) is advisory — it just deprioritizes an ambiguous write when a cleaner create exists.
+        // bug#1 — restore the URL→detail signal: a SPA create whose ONLY proof is navigating to `/…/{id}` must be
+        // a create, not `blocked`.
+        const urlId = idFromUrlChange(pg.url(), c.u.pathname);
+        collected.push({ ...c, reqBodyStr, idInfo: idInfo || urlId,
           denyTerminal: isNonPersistTerminal(c.u.pathname),
-          positive: c.status >= 200 && c.status < 300 && (c.status === 201 || !!c.loc || !!idInfo) });
+          positive: c.status >= 200 && c.status < 300 && (c.status === 201 || !!c.loc || !!idInfo || !!urlId) });
       }
       const positives = collected.filter((c) => c.positive);
       const createCand = positives.find((c) => !c.denyTerminal) || positives[0];   // positive overrides token; prefer clean path
@@ -534,7 +582,7 @@ try {
       // session listener logged it as a finding). Otherwise (only weak 200s / no write) keep completing if controls remain.
       if (collected.some((c) => c.status >= 400 && c.status < 500) && step < MAX_STEPS - 1) continue;
       if (collected.some((c) => c.status >= 500)) break;
-      if (!((await scopeLoc.locator('input, select, textarea, [role="combobox"], mat-select').count().catch(() => 0)) > 0)) break;
+      if (!((await scopeLoc.locator('input, select, textarea, ' + PICKER_SEL).count().catch(() => 0)) > 0)) break;
     }
     // G5 — state-delta oracle: we clicked a submit but NO 2xx create landed (a client no-op, an Rp-0/empty total,
     // or a validation block). An enabled button and a 200 are NOT proof — record an intent_blocked with the read
@@ -626,6 +674,9 @@ try {
       if (!(await b.isVisible().catch(() => false)) || !(await b.isEnabled().catch(() => true))) continue;
       const label = await labelOf(b);
       if (CANCEL_BACK.test(label) || DESTRUCTIVE.test(label)) continue;
+      // G2 — never pick a SUB-ENTITY Save (a create-hint button inside a repeated row/card) as the parent submit:
+      // when the parent action is disabled until the rows commit, this used to grab a line's Save instead.
+      if (await b.evaluate(subSaveOkContainer, null).catch(() => false)) continue;
       last = b;
       const cls = (await b.getAttribute('class').catch(() => '')) || '';
       if (!primary && /(primary|btn-primary|is-primary|_primary|confirm|submit)/i.test(cls)) primary = b;
@@ -641,7 +692,7 @@ try {
   async function enumerateWidgets(pg) {
     if (!a.widgets) return;
     await openAddDialogs(pg);   // reveal add-dialogs (widgets live inside them), via buttons not just links
-    const SEL = '[role="combobox"], [aria-haspopup="listbox"], mat-select, [class*="select"][class*="trigger"]';
+    const SEL = PICKER_SEL + ', [class*="select"][class*="trigger"]';
     const wn = Math.min(await pg.locator(SEL).count().catch(() => 0), MAX_WIDGETS);
     for (let i = 0; i < wn; i++) {
       const t = pg.locator(SEL).nth(i);
@@ -683,7 +734,7 @@ try {
     const SEARCHISH = /search|find|filter|query|lookup|recherche|cari|cerca|buscar/i;
     const visibleFields = await introspectFields(pg, null);
     if (visibleFields.some((f) => !(SEARCHISH.test(f.name || '') || f.type === 'search'))) return;
-    if (await pg.locator('[role="combobox"]:visible, mat-select:visible, [aria-haspopup="listbox"]:visible').count().catch(() => 0)) return;
+    if (await pg.locator(PICKER_SEL_VIS).count().catch(() => 0)) return;
     const btns = pg.locator('button, [role="button"]');
     const n = Math.min(await btns.count().catch(() => 0), 15);
     let opened = 0;

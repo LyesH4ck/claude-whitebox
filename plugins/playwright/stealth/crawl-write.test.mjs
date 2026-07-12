@@ -913,3 +913,157 @@ test('T-P2-array: findId reads the created id from an array wrapper {data:[{id}]
     assert.equal(act.created && act.created.id, 'arr-7', 'id read from data[0].id');
   } finally { server.close(); }
 });
+
+// ── Patch #4 — reach & engage real SPA forms (G1 seeds, G2 picker) + regressions (bug#1, bug#2) ─────────────
+
+// T-G1-seed — a launcher with NO crawlable create route; an operator --seed-route reaches the create form anyway.
+function startSeedServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page('<h1>Launcher</h1><a href="/logout">Log out</a>'));  // no create link
+    if (req.method === 'GET' && u.pathname === '/make') return html(res, createForm('/api/make'));
+    if (req.method === 'POST' && u.pathname === '/api/make') { const b = await readBody(req); server._writes.push({ path: u.pathname, body: b }); res.writeHead(201, { 'Content-Type': 'application/json' }); return res.end('{"id":"m-1"}'); }
+    res.writeHead(404); res.end('nope');
+  });
+  server._writes = [];
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-G1-seed: --seed-route reaches a create form the launcher does not link to', async () => {
+  const server = await startSeedServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--submit', '--marker', 'PENTEST-g1s', '--seed-route', '/make', '--max-views', '4'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.equal(out.seed_routes, 1, 'the seed route was enqueued');
+    assert.ok(server._writes.some((w) => w.path === '/api/make'), 'the seeded create form was reached + submitted');
+  } finally { server.close(); }
+});
+
+// T-G2-picker — a picker-first form (no input cluster at load): a buyer combobox that, once a valid option is
+// picked, REVEALS two line rows to Save, then the Create button (disabled until the lines commit). The harness
+// recognizes the picker as a form-region, selects a valid option, commits the revealed rows, then creates.
+function startPickerServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>New invoice</h1>
+      <div id="buyer" role="combobox" tabindex="0">Select buyer</div>
+      <div id="lb" role="listbox" style="display:none"><div role="option" data-ok="1">Valid buyer</div></div>
+      <div id="lines"></div>
+      <button id="create" class="btn-primary" disabled>Create Invoice</button>
+      <script>
+        let saved=0;
+        document.getElementById('buyer').addEventListener('click',()=>{document.getElementById('lb').style.display='block';});
+        document.querySelectorAll('#lb [role=option]').forEach(o=>o.addEventListener('click',()=>{
+          document.getElementById('lb').style.display='none';
+          const box=document.getElementById('lines');
+          box.innerHTML='<div class="line-item"><input aria-label="i1"><button class="ls" data-n="1">Save</button></div>'+
+                        '<div class="line-item"><input aria-label="i2"><button class="ls" data-n="2">Save</button></div>';
+          box.querySelectorAll('.ls').forEach(b=>b.addEventListener('click',()=>{
+            fetch('/inventories/'+b.getAttribute('data-n'),{method:'PUT',headers:{'Content-Type':'application/json'},body:'{"x":1}'})
+              .then(()=>{ saved++; if(saved>=2) document.getElementById('create').disabled=false; });
+          }));
+        }));
+        document.getElementById('create').addEventListener('click',()=>{ if(document.getElementById('create').disabled) return;
+          fetch('/invoice',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"final":1}'}).then(r=>r.json()).then(()=>{document.title='ok';}); });
+      </script>`));
+    if (req.method === 'PUT' && /^\/inventories\/[12]$/.test(u.pathname)) { server._c[u.pathname]=(server._c[u.pathname]||0)+1; res.writeHead(200,{'Content-Type':'application/json'}); return res.end('{"code":"00"}'); }
+    if (req.method === 'POST' && u.pathname === '/invoice') { server._c['/invoice']=(server._c['/invoice']||0)+1; res.writeHead(201,{'Content-Type':'application/json'}); return res.end('{"id":"inv-1"}'); }
+    res.writeHead(404); res.end('nope');
+  });
+  server._c = {};
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-G2-picker: recognizes a picker-first form, selects a valid option, commits revealed rows, then creates', async () => {
+  const server = await startPickerServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--submit', '--marker', 'PENTEST-g2p', '--max-forms', '2'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.equal(server._c['/inventories/1'], 1, `line 1 committed once (got ${server._c['/inventories/1']})`);
+    assert.equal(server._c['/inventories/2'], 1, `line 2 committed once (got ${server._c['/inventories/2']})`);
+    assert.equal(server._c['/invoice'], 1, 'the parent invoice was created once after the rows committed');
+    assert.ok((out.actions || []).some((a) => a.request.path === '/invoice'), 'the create was captured');
+  } finally { server.close(); }
+});
+
+// T-bug1 — a create whose ONLY proof is a URL change to a detail route (POST 200, no id/Location) must be
+// `created`, not `blocked`.
+function startUrlChangeServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <h1>New order</h1><input name="ref" placeholder="ref"><button id="go" class="btn-primary">Create</button>
+      <script>document.getElementById('go').addEventListener('click',()=>{
+        fetch('/api/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"ref":"x"}'})
+          .then(()=>{ history.pushState({},'', '/orders/123'); });  // create proven only by client navigation
+      });</script>`));
+    if (req.method === 'POST' && u.pathname === '/api/orders') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end('{"status":"ok"}'); }  // 200, NO id, NO Location
+    res.writeHead(404); res.end('nope');
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-bug1: a create proven only by a URL change to /…/{id} is `created`, not `blocked`', async () => {
+  const server = await startUrlChangeServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--submit', '--marker', 'PENTEST-b1'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    const act = (out.actions || []).find((a) => a.request.path === '/api/orders');
+    assert.ok(act, `URL-change create recorded in actions, not blocked (blocked=${JSON.stringify(out.blocked)})`);
+    assert.equal(act.created && act.created.id, '123', 'id captured from the URL detail route');
+  } finally { server.close(); }
+});
+
+// T-bug2 — a GraphQL read-POST (`{query}`) and an ag-grid list POST are classified mutation:false (not seeded).
+function startReadPostServer() {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/') return html(res, page(`
+      <div id="cb" role="combobox">Search</div>
+      <div id="lb" role="listbox" style="display:none"><input id="s" placeholder="Search items"></div>
+      <script>
+        document.getElementById('cb').addEventListener('click',()=>{document.getElementById('lb').style.display='block';});
+        document.getElementById('s').addEventListener('input',()=>{
+          fetch('/api/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'query Q($k:String){items(k:$k){id}}',variables:{k:'a'}})});
+          fetch('/api/rows',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filterModel:{},startRow:0,endRow:100})});
+          fetch('/transaction/api/v1/create-activity-log',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"e":1}'});
+        });
+      </script>`));
+    if (u.pathname === '/api/graphql' || u.pathname === '/api/rows' || u.pathname === '/transaction/api/v1/create-activity-log') { res.writeHead(200,{'Content-Type':'application/json'}); return res.end('{"data":{}}'); }
+    res.writeHead(404); res.end('nope');
+  });
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+test('T-bug2: a GraphQL query / ag-grid list POST is classified mutation:false (read-POST, not a seed)', async () => {
+  const server = await startReadPostServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/', '--scope', '127.0.0.1', '--cookie', 'x', '--max-widgets', '3'],   // dry-run: the read-POSTs still fire
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    const sw = out.session_writes || [];
+    const gql = sw.find((w) => w.path === '/api/graphql');
+    const rows = sw.find((w) => w.path === '/api/rows');
+    assert.ok(gql, `graphql POST was captured (got ${JSON.stringify(sw)})`);
+    assert.equal(gql.mutation, false, 'GraphQL query POST is mutation:false');
+    assert.ok(rows && rows.mutation === false, 'ag-grid list POST is mutation:false');
+    const log = sw.find((w) => w.path === '/transaction/api/v1/create-activity-log');
+    assert.ok(log && log.mutation === false, 'a telemetry (activity-log) POST is mutation:false, not a seed');
+  } finally { server.close(); }
+});
