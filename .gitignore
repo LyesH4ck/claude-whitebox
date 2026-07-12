@@ -13,6 +13,15 @@ plugins/*/skills/*/outputs/*
 # Playwright MCP scratch output — browser console/network logs from live targets (leaks real client hostnames)
 /.playwright-mcp/
 
+# Captured traffic — HARs hold Authorization/Cookie headers + response bodies (live secrets); the observed
+# corpus/raw lists hold real client hostnames+paths. NEVER commit. (har-import strips header VALUES for the
+# inventory, but the raw .har is unscrubbed.)
+*.har
+**/har/
+observed-requests.jsonl
+raw-traffic.jsonl
+playwright-mcp-session.har
+
 # Local OAST test lab — deliberately vulnerable, never commit or deploy
 /oast-lab/
 

@@ -51,7 +51,7 @@ export function parseCookieString(raw, scope) {
 
 export async function newStealthContext(
   browser,
-  { userAgent, insecure = true, extraHeaders, storageState, viewport, cookie, cookieScope } = {}
+  { userAgent, insecure = true, extraHeaders, storageState, viewport, cookie, cookieScope, harPath } = {}
 ) {
   const ctx = await browser.newContext({
     userAgent: userAgent || DEFAULT_UA,
@@ -61,6 +61,11 @@ export async function newStealthContext(
     ignoreHTTPSErrors: !!insecure,
     extraHTTPHeaders: extraHeaders || undefined,           // --header ONLY (Authorization Bearer etc. — browser-honored)
     storageState: storageState || undefined,               // carry an authenticated session (Playwright storageState JSON)
+    // COMPLETE-TRAFFIC BACKSTOP — record a full HAR (all methods/frames/bodies) so NO in-scope request is ever
+    // silently dropped: the interaction-triggered READ XHRs (picker-select ?name=…, row-drill /{id}) that the
+    // curated map misses are still on the wire → captured here → folded into the inventory by har-import.mjs.
+    // Flushes on ctx.close() (the harnesses always close in `finally`). Path is per-session unique (caller stamps it).
+    recordHar: harPath ? { path: harPath, mode: 'full', content: 'embed' } : undefined,
   });
   await ctx.addInitScript({ content: INIT_SCRIPT });
   // Inject --cookie as real cookies. Add per-cookie (a name with '@'/'.' that Playwright rejects must not fail the lot).

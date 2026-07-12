@@ -50,7 +50,8 @@ try {
     timeout:  { type: 'string', default: '30000' },
     'max-views': { type: 'string', default: '12' },
     scroll:   { type: 'string', default: '4' },
-    grid:     { type: 'boolean', default: true },       // --no-grid disables the ag-grid/table exercise
+    grid:     { type: 'boolean', default: true },       // --no-grid disables the ag-grid/table + interaction exercise
+    'max-options': { type: 'string', default: '2' },    // options to select per picker (each fires a ?keyword=/?name= read)
     headless: { type: 'boolean', default: true },
     insecure: { type: 'boolean', default: true },
   } }));
@@ -71,6 +72,14 @@ const inScope = (host) => SCOPE.some((s) => host === s || host.endsWith('.' + s)
 const guard = 400;
 const timeout = +a.timeout;
 const viewport = a.viewport ? { width: +a.viewport.split('x')[0], height: +a.viewport.split('x')[1] } : undefined;
+// Read-only interaction primitives (bounded; crawl.mjs never submits; never clicks a destructive/external-rail
+// control). Defined at top level — the hoisted exerciseView helpers run in the top-level-await block, so these
+// must initialize BEFORE it (a TDZ if left below).
+const PICKER = '[role="combobox"], [aria-haspopup="listbox"], mat-select, .v-autocomplete, .v-select, .v-combobox, [class*="autocomplete"], [class*="typeahead"], input[aria-autocomplete]';
+const OPTION = '[role="option"], .mat-option, [role="listbox"] li, .v-list-item';
+const ROW = 'tr[role="row"], .ag-row, [role="row"], table tbody tr';
+const DISCLOSURE = '[aria-expanded="false"], .accordion-button.collapsed, [role="tab"][aria-selected="false"]';
+const RAIL = /\b(delete|remove|supprim|drop|revoke|deactivate|send|pay|charge|refund|email|notify|export|download|invite|approve|reject|submit|save|create|confirm|logout|sign\s?out)\b/i;
 
 // ── operation fingerprint + param helpers — shared canonical kernel (drift-tested against the pentest copy) ──
 import { bodySignature, flattenParams, normPath } from './op-signature.mjs';
@@ -86,8 +95,11 @@ try {
   // dropped on HTTPS+proxy and invisible to document.cookie, so the SPA's client auth guard redirects to login).
   const extraHeaders = {};
   for (const h of (a.header || [])) { const i = h.indexOf(':'); if (i > 0) extraHeaders[h.slice(0, i).trim()] = h.slice(i + 1).trim(); }
+  // COMPLETE-TRAFFIC HAR (per-session, timestamped path so a persistent context never clobbers a prior run).
+  let harPath;
+  if (a.out) { const harDir = path.join(a.out, 'har'); await mkdir(harDir, { recursive: true }).catch(() => {}); harPath = path.join(harDir, `crawl-${Date.now()}.har`); }
   const ctx = await newStealthContext(browser, {
-    insecure: a.insecure, viewport,
+    insecure: a.insecure, viewport, harPath,
     storageState: a.state || undefined,
     extraHeaders: Object.keys(extraHeaders).length ? extraHeaders : undefined,
     cookie: a.cookie || undefined, cookieScope: SCOPE[0],
@@ -170,12 +182,38 @@ try {
       multi_variant_endpoints: endpointList.filter((e) => e.variant_count > 1).length,
       linked_out_of_scope_hosts: linkedHosts.size,
     },
+    // COMPLETENESS — declare how partial this map is instead of implying full coverage. The reconciliation in
+    // inventory-surface-analyzer diffs the raw observed corpus against the curated map to surface `unmapped_observed`.
+    completeness: {
+      observed_requests: captured.length,
+      mapped_endpoints: endpointList.length,
+      capture_source: harPath ? 'browser-crawl+har' : 'browser-crawl',
+      interaction_coverage: { views: visited.size, scroll_depth: +a.scroll || 0 },
+    },
     endpoints: endpointList,
     param_inventory: paramInventory,
     linked_hosts: [...linkedHosts],
   });
 
-  if (a.out) { await mkdir(a.out, { recursive: true }); await writeFile(path.join(a.out, 'crawl-endpoints.json'), JSON.stringify(emitOut, null, 2)); }
+  if (a.out) {
+    await mkdir(a.out, { recursive: true });
+    await writeFile(path.join(a.out, 'crawl-endpoints.json'), JSON.stringify(emitOut, null, 2));
+    // RAW OBSERVED CORPUS (the reconciliation ground truth) — one deduped line per in-scope operation seen on the
+    // wire. Shape carries NO secret (a body SHAPE, not the body; no headers), so it is safe to persist. This is what
+    // makes "seen on the wire but never mapped" measurable (Phase 2). Deduped by the shared op-signature fingerprint.
+    const seenFp = new Set();
+    const lines = [];
+    for (const r of captured) {
+      const fp = bodySignature(r.method, normPath(r.path), r.post_data, r.query);
+      if (seenFp.has(fp)) continue; seenFp.add(fp);
+      lines.push(JSON.stringify({
+        method: r.method, host: r.host, path: r.path, query: r.query || '',
+        post_data_shape: r.post_data ? (/^\s*[[{]/.test(r.post_data) ? 'json' : 'form') : null,
+        status: r.status, frame_url: r.frame_url, fingerprint: fp, source: 'browser-crawl', trigger: null,
+      }));
+    }
+    await writeFile(path.join(a.out, 'raw-traffic.jsonl'), lines.join('\n') + (lines.length ? '\n' : ''));
+  }
 } catch (e) {
   emitOut.ok = false; emitOut.error = String((e && e.message) || e);
 } finally {
@@ -206,8 +244,56 @@ async function exerciseView(page) {
     await clickFirst(f, 'th[role=columnheader], .ag-header-cell, thead th, [aria-sort]');            // sort
     await fillFirst(f, 'input[type=search], input[name*=filter i], input[placeholder*=filter i], .ag-filter input, input[aria-label*=filter i]'); // filter
     await clickFirst(f, '.ag-group-contracted, [aria-expanded="false"], .ag-icon-tree-closed');       // expand a row group
+    // INTERACTION DEPTH (read-only) — the id/filter-bearing READ XHRs a grid-only pass never fires. Ported from
+    // crawl-write's read-only primitives. crawl.mjs NEVER submits; state-change stays armed-only in crawl-write.
+    await exercisePickers(f);       // picker/typeahead: open → probe → select N options → fires ?keyword= / ?name=<item>
+    await exerciseRows(f);          // row-drill: click a row's data cell (never an action icon) → GET …/{id} + lookups
+    await clickAllBounded(f, DISCLOSURE, 4);   // tab/accordion/disclosure → reveal lazy XHRs
   }
   await settle(page);
+}
+async function exercisePickers(f) {
+  const MO = Math.max(1, +a['max-options'] || 2);
+  let pk; try { pk = f.locator(PICKER); } catch { return; }
+  const pn = Math.min(await pk.count().catch(() => 0), 4);
+  for (let i = 0; i < pn; i++) {
+    try {
+      const c = pk.nth(i);
+      if (!(await c.isVisible().catch(() => false))) continue;
+      await c.click({ timeout: 1200 }); await f.page().waitForTimeout(guard);
+      const s = f.locator('.cdk-overlay-container input, [role="listbox"] input, [role="dialog"] input, .v-menu__content input').first();
+      if ((await s.count().catch(() => 0)) && (await s.isVisible().catch(() => false))) { await s.pressSequentially('a', { timeout: 1200 }).catch(() => {}); await f.page().waitForTimeout(guard); }  // probe: NO Enter (no submit)
+      const opt = f.locator(OPTION);
+      const on = Math.min(await opt.count().catch(() => 0), MO);
+      for (let j = 0; j < on; j++) {
+        try { const o = opt.nth(j); if (!(await o.isVisible().catch(() => false))) continue; await o.click({ timeout: 1200 }); await f.page().waitForTimeout(guard); await c.click({ timeout: 800 }).catch(() => {}); await f.page().waitForTimeout(guard); } catch { /* option not clickable */ }
+      }
+      await f.evaluate(() => document.body && document.body.click()).catch(() => {});   // dismiss overlay
+    } catch { /* picker not interactable */ }
+  }
+}
+async function exerciseRows(f) {
+  let rows; try { rows = f.locator(ROW); } catch { return; }
+  const rn = Math.min(await rows.count().catch(() => 0), 3);
+  const startUrl = f.page().url();
+  for (let i = 0; i < rn; i++) {
+    try {
+      const cell = rows.nth(i).locator('td, [role="gridcell"], .ag-cell').first();
+      const tgt = (await cell.count().catch(() => 0)) ? cell : rows.nth(i);
+      if (!(await tgt.isVisible().catch(() => false))) continue;
+      const label = ((await tgt.innerText().catch(() => '')) || '').trim();
+      if (RAIL.test(label)) continue;                                   // a data cell that is actually an action → skip
+      await tgt.click({ timeout: 1200 }); await f.page().waitForTimeout(guard);
+      if (f.page().url() !== startUrl) { await f.page().goBack({ timeout: 1500 }).catch(() => {}); await f.page().waitForTimeout(guard); }  // drilled to a detail → return to the list
+    } catch { /* row not clickable */ }
+  }
+}
+async function clickAllBounded(f, selector, cap) {
+  let loc; try { loc = f.locator(selector); } catch { return; }
+  const n = Math.min(await loc.count().catch(() => 0), cap);
+  for (let i = 0; i < n; i++) {
+    try { const el = loc.nth(i); if (!(await el.isVisible().catch(() => false))) continue; if (RAIL.test(((await el.innerText().catch(() => '')) || ''))) continue; await el.click({ timeout: 1200 }); await f.page().waitForTimeout(guard); } catch { /* skip */ }
+  }
 }
 async function clickFirst(frame, selector) {
   try { const loc = frame.locator(selector).first(); if (await loc.count()) { await loc.click({ timeout: 1500 }); await frame.page().waitForTimeout(guard); } } catch {}

@@ -4,6 +4,38 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.42] + playwright [0.2.16] — 2026-07-12
+
+### Fixed — recon capture pipeline: no in-scope request silently dropped
+Interaction-triggered READ XHRs (a picker-select firing `GET …/inventories?name=<item>`, a row-drill
+`GET …/{id}`, a tab-open lazy load) traversed the proxy but were recorded in NO recon inventory — the
+id/filter-bearing requests most useful for BOLA/injection were structurally missing. See
+`plugins/playwright/stealth/PATCH-NOTES-5.md` for the full change→root-cause map.
+
+- **Phase 1 — complete-traffic backstop.** `recordHar` added to `playwright-mcp-stealth.config.json`
+  (`browser.contextOptions`) so EVERY MCP-driven agent auto-records a full HAR with zero per-agent code, and to
+  `browser.mjs::newStealthContext` (`harPath`) so the owned crawlers flush a per-session timestamped HAR. New
+  **`har-import.mjs`** folds a HAR into the inventory in the same `op-signature` shape (header VALUES never
+  persisted — secrets), and **`observed-merge.mjs`** unions every capture source (crawl+HAR+Burp+widgets+
+  raw-traffic) into `observed-requests.jsonl`, the ground-truth corpus.
+- **Phase 2 — reconciliation.** `crawl.mjs` emits `raw-traffic.jsonl` + a `completeness` block;
+  `inventory-surface-analyzer` gains a reconciliation phase that diffs the corpus vs the curated map and promotes
+  **`unmapped_observed`** (on the wire, absent from the map) to first-class surface; `surface-map.json`/
+  `recon-manifest.json` carry `completeness` (declares how partial the map is). `recon.md` wires the HAR ingest +
+  corpus merge; `discovered` downstream = the corpus.
+- **Phase 3 — interaction depth.** `crawl.mjs::exerciseView` gains a read-only picker-select / row-drill /
+  disclosure engine (ported from `crawl-write`'s primitives), bounded by per-type caps + an external-rail guard,
+  and **never submits** — so READ recon now fires and captures the interaction-triggered reads itself.
+- **Phase 4 (optional, documented, not shipped):** an owned mitmproxy superset (also captures curl-based tester
+  traffic); `observed-merge --extra` already accepts a mitmproxy JSONL. Burp REST for proxy history is a dead end.
+- **Secrets:** HARs / corpus / raw-traffic gitignored (`*.har`, `**/har/`, `observed-requests.jsonl`,
+  `raw-traffic.jsonl`); HAR paths per-session unique.
+- Tests: +har-import (incident + secret-scrub), +observed-merge (union corpus), +crawl interaction (picker/
+  row-drill in read recon). Stealth 37/0, har-import+observed-merge 3/0, crud-merge 8/0 — no regression; existing
+  artifact schemas unchanged.
+
+---
+
 ## [2.4.41] + playwright [0.2.15] — 2026-07-12
 
 ### Added — two-tier CRUD crawler: deterministic backbone + AI form-driver handoff
