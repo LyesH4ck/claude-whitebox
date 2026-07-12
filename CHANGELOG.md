@@ -4,6 +4,33 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.46] + playwright [0.2.19] — 2026-07-12
+
+### Added — second-order (write→read) taint primitive: stored-XSS reachability + confirmation
+Closes the biggest remaining XSS gap: a form value that resurfaces via a DIFFERENT endpoint (list, detail,
+export, admin panel). The agent path could not do this reproducibly — it had to GUESS which read endpoint
+surfaces the stored value. Built as a GENERIC primitive so the same write→read map serves stored XSS, stored
+SQLi/SSTI, and object-exposure (IDOR) questions.
+
+- **New `plugins/playwright/stealth/marker-propagation.mjs` (+test).** crawl-write already writes MARKER-tagged
+  values + captures the write requests; this closes the loop. Two levels of proof: **reachability** (deterministic,
+  no browser) — search already-captured HAR bodies and/or live-fetched read endpoints for the marker; a canary
+  carrying metachars (`PENTEST7<'">`) is classified un-encoded/injectable vs HTML-encoded/inert and by context
+  (html-text / attribute / js / url), and the page's sinks are flagged. **Execution** (`--render`) — render each
+  read endpoint in the stealth browser with the `window.__xh` beacon exposed (same edge-triggered oracle as
+  `domxss-detect`); a value crawl-write stored as a beacon payload that EXECUTES on render → `STORED XSS
+  CONFIRMED`, reproducibly. Emits `marker-propagation.json` (`verdict`, `reachable_sink`, `surfaced_at[]` with
+  per-endpoint context/encoding/sink/execution). READ-only — the state-changing writes remain crawl-write's
+  (already hard-gated staging/demo + RoE).
+- **`xss-tester` agent:** the stored-XSS phase replaced the guess-the-endpoint, `alert()`+console approach with
+  the deterministic crawl-write(write canary/beacon)→marker-propagation(find+confirm) handshake.
+- **`injection-tester` agent:** second-order note now points at the same primitive to locate the read endpoint a
+  stored payload lands on, then run `sqli-detect.mjs` there.
+- Tests: +4 (static-HAR raw-vs-encoded classification, not-observed, render+beacon confirmed execution,
+  encoded-render negative control). Stealth suite 45/0 — no regression. Fully generic (0 engagement tokens).
+
+---
+
 ## [2.4.45] — 2026-07-12
 
 ### Added — deterministic DOM-XSS coverage (source→sink static inventory)
