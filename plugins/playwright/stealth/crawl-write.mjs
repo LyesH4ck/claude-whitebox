@@ -248,14 +248,17 @@ const sessionWrites = [];  // G6: every in-scope write seen this session (seeds 
 const findings = [];       // G6: 4xx/5xx writes (endpoint contract + server bug), never silently dropped
 const formsToDrive = [];   // HANDOFF: complex/picker-first form-regions the deterministic filler did NOT complete
                            // — emitted for the AI tier (crud-exerciser / form-driver) to drive adaptively.
-let browser;
+let browser, ctx;
 try {
   browser = await launch({ headless: a.headless, proxy: a.proxy || null });
   // --header goes into extraHTTPHeaders (Authorization Bearer etc. — browser-honored); --cookie is injected as
   // REAL cookies via addCookies (P0: a Cookie HEADER is dropped on HTTPS+proxy and invisible to document.cookie).
   const extraHeaders = {};
   for (const h of (a.header || [])) { const i = h.indexOf(':'); if (i > 0) extraHeaders[h.slice(0, i).trim()] = h.slice(i + 1).trim(); }
-  const ctx = await newStealthContext(browser, { insecure: a.insecure, viewport, storageState: a.state || undefined,
+  // COMPLETE-TRAFFIC HAR (per-session timestamped path) — captures the reads the crud pass fires but persists only as writes.
+  let harPath;
+  if (a.out) { const harDir = path.join(a.out, 'har'); await mkdir(harDir, { recursive: true }).catch(() => {}); harPath = path.join(harDir, `crud-${Date.now()}.har`); }
+  ctx = await newStealthContext(browser, { insecure: a.insecure, viewport, harPath, storageState: a.state || undefined,
     extraHeaders: Object.keys(extraHeaders).length ? extraHeaders : undefined, cookie: a.cookie || undefined, cookieScope: SCOPE[0] });
 
   // Read-only data-request capture (for widget/typeahead param discovery): record in-scope XHR/fetch WITH their
@@ -786,6 +789,8 @@ try {
 } catch (e) {
   emitOut.ok = false; emitOut.error = String((e && e.message) || e);
 } finally {
+  // CLOSE THE CONTEXT before the browser — recordHar flushes the HAR on ctx.close(), NOT browser.close().
+  if (ctx) await ctx.close().catch(() => {});
   if (browser) await browser.close().catch(() => {});
 }
 emit(emitOut);

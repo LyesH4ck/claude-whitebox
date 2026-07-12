@@ -4,6 +4,23 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.43] + playwright [0.2.17] — 2026-07-12
+
+### Fixed — recon HAR was never flushed (regression in 2.4.42 / pw 0.2.16)
+The 2.4.42 backstop wired `recordHar` and emitted `completeness.capture_source: browser-crawl+har`, but the owned
+crawlers only called `browser.close()`. Playwright flushes a `recordHar` HAR on **context** close (`ctx.close()`),
+**not** on `browser.close()` — so the HAR file was never written despite the harness claiming it was. The Phase-1
+complete-traffic backstop was silently a no-op for `crawl.mjs` / `crawl-write.mjs` (the MCP-config HAR was
+unaffected — the MCP server closes its own context).
+
+- **`crawl.mjs` / `crawl-write.mjs`:** hoisted the context to an outer `let browser, ctx;` and the `finally` now
+  closes the context **before** the browser (`if (ctx) await ctx.close(); if (browser) await browser.close()`),
+  so the per-session HAR is actually flushed to `<out>/har/`.
+- Verified end-to-end against a local fixture: the HAR now persists both the page load and an interaction-triggered
+  read XHR (`GET /api/items?name=widget`), matching `raw-traffic.jsonl`. Stealth suite 37/0 — no regression.
+
+---
+
 ## [2.4.42] + playwright [0.2.16] — 2026-07-12
 
 ### Fixed — recon capture pipeline: no in-scope request silently dropped

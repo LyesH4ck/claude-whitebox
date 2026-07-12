@@ -86,7 +86,7 @@ import { bodySignature, flattenParams, normPath } from './op-signature.mjs';
 
 const { launch, newStealthContext } = await import('./browser.mjs');
 const emitOut = { ok: true, start_url: a.url, scope: SCOPE };
-let browser;
+let browser, ctx;
 try {
   browser = await launch({ headless: a.headless, proxy: a.proxy || null });
   // authenticated session (so data POSTs don't 401 and get dropped) — a pasted Cookie/header works directly,
@@ -98,7 +98,7 @@ try {
   // COMPLETE-TRAFFIC HAR (per-session, timestamped path so a persistent context never clobbers a prior run).
   let harPath;
   if (a.out) { const harDir = path.join(a.out, 'har'); await mkdir(harDir, { recursive: true }).catch(() => {}); harPath = path.join(harDir, `crawl-${Date.now()}.har`); }
-  const ctx = await newStealthContext(browser, {
+  ctx = await newStealthContext(browser, {
     insecure: a.insecure, viewport, harPath,
     storageState: a.state || undefined,
     extraHeaders: Object.keys(extraHeaders).length ? extraHeaders : undefined,
@@ -217,6 +217,8 @@ try {
 } catch (e) {
   emitOut.ok = false; emitOut.error = String((e && e.message) || e);
 } finally {
+  // CLOSE THE CONTEXT before the browser — recordHar flushes the HAR on ctx.close(), NOT browser.close().
+  if (ctx) await ctx.close().catch(() => {});
   if (browser) await browser.close().catch(() => {});
 }
 emit(emitOut);
