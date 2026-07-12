@@ -4,6 +4,18 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.48] — 2026-07-13
+
+### Added — `/pentest:crud` folds its discoveries into the canonical corpus (reconcile pass)
+`/pentest:crud` is a pure producer (crawler only — no `inventory-surface-analyzer`, no planner), so its write
+routes previously landed only in `crud/*.json` + `route-ledger.jsonl` and never in `param-inventory.json`.
+New Step 3.5 runs the deterministic `reconcile-inventory.mjs` gate after the crawl, merging every sidecar-only
+route into the canonical corpus (append-only ledger + param-inventory union, idempotent) so the next brick
+(`/pentest:idor|sql|xss`) reuses the full write surface. No surface-map re-synthesis here (no analyzer in this
+command) — a later `/pentest:recon` / `/pentest:pentest` reconcile folds them into `surface-map.json`. Generic.
+
+---
+
 ## [2.4.47] — 2026-07-13
 
 ### Fixed — recon data-leak: a discovered high-risk route lost before reaching the testers
