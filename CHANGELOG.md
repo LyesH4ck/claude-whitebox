@@ -4,6 +4,49 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.47] — 2026-07-13
+
+### Fixed — recon data-leak: a discovered high-risk route lost before reaching the testers
+Root-cause fix for an architecture defect an engagement exposed: `crud-exerciser` discovered an interaction-only
+write endpoint, wrote it to its private `crud/*.json` sidecars, but the synthesis (`inventory-surface-analyzer`)
+had already run in parallel from a pre-crud state — the route stayed orphaned, untested, absent from the report
+(silent false negative + surface under-estimation). Deep cause: sidecars as source of truth + non-barrier
+synthesis + no reconciliation + consumers not reading the union. This is a data-pipeline/orchestration fix only —
+no vulnerability-testing logic changed.
+
+- **C1 — canonical corpus mandate.** `crud-exerciser`, `business-modeler`, `inventory-javascript-mapper`,
+  `inventory-api-discovery`, and `pentester-executor` now carry a non-negotiable clause: every route/param
+  discovered MUST be appended to `inventory/route-ledger.jsonl` (append-only) + merged into
+  `inventory/param-inventory.json`, in addition to any sidecar. A datum living only in a sidecar is treated as LOST.
+- **C2 — synthesis is a BARRIER.** `commands/pentest.md`: the recon-wave `inventory-surface-analyzer` pass is now
+  explicitly PROVISIONAL; the authoritative surface is (re-)synthesized only after ALL producers (recon wave +
+  `crud-exerciser` + `business-modeler`) complete.
+- **C3 — re-synthesis on late discovery.** New reconcile gate (below) re-dispatches `inventory-surface-analyzer`
+  whenever a producer finished after the provisional synthesis (`pentest.md` Step 6.3.6, `recon.md` Step 6c).
+- **C4 — deterministic reconciliation gate.** New **`inventory-reconcile/reconcile-inventory.mjs` (+test)**: just
+  before planning it unions every agent output (corpus + `route-ledger.jsonl` + `crud/*.json` + `oast/map.jsonl` +
+  `param-inventory*.json`) against `surface-map.json`, MERGES each orphan into the canonical inventory (append-only
+  ledger + param-inventory union, idempotent) and writes `reconcile-report.json` (`{merged, orphans[], counts}`).
+  Wired into both orchestration commands before planning.
+- **C5 — consumers read the UNION.** `pentester-orchestrator` (and executors) now plan/read off
+  `route-ledger.jsonl` + every `param-inventory*.json`, not just the curated `surface-map.json`.
+- **C6 — gateway-prefix routes are first-class.** `inventory-surface-analyzer` dedup key `(host, normalized_path)`
+  is locked: an app-host gateway-prefixed route and its direct-host sibling (often different API version/params)
+  stay DISTINCT — `normPath` collapses only id segments, never strips a prefix nor folds a version.
+- **C7 — authenticated crawl self-test, no silent static fallback.** `inventory-javascript-mapper` gains a
+  BLOCKING Phase 0: prove the browser is authenticated via a RECON-discovered identity probe (generic — not a
+  hardcoded auth path); on failure apply standardized parent-domain cookie injection; on repeated failure FAIL
+  LOUDLY to the orchestrator. Falling back to static bundle analysis and presenting it as complete is forbidden.
+  Full-session network capture → `inventory/observed-requests.jsonl` + a mandatory grid/list interaction matrix
+  (mount→scroll→filter→sort→row-group) made explicit.
+- `REPORT_CONTRACT.md` extended (additively): `discovered` is the reconciled surface; un-mergeable orphans feed
+  `coverage_gaps`.
+- Tests: +4 reconcile (orphan-merge, C6 distinct gateway/direct routes, mapped-not-orphan, idempotency). Full
+  pentest .mjs suite 65/0. Fully generic (0 engagement tokens; genericized two pre-existing example leaks in
+  touched files).
+
+---
+
 ## [2.4.46] + playwright [0.2.19] — 2026-07-12
 
 ### Added — second-order (write→read) taint primitive: stored-XSS reachability + confirmation
