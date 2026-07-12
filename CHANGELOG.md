@@ -4,6 +4,33 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.44] + playwright [0.2.18] — 2026-07-12
+
+### Fixed — DOM-XSS detection was not reproducible across scans
+A DOM-XSS confirmed in one scan could be missed in the next. Two structural causes: (1) the confirmation oracle
+was `browser_console_messages()` after an `alert()` payload — but `alert()` is a **dialog**, not a console
+message, so an executing payload was seen one run and gone the next; and (2) DOM-XSS was driven **only** by the
+LLM agent (no deterministic backbone, unlike SQLi's `sqli-detect.mjs`), so which sources/payloads got tried
+drifted between runs.
+
+- **New deterministic backbone `plugins/playwright/stealth/domxss-detect.mjs` (+test).** For each DOM source
+  (`hash`, `search`, `postmessage`, `name`) it injects a **fixed** canonical payload whose handler calls a
+  Playwright `exposeFunction` binding (`window.__xh`). The binding firing is an **edge-triggered proof of
+  EXECUTION** (never reflection) — no dialog, no console scraping, no read race (the callback is awaited with a
+  timeout, after a settle). Dialogs are auto-dismissed and counted so an `alert()`-ish sink can't hang the run.
+  Encoded reflection can never fire the binding → zero false positives. Reuses `newStealthContext` (proxy,
+  `--state`/`--cookie` auth, `--header`, `--insecure`), same shape as `crawl.mjs`. Emits `domxss-detect.json`
+  (`verdict`, `confirmed_sources[]`, per-source `executed`/`evidence`). Same URL → same verdict every run
+  (proven by a repeated-run determinism test).
+- **`xss-tester` agent:** DOM-XSS now runs `domxss-detect.mjs` **first** as the mandatory backbone (resolved
+  repo-then-cache), before any manual probing. The hand-driven fallback oracle switched from
+  `alert()`+`console_messages()` to an execution beacon (`onerror=window.__xh=…` → `browser_evaluate`) after a
+  settle, with `browser_handle_dialog` armed. A Critical Rule now documents the `alert()`≠console pitfall.
+- Tests: +4 (hash/search/postmessage/name sinks confirmed via the beacon, encoded-reflection negative control,
+  cross-run determinism). Stealth suite 41/0 — no regression. Fully generic (0 engagement tokens).
+
+---
+
 ## [2.4.43] + playwright [0.2.17] — 2026-07-12
 
 ### Fixed — recon HAR was never flushed (regression in 2.4.42 / pw 0.2.16)
