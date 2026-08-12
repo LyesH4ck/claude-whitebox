@@ -281,9 +281,20 @@ class with surface gets an auditor. Follow your agent definition's schema."
 
 ### Step 6.4 — Present the plan, then dispatch auditors
 
-1. Read `plan/deployment-plan.json` and present `plan/audit-plan.md` to the operator via AskUserQuestion
-   (Approve / Modify / Cancel). On Modify, adjust and re-present. On Cancel, log and stop.
-2. On approval, dispatch every auditor in wave 1 **in parallel — all `Task` calls in a single message**,
+1. **Validate the plan first (mirror the recon guard in 6.2).** Confirm `plan/deployment-plan.json`
+   exists and parses as JSON, and that `waves[]` is present and non-empty. The planner is Task-blind and
+   can fail silently, so do not consume its output on trust. If the file is missing, unparseable, or
+   `waves[]` is empty **while any selected class still has surface in `sink-inventory.json`**, the planner
+   failed — log `phase":"plan","result":"invalid-or-empty"`, warn the operator, and re-invoke the planner
+   once; if it fails again, abort with an actionable message. An empty plan is valid **only** when every
+   selected class was recorded under `skipped` with a reason (genuinely nothing to audit); "zero auditors
+   dispatched while surface remains" is an error state, **never** scope-exhausted.
+2. Present `plan/audit-plan.md` to the operator via AskUserQuestion (Approve / Modify / Cancel). On
+   **Modify**, follow up with a plain free-text prompt — "What should change? (e.g. add xss, drop deps,
+   rescope injection to src/db)" — apply the edit to the plan yourself, then re-present. (AskUserQuestion
+   returns only a label; the *what* needs a free-text channel, per the convention in Step 2.) On Cancel,
+   log and stop.
+3. On approval, dispatch every auditor in wave 1 **in parallel — all `Task` calls in a single message**,
    `run_in_background=True`, using the real agent names from the plan. Each auditor prompt MUST include:
    - the **scope**: `repo`, assigned directories, `out_of_scope`, `mode`, `target_url`, `tools_available`;
    - the **completeness mandate**: "Trace EVERY source in your assigned scope across your class(es). You
@@ -292,7 +303,7 @@ class with surface gets an auditor. Follow your agent definition's schema."
      depth: <{depth} guidance>. Report back with a status of `complete` or `incomplete` + what remains.";
    - the reminder to write findings per `plugins/codeaudit/skills/code-audit/reference/REPORT_CONTRACT.md`
      and record safe vectors.
-3. Log `phase":"audit","action":"deploy-auditors","count":<N>,"wave":1`.
+4. Log `phase":"audit","action":"deploy-auditors","count":<N>,"wave":1`.
 
 Depth guidance to inject: **Quick** = high-confidence sinks and primary paths only, stop tracing a path
 once a clear verdict is reached; **Standard** = all enumerated sources, primary + obvious secondary
@@ -302,11 +313,23 @@ always covered.
 
 ### Step 6.5 — Completeness loop
 
-Monitor auditors with non-blocking `TaskOutput`. The audit is complete when every dispatched auditor
-reports `complete`. Loop:
+Monitor auditors with non-blocking `TaskOutput`. The audit is complete only when every dispatched auditor
+has **terminated** and each terminated auditor is either `complete` or has had its unfinished scope
+recorded as a coverage gap — a still-running or silently-dead auditor is never "complete". Loop:
 
-1. When an auditor finishes, check its reported status. Log
-   `phase":"audit","action":"auditor-done","agent":"<name>","status":"<complete|incomplete>","findings":<N>`.
+1. When an auditor's `Task` **terminates**, read its reported status. Every terminated auditor is in one of
+   three states — do not conflate them:
+   - **`complete`** — proceed.
+   - **`incomplete`** — handle per point 2.
+   - **terminated with no parseable `complete`/`incomplete` status** (it errored, OOM'd, timed out, was
+     killed, or returned prose with no status line) — this is **not** "complete". Log `"status":"errored"`,
+     re-dispatch it once on its full assigned scope; if the second run also returns no parseable status,
+     record its entire assigned scope under `coverage_gaps` (reason: "auditor did not complete — class
+     partially or never traced") and continue. **Never** treat a silent/dead auditor as done — that is how
+     an entire OWASP class silently drops out of a report that still prints "all in-scope sources traced".
+   A `Task` still running is not terminated: keep polling with non-blocking `TaskOutput` and evaluate
+   status only once it has actually finished. Log
+   `phase":"audit","action":"auditor-done","agent":"<name>","status":"<complete|incomplete|errored>","findings":<N>`.
 2. **If an auditor reports `incomplete`** (untraced sources remain, a helper/branch it flagged needs
    deeper analysis, or it discovered new sources/second-order flows), re-dispatch it (or a focused
    follow-up) on the remaining items. Repeat until it reports `complete`. This is convergence on full
@@ -314,7 +337,7 @@ reports `complete`. Loop:
 3. **Run every planned wave.** The plan's `waves[]` may contain more than one wave of auditors — the
    planner orders classes by sink density but intends *every* wave to run (see audit-planner: "every
    wave still runs"). Once the current wave's auditors all report `complete`, dispatch the next wave in
-   `deployment-plan.json` `waves[]` using the same parallel-`Task` pattern as Step 6.4.2, then resume
+   `deployment-plan.json` `waves[]` using the same parallel-`Task` pattern as Step 6.4.3, then resume
    this loop for it. The audit is **not** complete until every wave in the plan has been dispatched and
    its auditors have reported `complete`. Log
    `phase":"audit","action":"deploy-auditors","count":<N>,"wave":<W>` at each wave dispatch.
@@ -324,23 +347,39 @@ reports `complete`. Loop:
    - **hybrid mode**: corroborate top injection/SSRF/XSS findings with a single benign witness request
      against `target_url`;
    - cover any newly-discovered sources or second-order flows surfaced during tracing.
-5. **Stop when scope is exhausted** — every enumerated source traced across every selected class with
-   surface across **every planned wave**, all `probable` items either confirmed or noted. This is the
-   normal exit. Log
-   `phase":"audit","action":"auditors-complete","findings_count":<N>,"result":"scope-exhausted"`.
+5. **Stop when scope is exhausted — and prove it mechanically, do not accept it on trust.** An auditor's
+   self-reported `complete` is a claim, not proof. Before declaring the audit done, reconcile *enumerated*
+   sources against *verdicted* sources: take the `file:line` sources from `recon/sink-inventory.json`
+   (`entry_points[].sources[]`) and `recon/attack-surface.md`, and diff them against the union of sources
+   that appear in the findings (`finding-*/description.md`) and the per-class `_safe-*.md` files. Every
+   enumerated in-scope source must land on one side — a real finding, a `tested_not_vulnerable` entry, or
+   an explicit `coverage_gaps` item. Any source with **no verdict** means a `complete` was premature:
+   re-dispatch that class on the missing sources (per point 2); do not exit while unverdicted in-scope
+   sources remain. Only when every enumerated source has a verdict across **every planned wave**, and all
+   `probable` items are confirmed or noted, is scope exhausted — the normal exit. Log
+   `phase":"audit","action":"auditors-complete","findings_count":<N>,"sources_enumerated":<E>,"sources_verdicted":<V>,"result":"scope-exhausted"`
+   (with `E == V`, or every shortfall listed in `coverage_gaps`).
    Do not manufacture additional work once coverage is complete.
 
 ### Step 6.6 — Aggregate + report
 
 1. **Verification + de-duplication pass.** Read every `outputs/{engagement}/findings/finding-*/description.md`,
    then:
-   - **De-duplicate** across auditors that touched overlapping code (same vuln-class + file:line +
-     source = one finding; merge evidence).
+   - **De-duplicate** across auditors that touched overlapping code — key on `(vuln_class, sink file:line,
+     source file:line, slot_type)` using the **parsed** `file:line` (not the free-text expr, so
+     `req.query.sort` and `req.query['sort']` collapse to one). Same key = one finding; merge evidence.
+     A **different `slot_type` at the same line** (e.g. SQL-value vs SQL-identifier) is a distinct finding —
+     do not merge those.
    - **Confidence gate**: a finding may carry `confidence: high` only if it has a complete, re-readable
      source→sink trace (or, in hybrid mode, a live corroboration). Downgrade anything with an
      uninspected helper/branch to `probable`, and anything lacking a complete path to `unconfirmed`
      (list the latter under `coverage_gaps`).
    - Gather each auditor's `_safe-*.md` into `tested_not_vulnerable`.
+   - **Resolve ids & evidence**: keep each finding's on-disk class-prefixed dir name as its `id`
+     (`finding-{prefix}-{NNN}`) — never renumber to a flat `finding-001`; set `evidence` to that dir's
+     `description.md` and confirm the path resolves before writing the report (drop or flag any finding
+     whose dir is missing). Keep `unconfirmed` items **out** of `findings[]` — they belong in
+     `coverage_gaps` — so `summary.total` counts only `confidence ∈ {high, probable}`.
 1b. **Resolve each finding's live endpoint (hybrid handoff, voie A).** Read
    `outputs/{engagement}/recon/sink-inventory.json` `entry_points`. For every **request-reachable** finding,
    take the param **name** and the **source `file:line`** from the finding's `source` string (strip the
