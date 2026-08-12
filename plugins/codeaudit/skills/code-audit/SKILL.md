@@ -115,7 +115,11 @@ Do NOT report a finding when:
 - The sink is not reachable from any network entry point (see reachability).
 - An ORM/query builder parameterizes by default and the code uses it idiomatically (no raw fragment).
 - The framework auto-escapes the output context by default and no escape-hatch (`dangerouslySetInnerHTML`,
-  `v-html`, `| safe`, `mark_safe`, `bypassSecurityTrust*`) is used on the tainted value.
+  `v-html`, `| safe`, `mark_safe`, `bypassSecurityTrust*`) is used on the tainted value. **Caveat —
+  auto-escape covers the HTML-text context only.** A tainted value in a URL attribute (`<a href={v}>` →
+  `javascript:`), an inline event handler, a `<script>`/JSON-in-JS block, a `style`/CSS slot, or a prop
+  spread (`{...v}`) still needs a **slot-specific** defense even with no escape-hatch — do not mark those
+  `safe` on auto-escape alone.
 
 When uncertain whether input is reachable or a helper sanitizes correctly, **downgrade confidence**
 rather than dropping or over-claiming. Record the assumption in `notes`.
@@ -134,8 +138,10 @@ true-positive, low-noise report — not a large count.
 
 If `target_url` is set in scope, you MAY corroborate a code finding against the running app (a single
 benign witness request, e.g. a quote for SQLi or `{{7*7}}` for SSTI). Live corroboration raises a
-`probable` to `high` and can attach a runtime evidence snippet. Absence of live access never lowers a
-code-derived verdict — the code trace stands on its own. Never run destructive payloads.
+`probable` to `high` **only when the response carries a named confirming observable** (an evaluated result,
+a DB/parser error, the marker reflected unencoded, a collaborator hit) — a bare 200/302 is not proof;
+record the observable with the witness. Absence of live access never lowers a code-derived verdict — the
+code trace stands on its own. Never run destructive payloads.
 
 ## What every auditor emits
 

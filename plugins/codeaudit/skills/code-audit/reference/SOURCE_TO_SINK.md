@@ -27,6 +27,10 @@ positives and false negatives.
 | `TEMPLATE-expr` | `render_template_string` | no user input in template source | user value used as template text |
 | `DESERIALIZE` | `pickle.loads`, `unserialize`, `readObject`, `yaml.load` | safe format + trusted source + integrity (HMAC) | untrusted bytes into native deser |
 | `PATH-component` | route/URL building | allowlist segment | concat into path/URL |
+| `NoSQL-operator` | `col.find({user: x})` | reject object-typed input / scalar-cast / operator allowlist | typed object (`{$ne:…}`/`{$gt:…}`) reaches a query-operator slot |
+| `NoSQL-where-js` | `$where`, `mapReduce`, `$expr` | never pass user data as JS/expression | user string embedded in `$where`/`mapReduce` JS |
+| `XML-entity` | XML parser (`DocumentBuilderFactory`, `lxml`, `simplexml`) | disable DOCTYPE + external general/parameter entities + network DTD | parser resolves external entities/DTD on attacker XML → XXE (file read, SSRF, billion-laughs) |
+| `PROTO-pollution` | recursive merge / `obj[k1][k2]=v` | null-proto objects / key allowlist / reject `__proto__`\|`constructor`\|`prototype` | user-controlled keys reach a recursive merge or dynamic property path |
 
 ## XSS (output) slots
 
@@ -45,6 +49,7 @@ positives and false negatives.
 |------|------|-----------------|----------|
 | `URL-host` | HTTP client, fetch, webhook, image/PDF fetch, URL-import | host **allowlist** + DNS-rebind protection + block link-local/metadata (169.254.169.254, `*.internal`) | user-controlled host with no allowlist; blocklist-only |
 | `URL-scheme` | same | scheme allowlist | `file://`, `gopher://`, `dict://` reachable |
+| `redirect-target` | `res.redirect(x)`, `Location:` header | relative-path only (no scheme/host) / on-site host allowlist | user-controlled absolute URL in a 3xx redirect → open redirect (CWE-601, **A01** not A10) |
 
 ## Access control slots (authz / IDOR / mass-assignment)
 
@@ -58,6 +63,11 @@ state-changing or data-returning handler and verify:
 - **Mass assignment**: does the handler bind a whole request object to a model without an allowlist of
   fields? User-settable `isAdmin`/`role`/`balance` → **mass assignment**.
 - **Indirect/horizontal**: can `userId` from the request override the session principal?
+- **Cross-site request forgery (CSRF)**: for a **cookie/session-authenticated, state-changing** handler,
+  is there a synchronizer/double-submit token validated server-side, or `SameSite=Strict|Lax` cookies with
+  no cross-site-reachable exemption? Ambient-cookie auth with **neither** token nor SameSite → **CSRF**
+  (CWE-352, A01). A handler authenticated by an `Authorization`/bearer header (not an ambient cookie) is
+  not CSRF-able. Flag only state-changing, cross-site-reachable handlers — a read-only GET is not CSRF.
 
 ## Auth slots
 

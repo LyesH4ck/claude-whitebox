@@ -25,7 +25,9 @@ Read plugins/pentest/skills/pentest/attacks/server-side/ssrf/payloads/bypass.md
 Read `recon/attack-surface.md` + `recon/sink-inventory.json` (`ssrf` array). Locate outbound-request
 sinks in scope (fetch/axios/http.request/requests/curl/URL.openConnection) and SSRF-prone features:
 webhooks, URL preview/unfurl, import-from-URL, PDF/image generation from URL, SSO/OIDC metadata fetch,
-`redirect_uri` retrieval, proxy endpoints. Create a work item per sink fed by user input.
+`redirect_uri` retrieval, proxy endpoints. **Also locate open-redirect sinks** — `res.redirect(`/
+`redirect(` or a `Location` response header built from a user value (`SINK_CATALOG.md` → "Open redirect").
+Create a work item per sink fed by user input.
 
 ## Phase 2 — Trace
 
@@ -43,6 +45,11 @@ OWASP A10. Reason precisely (e.g. "webhook URL taken from body.url, only blocks 
 bypassable at webhook.service.ts:33"). Score confidence/reachability. Avoid false positives: requests to
 a hardcoded/config host; values constrained to an allowlist; SDKs that pin the host.
 
+**Open redirect (`redirect-target` slot, CWE-601):** a user-controlled value placed into a 3xx
+`Location`/`res.redirect(...)` is `vulnerable` unless constrained to a relative path (no scheme/host) or an
+on-site host allowlist; a blocklist of `//`/`http` substrings is bypassable → still `vulnerable`. Tag
+these `owasp: A01` (client-side redirection), **not** A10 — the request is not a server-side fetch.
+
 **Hybrid only**: corroborate with a single benign request to an attacker-controlled collaborator host
 (or an in-scope harmless URL) to confirm the server fetches a user-supplied host. Never target real
 internal metadata endpoints without explicit authorization.
@@ -50,7 +57,9 @@ internal metadata endpoints without explicit authorization.
 ## Phase 4 — Emit
 
 Write findings per the contract; safe sinks → `findings/_safe-ssrf.md`; append to
-`activity/ssrf-auditor.log`. Use `finding-ssrf-NNN` ids.
+`activity/ssrf-auditor.log`. Use `finding-ssrf-NNN` ids. **Before writing, scan existing `finding-ssrf-*`
+dirs first and continue from the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never
+renumber from `001` and overwrite the first pass's finding dirs.
 
 ## Completion
 

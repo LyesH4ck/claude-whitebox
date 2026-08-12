@@ -15,6 +15,17 @@ own. Always confirm the match is the real dangerous API, not a same-named safe h
 - **Go**: `db.Query(`/`Exec(` with `fmt.Sprintf`
 - **Ruby**: `where("...#{}")`, `find_by_sql`, `execute(`
 
+### NoSQL injection (operator & server-side JS)
+The danger signal is a **typed object** (not a scalar) from the request reaching a query-operator
+position — `{$ne:null}`/`{$gt:''}`/`{$regex:…}` — or a user string in a JS-evaluated slot.
+- **MongoDB (JS/TS)**: `.find(`/`.findOne(`/`.update*(`/`.deleteMany(` fed a request object without a
+  scalar cast (`{ user: req.body.user }`), `$where` with a string, `mapReduce`, `.aggregate(` with a
+  user-built `$expr`
+- **Mongoose / ODMs**: a filter built by spreading `req.query`/`req.body` straight into the query
+- **Python (pymongo)**: `collection.find(` / `update_one(` with a dict assembled from `request.json`
+- **PHP**: `\MongoDB\...->find(` / `executeQuery(` with `$_GET`/`$_POST` merged into the filter array
+- Also: Redis `EVAL` / Lua with concatenated user input; CouchDB/N1QL string-built queries
+
 ## OS command injection
 - **JS/TS**: `child_process.exec(`, `execSync(`, `spawn(..., {shell:true})`
 - **Python**: `os.system`, `subprocess.*(shell=True)`, `os.popen`, `commands.*`
@@ -38,6 +49,29 @@ own. Always confirm the match is the real dangerous API, not a same-named safe h
 - **Java**: `ObjectInputStream.readObject`, XMLDecoder, unsafe Jackson `enableDefaultTyping`
 - **Ruby**: `Marshal.load`, `YAML.load`
 - **JS**: `node-serialize`, `funcster`, untrusted `JSON.parse` into prototype-pollutable merge
+
+## XXE / XML external entities
+The danger is an XML parser that resolves external entities or a network DTD on attacker-controlled XML
+(uploads, SOAP, SAML, SVG, OOXML `.docx`/`.xlsx`, RSS/webhooks). Grep the parser construction, then check
+whether DOCTYPE / external-general / external-parameter entities are disabled.
+- **Java**: `DocumentBuilderFactory`, `SAXParserFactory`, `XMLInputFactory` (StAX), `TransformerFactory`,
+  `SAXReader`, `XMLReader`, `Unmarshaller`, `SchemaFactory` — vulnerable unless `disallow-doctype-decl`
+  (or `external-general-entities` + `external-parameter-entities`) is set to false
+- **Python**: `lxml.etree` (`resolve_entities=True` / `no_network=False`), `xml.sax`, `xml.dom.minidom`,
+  older `xml.etree.ElementTree`, `xmlrpc` — prefer `defusedxml`
+- **PHP**: `simplexml_load_*`, `DOMDocument->load*` with `LIBXML_NOENT`/`LIBXML_DTDLOAD`, `xml_parse`
+- **JS/TS**: `libxmljs` (`{noent:true}`), `node-expat`, `@xmldom/xmldom` with entity expansion
+- **Ruby**: `Nokogiri::XML(...)` with `NOENT`/`DTDLOAD`, `REXML` (entity/billion-laughs expansion)
+- **.NET**: `XmlDocument`/`XmlReader` with `DtdProcessing.Parse` and a non-null `XmlResolver`
+
+## Prototype pollution (JS/TS)
+Attacker-controlled object **keys** reaching a recursive merge/clone or a dynamic property write, polluting
+`Object.prototype`. Server-side this enables gadget-driven RCE / authz bypass; client-side, DOM XSS.
+- **Recursive merge/extend**: `_.merge`/`_.mergeWith`/`_.defaultsDeep` (lodash), `$.extend(true, …)`
+  (jQuery), `deepmerge`, `merge-deep`, `hoek.merge`, a hand-rolled recursive `Object.assign`
+- **Dynamic property write**: `obj[a][b] = c`, `_.set(obj, path, val)` with a user-controlled path
+- **Parsers feeding merges**: `qs.parse`/`querystring` bracket syntax, `JSON.parse` → merge, body parsers
+- Danger keys: `__proto__`, `constructor`, `prototype` appearing in user-controlled keys or a dotted path
 
 ## XSS / output
 - **DOM**: `innerHTML`, `outerHTML`, `document.write`, `insertAdjacentHTML`, `eval`, `setTimeout(str)`,
