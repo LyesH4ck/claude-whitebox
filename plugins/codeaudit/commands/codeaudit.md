@@ -301,8 +301,9 @@ class with surface gets an auditor. Follow your agent definition's schema."
    deployments with the same `agent` and distinct `shard` tags (large-codebase injection) — dispatch each
    shard as its own parallel `Task` (pass its `shard` + `scope`), and track each as a separate auditor in
    the completeness loop.** Each auditor prompt MUST include:
-   - the **scope**: `repo`, assigned directories, `out_of_scope`, `mode`, `target_url`, `tools_available`,
-     and the `shard` tag if the class was sharded;
+   - the **scope**: `repo`, assigned directories, the deployment's **`owned_sinks`** (`file:line` list — the
+     unit of ownership, so a sink is never lost to a directory guess), `out_of_scope`, `mode`, `target_url`,
+     `tools_available`, and the `shard` tag if the class was sharded;
    - the **completeness mandate**: "Trace EVERY source in your assigned scope across your class(es). You
      are done only when every enumerated source→sink path has a verdict and every safe vector is
      recorded — not after the first finding. There is no time budget; completeness is the goal. Apply
@@ -366,6 +367,28 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
    `phase":"audit","action":"auditors-complete","findings_count":<N>,"sources_enumerated":<E>,"sources_verdicted":<V>,"result":"scope-exhausted"`
    (with `E == V`, or every shortfall listed in `coverage_gaps`).
    Do not manufacture additional work once coverage is complete.
+6. **Mechanical sink sweep (Step 6.5.6 — independent coverage proof).** Self-reported `complete` and the
+   recon inventory can both under-count, so the **orchestrator itself** (not a Task-blind agent) now proves
+   coverage mechanically over the **whole in-scope tree**:
+   1. For each in-scope class, `rg -n --pcre2` its patterns from `SINK_CATALOG.md` → "Machine-readable sink
+      patterns" (the `# class:` blocks) across the repo, honoring `out_of_scope` and excluding
+      tests/migrations/vendored trees. Collect hits `{class, file, line}`. For xss, also grep inside
+      `<script>…</script>` of `*.html` templates and `static/**/*.js`.
+   2. Build the **verdicted set**: parse every `finding-*/description.md` and `_safe-*.md` for the
+      `file:line` they adjudicate (the sink `location` and the `source`/`sink` lines). Key on
+      **`(file, line)` at line granularity for that class** — a file touched by an access-control finding
+      does NOT make its SSRF sink verdicted.
+   3. **Diff**: any grepped `(class, file, line)` with no class-verdict at that line = an `uncovered_sink`.
+   4. If `uncovered_sink` is non-empty, **re-dispatch** the owning class auditor(s) with exactly those
+      `file:line`s as `owned_sinks` (Step 6.4.3 pattern). Repeat the sweep until empty, or each residual is
+      explicitly recorded in `coverage_gaps` with a reason (false-positive match, confirmed dead code).
+      Convergence, not budget.
+   5. **Drain the orphan-sink queue**: read `findings/_orphan-sinks.ndjson` (sinks an auditor spotted
+      outside its class) and dispatch the owning class auditor for each entry before declaring exhaustion.
+   6. Log `phase":"audit","action":"sink-sweep","class":"<X>","grepped":<N>,"verdicted":<V>,"uncovered":<U>`.
+   The audit is **not** `scope-exhausted` until `uncovered_sink == 0` for every class (or every residual is a
+   justified `coverage_gaps` entry). "Every sink of class X in the tree has a verdict" is now a **mechanically
+   proven** exit — not trust in `complete`.
 
 ### Step 6.6 — Aggregate + report
 
@@ -392,6 +415,11 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
      counts. Gather every `_safe-injection-*.md`. Dedup findings across shards (they own disjoint sinks, so
      real overlap is limited to second-order cross-region paths). If any shard reports `incomplete`/`errored`
      for its scope, the class is **not** complete — re-dispatch that shard (Step 6.5).
+   - **Protected ≠ safe (O3).** Reject any `_safe`/`tested_not_vulnerable` entry for a **controllable** sink
+     that merely has auth, CSRF, or a guard on a *different* variable — that is a **finding** with a lowered
+     severity + an `auth_state` field, not a safe vector. `safe` is reserved for a sink provably unreachable
+     with attacker input (dead code, constant/allowlisted target, sanitizer on the sink variable itself).
+     Re-classify any such entry into `findings[]`.
 1b. **Resolve each finding's live endpoint (hybrid handoff, voie A).** Read
    `outputs/{engagement}/recon/sink-inventory.json` `entry_points`. For every **request-reachable** finding,
    take the param **name** and the **source `file:line`** from the finding's `source` string (strip the

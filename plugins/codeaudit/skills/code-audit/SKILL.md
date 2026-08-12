@@ -92,6 +92,24 @@ derivation of it) that reaches the sink. A check on a *sibling* variable does no
 control-flow proximity ("there is a validation near the flow") as a data-flow guard; follow the actual
 variable into the sink. This is a general false-negative killer, not specific to any one class.
 
+### Protected or not, a controllable sink gets reported (severity, not existence)
+
+A controllable sink (request-derived, or second-order user-writable) that **lacks a class-appropriate
+control on the sink variable itself** is **always a finding**. Authentication, CSRF, or a guard on a
+*different* variable do **not** move the verdict to `safe` — they only **lower the severity** (with an
+explicit justification), recorded in a separate `auth_state` field (`unauthenticated`/`token`/`staff`/
+`user`), never folded into `safe`. A token lookup (`Model.objects.get(token=…)`) is **not** proof of
+safety (token ≠ authentication). `safe` / `tested_not_vulnerable` is reserved for sinks **provably not
+reachable with attacker input** (dead code, constant/allowlisted target, a sanitizer on the sink variable)
+— never for "guarded but still controllable".
+
+### Orphan-sink queue (hand off out-of-class sinks)
+
+If, while tracing, you spot a sink of **another class** (an SSRF fetch while auditing access-control, an
+XSS sink while auditing injection…), append it to `outputs/{engagement}/findings/_orphan-sinks.ndjson` as
+`{class, file, line, note}`. The orchestrator drains this queue and dispatches the owning class auditor —
+so a sink you noticed is never lost just because it was not yours to judge.
+
 ## Confidence scoring
 
 - **high** — complete, unambiguous source→sink trace; correct slot labeling; explicit missing/mismatched

@@ -73,6 +73,16 @@ for each. For each sink, note the immediately-surrounding context (what value fl
 selected classes among: injection, xss, auth, access-control, ssrf, secrets, crypto, deps, config,
 logging.
 
+**Exhaustiveness is mandatory — the `sinks` arrays MUST be complete, not a "high-signal subset."** The
+Step 6.5.6 mechanical sweep reconciles against these arrays, so a sink missed here becomes a vuln missed
+downstream. Concretely:
+- Sweep the **whole in-scope tree**, including **top-level packages/modules outside `apps/**`** (e.g.
+  `spicemodels/`, `edacad/`, a standalone `store_in_s3.py`, any `*.py` at the repo root). A sink in an
+  unusual location is exactly what falls through directory-scoped auditing.
+- Prefer the **machine-readable regex block** in `SINK_CATALOG.md` → "Machine-readable sink patterns" (the
+  same block O2 greps) so recon and the sweep agree.
+- `entry_points` MAY be a sampled subset, but the `sinks` arrays MUST be **exhaustive**.
+
 For the **logging** class (A09 / CWE-532), run the cheap, high-signal egress sweep — sensitive values
 reaching log/telemetry/error sinks (run even if `logging` is not selected, to feed the coverage warning
 in Phase 4):
@@ -117,7 +127,10 @@ Write three deliverables (create dirs with `mkdir -p` first):
 
 1. `outputs/{engagement}/recon/architecture.md` — stack, frameworks, app type, data flows, trust
    boundaries, security mechanisms (where auth/authz/validation/encoding/crypto live), with `file:line`
-   anchors. Substantive, not a listing — explain security implications.
+   anchors. Substantive, not a listing — explain security implications. **Include a `swept_paths` /
+   `not_swept_paths` manifest** — the directories/globs you actually swept for sinks vs any region you
+   skipped (with a reason). This turns a silent omission into a declared, auditable gap the orchestrator
+   can re-sweep in Step 6.5.6.
 2. `outputs/{engagement}/recon/attack-surface.md` — entry points and their sources, grouped by
    component, each with `file:line`; mark authenticated vs public; note schema files.
 3. `outputs/{engagement}/recon/sink-inventory.json`:

@@ -110,6 +110,38 @@ Attacker-controlled object **keys** reaching a recursive merge/clone or a dynami
   (`django.utils.http.url_has_allowed_host_and_scheme` / `is_safe_url`). The low-level class forms
   (`HttpResponseRedirect(next)`) do **not** match a `redirect(`-only grep — search the class names too.
 
+## Machine-readable sink patterns — for the Step 6.5.6 mechanical sweep
+
+The orchestrator greps these **verbatim** over the whole in-scope tree to prove every sink got a verdict
+(`/codeaudit` Step 6.5.6). One regex per line, grouped by `# class:`. Run as `rg -n --pcre2 -e '<regex>'`,
+honoring `out_of_scope` and excluding tests/migrations/vendored trees. This block is the *machine contract*;
+the prose above carries the context.
+
+```patterns
+# class: injection
+\.(query|execute|raw|exec)\(|cursor\.execute\(|\.(createQuery|createNativeQuery)\(
+fmt\.Sprintf\(.*(SELECT|INSERT|UPDATE|DELETE)|where\(["'].*#\{
+\.(find|findOne|update\w*|deleteMany|aggregate)\(|\$where\b
+(os\.system|subprocess\.\w+|os\.popen)\(|child_process\.(exec|execSync|spawn)\(|Runtime\.exec\(|shell_exec\(|passthru\(|proc_open\(
+(open|readFile|createReadStream|file_get_contents|fopen|File\.read)\(|(require|include|__import__|importlib)\(
+render_template_string\(|Template\(|(pickle|yaml|marshal)\.loads?\(|unserialize\(|readObject\(|Marshal\.load\(
+(DocumentBuilderFactory|SAXParserFactory|XMLInputFactory|simplexml_load|lxml\.etree|xml\.sax|Nokogiri::XML)
+# class: xss   (also grep inside <script>…</script> of *.html templates and static/**/*.js)
+\.html\(|\.append\(|\.prepend\(|\.before\(|\.after\(|\.replaceWith\(
+\.innerHTML|\.outerHTML|insertAdjacentHTML|document\.write
+\beval\(|new Function\(|setTimeout\(\s*['"]|setInterval\(\s*['"]
+# class: ssrf
+urllib2?\.build_opener\([^)]*\)\.open\(|\bOpenerDirector\.open\(
+\burlopen\(|\burlretrieve\(|FancyURLopener\([^)]*\)\.open\(|pycurl\.Curl\(\)\.setopt\(.*URL
+requests\.(get|post|put|patch|head)\(|httpx\.|aiohttp\.|fetch\(|axios\(|http\.request\(|got\(|URL\.openConnection
+# class: access-control (open redirect, CWE-601)
+HttpResponseRedirect\(|HttpResponsePermanentRedirect\(|\bredirect\(|redirect_to\(|res\.redirect\(
+```
+
+**SSRF/LFI note the sweep must carry:** on Python 2, `urlopen`/`build_opener()` resolve `file://` and
+`ftp://` by default → also CWE-73/98 LFI; if the fetched bytes are returned or stored-and-linked, rate
+**full-read** (critical), not blind.
+
 ## Secrets (informational + high)
 - patterns: `AKIA[0-9A-Z]{16}`, `-----BEGIN .* PRIVATE KEY-----`, `xox[baprs]-`, `ghp_[0-9A-Za-z]{36}`,
   `eyJ` (JWT), generic `api[_-]?key`, `secret`, `password\s*=`, `token\s*=` with literal values
