@@ -13,11 +13,13 @@
         "--disable-dev-shm-usage"
       ]
     },
+    "_recordHar_note": "COMPLETE-TRAFFIC BACKSTOP: recordHar makes EVERY MCP-driven agent session auto-record a full HAR (all methods/frames/bodies incl. WebSocket) with ZERO per-agent code — so interaction-triggered READ XHRs (picker-select ?name=…, row-drill /{id}) that the curated map misses are still captured, then folded into the recon inventory by har-import.mjs. The persistent context (isolated:false) flushes the HAR on server shutdown, so this ONE path holds the whole engagement session's traffic; it is overwritten only across server restarts (a new engagement). SECRETS: the HAR contains Authorization/Cookie/response bodies — har-import strips header values, and the raw .har is gitignored. If the resolved @playwright/mcp does not honor contextOptions.recordHar, fall back to a Playwright trace (--save-trace) and parse its network log.",
     "contextOptions": {
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
       "viewport": { "width": 1366, "height": 900 },
       "locale": "en-US",
-      "timezoneId": "America/New_York"
+      "timezoneId": "America/New_York",
+      "recordHar": { "path": "playwright-mcp-session.har", "mode": "full", "content": "embed" }
     },
     "initScript": ["stealth-init.js"]
   }

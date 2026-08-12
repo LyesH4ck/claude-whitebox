@@ -24,7 +24,8 @@ Read plugins/codeaudit/skills/code-audit/reference/SOURCE_TO_SINK.md
 ```
 
 You receive from the orchestrator: `repo` path, `engagement` name, `out_of_scope`, `focus` paths,
-`target_url` (or null), and the selected `classes`.
+`target_url` (or null), optional `extra_roots` (sibling first-party repos/dirs to include), and the
+selected `classes`. Treat each `extra_roots` entry as additional in-scope source to map.
 
 ## Workflow
 
@@ -38,7 +39,10 @@ You receive from the orchestrator: `repo` path, `engagement` name, `out_of_scope
    cd {repo} && git ls-files --others --ignored --exclude-standard --directory 2>/dev/null | head -50
    ```
    Note vendored/generated trees to skip (`node_modules/`, `vendor/`, `dist/`, `build/`).
-3. Honor scope: exclude `out_of_scope` paths; if `focus` is set, prioritize those paths first.
+3. Honor scope: exclude `out_of_scope` paths; if `focus` is a concrete path list, prioritize it first.
+   Derive a **`{scan_root}`** for the shell sweeps below: the focus dirs when `focus` is a real path list,
+   otherwise `.` (repo root) — the values `all`/`none`/empty resolve to `.`. Never pass the literal string
+   `all` to `rg`; it is not a path.
 
 ### Phase 2 — Map the attack surface (entry points → sources)
 
@@ -51,6 +55,12 @@ Find every network-reachable entry point and the untrusted inputs it exposes:
   encodings; never `body`). This route↔source binding is a **REQUIRED** output — it is what lets a
   downstream finding name its live endpoint (the white-box → pentest handoff, `HYBRID_HANDOFF_SPEC.md`).
 - Catalog API schema files (OpenAPI/Swagger, GraphQL SDL) and copy them under `recon/schemas/` if present.
+- Flag **AI/LLM/model-call sites** whose output flows onward: model responses are attacker-influenceable
+  (SKILL → Source) and must be recorded as untrusted sources so the injection/xss/deserialization auditors
+  seed from them, not only from HTTP inputs.
+- Note **externally-loaded first-party scripts** — `<script src>` to a sibling domain, `import('…/embed/*.js')`
+  from another service — as `coverage_gaps` ("front-end asset X loaded from an out-of-scope service; not
+  analysed"). They carry client-side sinks the audit cannot see unless that repo is added to `extra_roots`.
 
 Use Grep/Glob aggressively; read the route registry and middleware to know what is authenticated vs public.
 When the routing is **dynamic** (programmatic mounting, gateway rewrites) and a path cannot be resolved
@@ -68,11 +78,34 @@ reaching log/telemetry/error sinks (run even if `logging` is not selected, to fe
 in Phase 4):
 ```bash
 cd {repo}
-rg -n -i '(->|\.)(debug|info|notice|warn|warning|error|critical|log|exception)\(' {focus or src} \
+rg -n -i '(->|\.)(debug|info|notice|warn|warning|error|critical|log|exception)\(' {scan_root} \
   | rg -i 'token|password|secret|api[_-]?key|authorization|bearer|credential|\$data|getContent|response\b|code_verifier|refresh_token|access_token|set-cookie'
 ```
 Record hits under the `logging` sink key. Also note the logging **config** (`monolog.yaml`, `logback.xml`,
 log level per env, buffered handlers) so the auditor can judge whether a leak is persisted.
+
+**Stored-source sweep (second-order taint seed).** Persisted attacker input is the *write half* of stored
+XSS / stored SQLi / second-order injection — the *read half* usually lives in a different file (often a
+different auditor's scope), so no single per-scope auditor sees both ends. Record the write half **centrally
+here** so the rendering/query auditors can cross-reference it. For each site where an attacker-controllable
+value is written to a store (DB insert/update, ORM `.save()`, cache set, file write, message enqueue),
+add a `stored_sources` entry: the write-site `file:line`, the source expr, and — **best-effort** — the
+store identity it lands in (`table.column`, ORM `model.field`, cache key, or file path; `null` if not
+statically resolvable). Do **not** resolve the read-sites — that is the auditor's job; this is a checklist
+of "attacker input that becomes a second-order source when it is read back".
+
+**Client-side / DOM sink sweep (XSS).** DOM-XSS sinks live in inline `<script>…</script>` blocks inside
+HTML/templates **and** in `static/**/*.js` — not just framework component files. Grep both for the sink set
+below and record each with `file:line`, the sink API, and the **raw argument expression** (so the auditor
+can see whether it is built from a source):
+```
+\.html\(|\.append\(|\.prepend\(|\.before\(|\.after\(|\.replaceWith\(|\.wrap\(   # jQuery HTML sinks
+\.innerHTML|\.outerHTML|insertAdjacentHTML|document\.write                     # DOM sinks
+\beval\(|new Function\(|setTimeout\([^,]*['"]|setInterval\([^,]*['"]            # code-exec sinks
+```
+Cross-list any `{{ … }}` / `{{ …|escapejs }}` / `|json_script` / `|safe` that appears **inside** a `<script>`
+block as a candidate DOM **source** (it injects a server value straight into client JS). Record these under
+the `xss` sink key with their source expression.
 
 Also map the **security mechanisms**: auth/session machinery, authorization middleware/guards, input
 validation layers, output encoding defaults, the outbound HTTP client(s), crypto usage, and the logging
@@ -110,6 +143,10 @@ Write three deliverables (create dirs with `mkdir -p` first):
        "output_encoding": "framework default (React) + 2 dangerouslySetInnerHTML uses",
        "logging": "Monolog; level per env in config/packages/monolog.yaml (note buffered/fingers_crossed handlers)"
      },
+     "stored_sources": [
+       { "write_site": "src/api/commentController.ts:61", "source": "req.body.body", "store": "comments.body",
+         "note": "persisted user input — rendering/query auditors must trace the read-back" }
+     ],
      "uncovered_relevant_categories": [
        { "category": "logging (A09)", "evidence": "OAuth token responses logged at OAuthClient.php:53", "note": "class not selected — recommend enabling `logging`" }
      ]

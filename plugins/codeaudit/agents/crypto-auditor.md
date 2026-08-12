@@ -48,7 +48,9 @@ positives: MD5 used as a cache key, randomness used for non-security jitter, tes
 ## Phase 4 — Emit
 
 Write findings per the contract; safe uses → `findings/_safe-crypto.md`; append to
-`activity/crypto-auditor.log`. Use `finding-crypto-NNN` ids.
+`activity/crypto-auditor.log`. Use `finding-crypto-NNN` ids. **Before writing, scan existing `finding-crypto-*` dirs first and continue
+from the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never renumber from `001` and
+overwrite the first pass's finding dirs.
 
 ## Completion
 

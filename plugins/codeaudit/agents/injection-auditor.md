@@ -32,7 +32,10 @@ The orchestrator passes: `repo`, `engagement`, assigned `scope` paths, `out_of_s
    (`injection` array). These give your sources and candidate sinks with `file:line`.
 2. If the baseline is thin, scan your assigned scope yourself with the `SINK_CATALOG.md` patterns
    (`rg -n` for `query/exec/system/include/render/loads/...`).
-3. Create one work item per source-to-sink candidate. Log `action":"recon","sources_to_trace":N`.
+3. **Read `sink-inventory.json` `stored_sources`** — each persisted attacker value is a second-order
+   source: for entries whose store is read in your scope, add a work item to trace store→read→sink
+   (**stored SQLi / second-order injection**) and set `write_site` on any confirmed finding.
+4. Create one work item per source-to-sink candidate. Log `action":"recon","sources_to_trace":N`.
 
 ## Phase 2 — Trace (source → sink, per path)
 
@@ -42,7 +45,8 @@ For each candidate, read the code along the full path and record:
 - every **sanitizer** (name + `file:line` + type) and every **concat/format/interpolation** — flag any
   concat that occurs *after* a sanitizer (it re-introduces taint);
 - the **sink** call (`file:line`) and the **slot type** (SQL-value / SQL-identifier / SQL-keyword /
-  CMD-argument / CMD-string / FILE-path / FILE-include / TEMPLATE-expr / DESERIALIZE / PATH-component).
+  CMD-argument / CMD-string / FILE-path / FILE-include / TEMPLATE-expr / DESERIALIZE / PATH-component /
+  NoSQL-operator / NoSQL-where-js / XML-entity / PROTO-pollution).
 
 Fork paths when one source feeds multiple sinks. Log each trace line.
 
@@ -55,14 +59,25 @@ Apply `SOURCE_TO_SINK.md`:
   include = vuln.
 - **SSTI**: no user value in template *source*. User value rendered as template = vuln.
 - **Deserialization**: safe format + trusted source + integrity. Native deser of untrusted bytes = vuln.
+- **NoSQL**: scalar-cast or reject object-typed request values; operator allowlist. A typed object
+  (`{$ne:…}`/`{$gt:…}`/`{$regex:…}`) reaching a filter, or a user string in `$where`/`mapReduce`/`$expr` = vuln.
+- **XXE**: parser must disable DOCTYPE + external general/parameter entities + network DTD. Any parser
+  resolving external entities on attacker-controlled XML (upload/SOAP/SAML/SVG/OOXML) = vuln.
+- **Prototype pollution**: null-proto objects / key allowlist / reject `__proto__`|`constructor`|`prototype`
+  *before* a recursive merge or dynamic property write. User-controlled keys reaching the merge/path unguarded = vuln.
 
 Verdict `vulnerable` if a tainted value reaches a slot with no defense, the wrong defense, or a defense
-nullified by post-sanitization concat. Otherwise `safe`. Score confidence (high/probable/unconfirmed)
+nullified by post-sanitization concat. Otherwise `safe`. **Map to OWASP A03:2021 Injection** (tag the
+`cwe` per sub-class: SQLi CWE-89, NoSQLi CWE-943, OS-cmd CWE-78, path/LFI CWE-22/98, SSTI CWE-1336, XXE
+CWE-611, deser CWE-502, proto-pollution CWE-1321). Score confidence (high/probable/unconfirmed)
 and reachability per the skill. Avoid the false positives listed in the skill (idiomatic ORM binding,
 non-attacker-controlled "source", unreachable sink).
 
 **Hybrid only**: if `target_url` is set and a path is `probable`, you MAY send one benign witness
-(`'`, `;id`, `{{7*7}}`, `../../etc/passwd`) to corroborate, raising it to `high`. Never destructive.
+(`'`, `;id`, `{{7*7}}`, `../../etc/passwd`). Raise to `high` **only if the response shows a named
+confirming observable** — an evaluated result (`49` for `{{7*7}}`), a DB/parser error string, or the
+injected marker reflected unencoded — and record that observable together with the `witness_payload`. A
+generic 200/302 is **not** corroboration: leave it `probable`. Never destructive.
 
 ## Phase 4 — Emit
 
@@ -79,7 +94,37 @@ Append all traces/verdicts to `outputs/{engagement}/activity/injection-auditor.l
 
 ## Completion
 
-When every source in scope is traced and verdicts emitted, announce **INJECTION AUDIT COMPLETE** with a
-one-line count (vulnerable / safe / unconfirmed) and report status `complete`. Do not exit after the first
-finding — you are done only when every enumerated source has a verdict. If anything remains untraced,
-report status `incomplete` and list what is left so the orchestrator can re-dispatch you.
+### Per-sub-class coverage register (mandatory)
+
+The injection class spans eight sub-classes with distinct sinks — a single "COMPLETE" banner hides which
+were actually exercised. Before announcing, emit ONE coverage line per sub-class to
+`outputs/{engagement}/activity/injection-auditor.log` (NDJSON) and repeat it in your final status, using
+this fixed key set — **never drop a key**:
+
+`sqli`, `nosqli`, `os-command`, `file-path` (LFI/RFI + path traversal), `ssti`, `xxe`, `deserialization`, `proto-pollution`
+
+For each key record exactly one of:
+- `traced:<N>` — N source→sink paths traced (give the vulnerable / safe / unconfirmed split);
+- `no-surface` — you ran this sub-class's `SINK_CATALOG.md` seeds across scope and they returned nothing
+  (name the `rg` patterns you ran, so `no-surface` is *provable*, not assumed);
+- `untraced` — surface exists but you did not finish it → you MUST report status `incomplete`.
+
+A key marked `no-surface` **without** having run its seeds is a coverage gap, not a clean result — go run
+the seeds. `nosqli`, `xxe`, and `proto-pollution` are the historically-missed sub-classes: never mark them
+`no-surface` by omission.
+
+### Announce
+
+When every source in scope is traced and verdicts emitted, announce **INJECTION AUDIT COMPLETE** with the
+per-sub-class register, e.g.:
+
+```
+INJECTION AUDIT COMPLETE — sqli:traced 12 (2 vuln) · nosqli:no-surface · os-command:traced 3 ·
+file-path:traced 5 (1 vuln) · ssti:no-surface · xxe:traced 1 (1 vuln) · deserialization:no-surface ·
+proto-pollution:no-surface
+```
+
+Report status `complete` **only when every sub-class key is either `traced` or a seed-backed `no-surface`**.
+Do not exit after the first finding — you are done only when every enumerated source has a verdict. If any
+key is `untraced` (or a `no-surface` you cannot back with a seed run), report status `incomplete` and list
+what is left so the orchestrator can re-dispatch you.

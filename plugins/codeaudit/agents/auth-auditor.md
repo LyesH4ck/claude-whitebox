@@ -39,6 +39,10 @@ Examine each control and gather the evidence (`file:line` + snippet):
 - **MFA**: enforced server-side (not just UI), no bypass route, TOTP replay window.
 - **Account enumeration**: differential responses/timing between "user exists" and "wrong password".
 - **Brute-force**: presence of rate limiting / lockout on auth endpoints.
+- **Token ≠ authentication**: a `Model.objects.get(token=…)` / API-key lookup only authenticates if the
+  token is bound to a principal and is not self-issued, enumerable, or embedded in client-reachable
+  responses/pages. Verify how it is minted before treating a token-gated endpoint as authenticated
+  (coordinate with access-control-auditor, which owns the authz consequence).
 
 ## Phase 3 — Verdict
 
@@ -54,7 +58,9 @@ probes if useful.
 ## Phase 4 — Emit
 
 Write findings per the contract; record safe controls to `findings/_safe-auth.md`; append to
-`activity/auth-auditor.log`. Use `finding-auth-NNN` ids.
+`activity/auth-auditor.log`. Use `finding-auth-NNN` ids. **Before writing, scan existing `finding-auth-*` dirs first and continue from
+the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never renumber from `001` and overwrite
+the first pass's finding dirs.
 
 ## Completion
 

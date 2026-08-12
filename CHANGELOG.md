@@ -4,6 +4,498 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.48] — 2026-07-13
+
+### Added — `/pentest:crud` folds its discoveries into the canonical corpus (reconcile pass)
+`/pentest:crud` is a pure producer (crawler only — no `inventory-surface-analyzer`, no planner), so its write
+routes previously landed only in `crud/*.json` + `route-ledger.jsonl` and never in `param-inventory.json`.
+New Step 3.5 runs the deterministic `reconcile-inventory.mjs` gate after the crawl, merging every sidecar-only
+route into the canonical corpus (append-only ledger + param-inventory union, idempotent) so the next brick
+(`/pentest:idor|sql|xss`) reuses the full write surface. No surface-map re-synthesis here (no analyzer in this
+command) — a later `/pentest:recon` / `/pentest:pentest` reconcile folds them into `surface-map.json`. Generic.
+
+---
+
+## [2.4.47] — 2026-07-13
+
+### Fixed — recon data-leak: a discovered high-risk route lost before reaching the testers
+Root-cause fix for an architecture defect an engagement exposed: `crud-exerciser` discovered an interaction-only
+write endpoint, wrote it to its private `crud/*.json` sidecars, but the synthesis (`inventory-surface-analyzer`)
+had already run in parallel from a pre-crud state — the route stayed orphaned, untested, absent from the report
+(silent false negative + surface under-estimation). Deep cause: sidecars as source of truth + non-barrier
+synthesis + no reconciliation + consumers not reading the union. This is a data-pipeline/orchestration fix only —
+no vulnerability-testing logic changed.
+
+- **C1 — canonical corpus mandate.** `crud-exerciser`, `business-modeler`, `inventory-javascript-mapper`,
+  `inventory-api-discovery`, and `pentester-executor` now carry a non-negotiable clause: every route/param
+  discovered MUST be appended to `inventory/route-ledger.jsonl` (append-only) + merged into
+  `inventory/param-inventory.json`, in addition to any sidecar. A datum living only in a sidecar is treated as LOST.
+- **C2 — synthesis is a BARRIER.** `commands/pentest.md`: the recon-wave `inventory-surface-analyzer` pass is now
+  explicitly PROVISIONAL; the authoritative surface is (re-)synthesized only after ALL producers (recon wave +
+  `crud-exerciser` + `business-modeler`) complete.
+- **C3 — re-synthesis on late discovery.** New reconcile gate (below) re-dispatches `inventory-surface-analyzer`
+  whenever a producer finished after the provisional synthesis (`pentest.md` Step 6.3.6, `recon.md` Step 6c).
+- **C4 — deterministic reconciliation gate.** New **`inventory-reconcile/reconcile-inventory.mjs` (+test)**: just
+  before planning it unions every agent output (corpus + `route-ledger.jsonl` + `crud/*.json` + `oast/map.jsonl` +
+  `param-inventory*.json`) against `surface-map.json`, MERGES each orphan into the canonical inventory (append-only
+  ledger + param-inventory union, idempotent) and writes `reconcile-report.json` (`{merged, orphans[], counts}`).
+  Wired into both orchestration commands before planning.
+- **C5 — consumers read the UNION.** `pentester-orchestrator` (and executors) now plan/read off
+  `route-ledger.jsonl` + every `param-inventory*.json`, not just the curated `surface-map.json`.
+- **C6 — gateway-prefix routes are first-class.** `inventory-surface-analyzer` dedup key `(host, normalized_path)`
+  is locked: an app-host gateway-prefixed route and its direct-host sibling (often different API version/params)
+  stay DISTINCT — `normPath` collapses only id segments, never strips a prefix nor folds a version.
+- **C7 — authenticated crawl self-test, no silent static fallback.** `inventory-javascript-mapper` gains a
+  BLOCKING Phase 0: prove the browser is authenticated via a RECON-discovered identity probe (generic — not a
+  hardcoded auth path); on failure apply standardized parent-domain cookie injection; on repeated failure FAIL
+  LOUDLY to the orchestrator. Falling back to static bundle analysis and presenting it as complete is forbidden.
+  Full-session network capture → `inventory/observed-requests.jsonl` + a mandatory grid/list interaction matrix
+  (mount→scroll→filter→sort→row-group) made explicit.
+- `REPORT_CONTRACT.md` extended (additively): `discovered` is the reconciled surface; un-mergeable orphans feed
+  `coverage_gaps`.
+- Tests: +4 reconcile (orphan-merge, C6 distinct gateway/direct routes, mapped-not-orphan, idempotency). Full
+  pentest .mjs suite 65/0. Fully generic (0 engagement tokens; genericized two pre-existing example leaks in
+  touched files).
+
+---
+
+## [2.4.46] + playwright [0.2.19] — 2026-07-12
+
+### Added — second-order (write→read) taint primitive: stored-XSS reachability + confirmation
+Closes the biggest remaining XSS gap: a form value that resurfaces via a DIFFERENT endpoint (list, detail,
+export, admin panel). The agent path could not do this reproducibly — it had to GUESS which read endpoint
+surfaces the stored value. Built as a GENERIC primitive so the same write→read map serves stored XSS, stored
+SQLi/SSTI, and object-exposure (IDOR) questions.
+
+- **New `plugins/playwright/stealth/marker-propagation.mjs` (+test).** crawl-write already writes MARKER-tagged
+  values + captures the write requests; this closes the loop. Two levels of proof: **reachability** (deterministic,
+  no browser) — search already-captured HAR bodies and/or live-fetched read endpoints for the marker; a canary
+  carrying metachars (`PENTEST7<'">`) is classified un-encoded/injectable vs HTML-encoded/inert and by context
+  (html-text / attribute / js / url), and the page's sinks are flagged. **Execution** (`--render`) — render each
+  read endpoint in the stealth browser with the `window.__xh` beacon exposed (same edge-triggered oracle as
+  `domxss-detect`); a value crawl-write stored as a beacon payload that EXECUTES on render → `STORED XSS
+  CONFIRMED`, reproducibly. Emits `marker-propagation.json` (`verdict`, `reachable_sink`, `surfaced_at[]` with
+  per-endpoint context/encoding/sink/execution). READ-only — the state-changing writes remain crawl-write's
+  (already hard-gated staging/demo + RoE).
+- **`xss-tester` agent:** the stored-XSS phase replaced the guess-the-endpoint, `alert()`+console approach with
+  the deterministic crawl-write(write canary/beacon)→marker-propagation(find+confirm) handshake.
+- **`injection-tester` agent:** second-order note now points at the same primitive to locate the read endpoint a
+  stored payload lands on, then run `sqli-detect.mjs` there.
+- Tests: +4 (static-HAR raw-vs-encoded classification, not-observed, render+beacon confirmed execution,
+  encoded-render negative control). Stealth suite 45/0 — no regression. Fully generic (0 engagement tokens).
+
+---
+
+## [2.4.45] — 2026-07-12
+
+### Added — deterministic DOM-XSS coverage (source→sink static inventory)
+Completes the DOM-XSS reproducibility work: 2.4.44 made the per-URL *verdict* deterministic (`domxss-detect.mjs`);
+this makes *which pages/sources get tested* deterministic too, so coverage no longer drifts with the agent's
+ad-hoc choices — the second structural cause of "found one scan, missed the next".
+
+- **New `plugins/pentest/skills/pentest/attacks/client-side/dom-based/domxss-sources/domxss-sources.mjs` (+test).**
+  A zero-dep static scanner: it reads JS + HTML bodies from the crawl HAR (recordHar embeds every response body)
+  and/or a directory, inventories DOM-XSS **sources** (`location.hash/search`, `window.name`, `postMessage`,
+  `document.referrer/cookie`, generic URL reads) and **sinks** (`innerHTML`/`outerHTML`, `document.write`,
+  `insertAdjacentHTML`, `eval`/`Function`, string `setTimeout`, jQuery `html()`/`append()`, React
+  `dangerouslySetInnerHTML`, Vue `v-html`, Angular `[innerHTML]`, JS-URL navigation), and emits a reproducible
+  `domxss-worklist.json`: `{sources_present, sinks_present, detectable_sources, manual_review_sources, worklist:[
+  {url, sources[], priority}]}`. One worklist entry per in-scope document × the sources the code actually reads;
+  pages that co-locate a source and a sink are ranked `high`. Scope-filtered; `referrer`/`cookie` are separated
+  as manual-review (the backbone can't set them).
+- **`xss-tester` agent:** the DOM-XSS phase now builds the worklist from the recon HAR **first** (`domxss-sources`,
+  resolved repo-then-cache), then runs `domxss-detect.mjs` over **every** worklist entry (high-priority first)
+  with that entry's sources — coverage derived from the app's own code, not guessed.
+- Tests: +3 (directory scan with source→sink co-occurrence + priority, manual-vs-detectable source separation,
+  HAR parse with in-/out-of-scope attribution). Fully generic (0 engagement tokens).
+
+---
+
+## [2.4.44] + playwright [0.2.18] — 2026-07-12
+
+### Fixed — DOM-XSS detection was not reproducible across scans
+A DOM-XSS confirmed in one scan could be missed in the next. Two structural causes: (1) the confirmation oracle
+was `browser_console_messages()` after an `alert()` payload — but `alert()` is a **dialog**, not a console
+message, so an executing payload was seen one run and gone the next; and (2) DOM-XSS was driven **only** by the
+LLM agent (no deterministic backbone, unlike SQLi's `sqli-detect.mjs`), so which sources/payloads got tried
+drifted between runs.
+
+- **New deterministic backbone `plugins/playwright/stealth/domxss-detect.mjs` (+test).** For each DOM source
+  (`hash`, `search`, `postmessage`, `name`) it injects a **fixed** canonical payload whose handler calls a
+  Playwright `exposeFunction` binding (`window.__xh`). The binding firing is an **edge-triggered proof of
+  EXECUTION** (never reflection) — no dialog, no console scraping, no read race (the callback is awaited with a
+  timeout, after a settle). Dialogs are auto-dismissed and counted so an `alert()`-ish sink can't hang the run.
+  Encoded reflection can never fire the binding → zero false positives. Reuses `newStealthContext` (proxy,
+  `--state`/`--cookie` auth, `--header`, `--insecure`), same shape as `crawl.mjs`. Emits `domxss-detect.json`
+  (`verdict`, `confirmed_sources[]`, per-source `executed`/`evidence`). Same URL → same verdict every run
+  (proven by a repeated-run determinism test).
+- **`xss-tester` agent:** DOM-XSS now runs `domxss-detect.mjs` **first** as the mandatory backbone (resolved
+  repo-then-cache), before any manual probing. The hand-driven fallback oracle switched from
+  `alert()`+`console_messages()` to an execution beacon (`onerror=window.__xh=…` → `browser_evaluate`) after a
+  settle, with `browser_handle_dialog` armed. A Critical Rule now documents the `alert()`≠console pitfall.
+- Tests: +4 (hash/search/postmessage/name sinks confirmed via the beacon, encoded-reflection negative control,
+  cross-run determinism). Stealth suite 41/0 — no regression. Fully generic (0 engagement tokens).
+
+---
+
+## [2.4.43] + playwright [0.2.17] — 2026-07-12
+
+### Fixed — recon HAR was never flushed (regression in 2.4.42 / pw 0.2.16)
+The 2.4.42 backstop wired `recordHar` and emitted `completeness.capture_source: browser-crawl+har`, but the owned
+crawlers only called `browser.close()`. Playwright flushes a `recordHar` HAR on **context** close (`ctx.close()`),
+**not** on `browser.close()` — so the HAR file was never written despite the harness claiming it was. The Phase-1
+complete-traffic backstop was silently a no-op for `crawl.mjs` / `crawl-write.mjs` (the MCP-config HAR was
+unaffected — the MCP server closes its own context).
+
+- **`crawl.mjs` / `crawl-write.mjs`:** hoisted the context to an outer `let browser, ctx;` and the `finally` now
+  closes the context **before** the browser (`if (ctx) await ctx.close(); if (browser) await browser.close()`),
+  so the per-session HAR is actually flushed to `<out>/har/`.
+- Verified end-to-end against a local fixture: the HAR now persists both the page load and an interaction-triggered
+  read XHR (`GET /api/items?name=widget`), matching `raw-traffic.jsonl`. Stealth suite 37/0 — no regression.
+
+---
+
+## [2.4.42] + playwright [0.2.16] — 2026-07-12
+
+### Fixed — recon capture pipeline: no in-scope request silently dropped
+Interaction-triggered READ XHRs (a picker-select firing `GET …/inventories?name=<item>`, a row-drill
+`GET …/{id}`, a tab-open lazy load) traversed the proxy but were recorded in NO recon inventory — the
+id/filter-bearing requests most useful for BOLA/injection were structurally missing. See
+`plugins/playwright/stealth/PATCH-NOTES-5.md` for the full change→root-cause map.
+
+- **Phase 1 — complete-traffic backstop.** `recordHar` added to `playwright-mcp-stealth.config.json`
+  (`browser.contextOptions`) so EVERY MCP-driven agent auto-records a full HAR with zero per-agent code, and to
+  `browser.mjs::newStealthContext` (`harPath`) so the owned crawlers flush a per-session timestamped HAR. New
+  **`har-import.mjs`** folds a HAR into the inventory in the same `op-signature` shape (header VALUES never
+  persisted — secrets), and **`observed-merge.mjs`** unions every capture source (crawl+HAR+Burp+widgets+
+  raw-traffic) into `observed-requests.jsonl`, the ground-truth corpus.
+- **Phase 2 — reconciliation.** `crawl.mjs` emits `raw-traffic.jsonl` + a `completeness` block;
+  `inventory-surface-analyzer` gains a reconciliation phase that diffs the corpus vs the curated map and promotes
+  **`unmapped_observed`** (on the wire, absent from the map) to first-class surface; `surface-map.json`/
+  `recon-manifest.json` carry `completeness` (declares how partial the map is). `recon.md` wires the HAR ingest +
+  corpus merge; `discovered` downstream = the corpus.
+- **Phase 3 — interaction depth.** `crawl.mjs::exerciseView` gains a read-only picker-select / row-drill /
+  disclosure engine (ported from `crawl-write`'s primitives), bounded by per-type caps + an external-rail guard,
+  and **never submits** — so READ recon now fires and captures the interaction-triggered reads itself.
+- **Phase 4 (optional, documented, not shipped):** an owned mitmproxy superset (also captures curl-based tester
+  traffic); `observed-merge --extra` already accepts a mitmproxy JSONL. Burp REST for proxy history is a dead end.
+- **Secrets:** HARs / corpus / raw-traffic gitignored (`*.har`, `**/har/`, `observed-requests.jsonl`,
+  `raw-traffic.jsonl`); HAR paths per-session unique.
+- Tests: +har-import (incident + secret-scrub), +observed-merge (union corpus), +crawl interaction (picker/
+  row-drill in read recon). Stealth 37/0, har-import+observed-merge 3/0, crud-merge 8/0 — no regression; existing
+  artifact schemas unchanged.
+
+---
+
+## [2.4.41] + playwright [0.2.15] — 2026-07-12
+
+### Added — two-tier CRUD crawler: deterministic backbone + AI form-driver handoff
+The deep-CRUD limitation (the single most complex real form not completed purely generically) is now handled by a
+two-tier handoff instead of being a dead end.
+
+- **Tier 1 — `crawl-write.mjs` emits `forms_to_drive[]`** (`+ forms-to-drive.json`): armed-only, a form-region the
+  deterministic filler DETECTED but did not complete is flagged on two independent triggers — `submit-no-write`
+  (clicked submit, captured no write — any form) and `picker-first` (a picker + a create-hint primary action never
+  driven to a write). Each entry carries `{route, url, reason, detected:{pickers, primary_action, candidate_actions},
+  background_writes}` (the load-time telemetry/preview writes the driver must NOT count as creates). Proven live on
+  the heavy Vuetify form.
+- **Tier 2 — new `form-driver` agent** (`agents/form-driver.md`): adaptive AI driver for ONE flagged form —
+  same hard Phase-0 gate (env + RoE), authenticated+proxied browser via `addCookies`, picks a VALID counterparty,
+  commits sub-rows before the parent submit, applies the persistence oracle (a 2xx is not a create), and returns
+  seeds in the backbone's exact shape (`actions[]`/`session_writes[]`/`findings[]`) with a hard `crud-merge`
+  contract (bare-label owner, real `created.id`, `mutation` flag). Parallelizable per form.
+- **Orchestration** — `crud-exerciser.md` Phase 3 and `commands/crud.md` wire the handoff: after the backbone run,
+  read `forms-to-drive.json` and drive each flagged form (inline or by fanning out `form-driver` subagents), then
+  merge. The crud summary now reports "complex forms driven by AI".
+- Agent count 19 → **20** (docs/CLAUDE.md + READMEs en/fr/zh).
+- Tests: +3 (`forms_to_drive` emission; no emission in dry-run; a no-picker gated form flagged via submit-no-write).
+  Stealth suite 36/0, crud-merge 8/0, all green.
+
+---
+
+## [2.4.40] + playwright [0.2.14] — 2026-07-12
+
+### Added / Fixed — crawl-write.mjs patch #4: reach & engage real SPA forms (G1 seeds, G2 picker) + regressions
+With auth unblocked (patch #3), this patch makes the harness able to REACH create views on a micro-frontend
+launcher and ENGAGE picker-first forms, and fixes two residual regressions. See `stealth/PATCH-NOTES-4.md`.
+Genericity preserved (`--seed-route` is operator input). **Live-validated authenticated.**
+
+- **G1 — `--seed-route <route>` (repeatable) / `--seeds <file>`.** Operator-supplied create routes are resolved,
+  scope-checked, and enqueued FIRST in the BFS frontier — the reliable way to reach a create view on a launcher
+  with no crawlable `<a href>`. Emits `seed_routes`. **Live:** the seed page is now reached (`pages_visited 1→2`).
+- **G2 — picker-first / multi-step forms.** A shared `PICKER_SEL` broadens picker recognition (Vuetify
+  v-autocomplete/v-select, Material mat-select, ARIA comboboxes, typeaheads); after a valid option is selected the
+  step loop re-introspects and commits the revealed rows; `pickSubmit` no longer grabs a sub-entity Save, and the
+  parent submit is re-picked after the rows commit (it is often disabled until then). Unit-proven (T-G2-picker).
+- **bug#1** — `idFromUrlChange` restored to the `positive` signal: a create proven only by navigating to `/…/{id}`
+  (POST 200, no id/Location) is `created` again, not `blocked`.
+- **bug#2** — read-POSTs classified `mutation:false` producer-side: a GraphQL query (`{query}` non-mutation, or a
+  `/graphql` terminal) and an ag-grid list POST (`filterModel`/`startRow`/`rowGroupCols`/`sortModel`) are never
+  seeded as mutations.
+- The shared `non-persist-tokens.mjs` set was restored to full breadth (incl. activity/log/count/list): the
+  create oracle's positive-override makes it safe, and it correctly marks a telemetry POST (e.g. an activity-log
+  200) as a non-mutation for session-write seeding — a mis-seed the live run caught.
+- `crud-exerciser.md` documents the **two-tier model** (authenticated mapper = reliable; deep CRUD = best-effort
+  via seed-routes + picker recognition) and `--seed-route` usage.
+- Tests: +T-G1-seed, T-G2-picker, T-bug1, T-bug2 (+ telemetry classification); stealth 33, crud-merge 8, all green.
+  **Honest status:** the authenticated mapper tier is solid and live-proven; the deep-CRUD tier reaches create
+  views and drives generic picker forms, but the single most complex real form is not yet completed purely
+  generically (heavy mount + dependent interactions) — the machinery is unit-proven.
+
+---
+
+## [2.4.39] + playwright [0.2.13] — 2026-07-11
+
+### Fixed — crawl-write.mjs patch #3: authenticated-browser blocker (P0) + patch #2 over-correction (P1) + hygiene (P2)
+A 3-reviewer review + an authenticated live run found the reason patches #1/#2 could never be validated on a
+real target, plus false negatives from patch #2. See `stealth/PATCH-NOTES-3.md`.
+
+- **P0 [BLOCKING] — cookie auth via `ctx.addCookies`, not `extraHTTPHeaders`.** A manual `Cookie` header is
+  dropped by the browser on HTTPS-through-a-proxy and never populates `document.cookie`, so a SPA's client-side
+  auth guard redirected to login — the harness never reached authenticated forms. `browser.mjs` now injects
+  `--cookie` as real cookies on the registrable domain (IP/localhost → exact domain); `extraHTTPHeaders` keeps
+  `--header` only; `--state` unchanged. Same fix in `crawl.mjs`. **Live-proven:** authenticated app routes
+  reached (`data_endpoints 1→15`), no login fallback. Unblocks the whole plugin in browser mode.
+- **P1/F1 — the non-persistent denylist is ADVISORY.** The submit now COLLECTS every mutating write and a strong
+  positive signal (201 / Location / URL→detail / non-echoed id) OVERRIDES the token (a real 201 on a
+  `…/validation`-named path is a create again, not `blocked`); the token is terminal-segment-only and the lottery
+  tokens (check/list/activity/log/track/trace/count/health) were removed.
+- **P1/F2 — reject an echoed id only when AUTH-PRINCIPAL.** Patch #2 rejected any request-echoed id → legit
+  client ids (UUID/idempotency key/low-int collision) lost → empty BOLA corpus. The echo set is now restricted to
+  values sent under `company/tenant/owner/user`-type keys; resource ids are kept.
+- **P1 — session-writes filtered by FORM, not token.** The harness tags each session write with a `mutation` flag
+  (method+status+form); `crud-merge` seeds only mutations (a GraphQL/ag-grid read-POST is no longer replayed).
+- **P1/G4-sel** — a sub-entity Save must sit in a genuine repeated group (`<li>`/`<tr>` with a sibling, or a
+  repeat-classed element with a same-class sibling); a lone `ag-row`/`form-row`/`flex-row` no longer qualifies.
+- **P2** — `NON_PERSIST_TOKENS` extracted to `non-persist-tokens.mjs` (no more crawl-write/crud-merge drift);
+  `findId` reads `{data:[{id}]}` arrays; `commitSubEntities` re-queries handles after each commit (Vue/React
+  re-render / sequential row revelation) with signature dedup (no amplification).
+- Tests: +P0 cookie (document.cookie discriminator), T-P1-F1, T-P1-F2, T-P2-array, crud-merge mutation flag; all
+  suites green (stealth 29, crud-merge 8). Deepest nested-form end-to-end completion remains best-effort; the
+  generic machinery is unit-proven and now runs authenticated.
+
+---
+
+## [2.4.38] + playwright [0.2.12] — 2026-07-11
+
+### Fixed — crawl-write.mjs patch #2: adversarial-review correctness fixes (F1–F5)
+A 3-reviewer adversarial review of the G1–G6 patch found **3 critical correctness defects** that poison the
+downstream testers (idor-bola / injection) with phantom, wrong, or duplicated seeds, plus robustness gaps. Each
+fix is red-before/green-after tested; genericity preserved. See `stealth/PATCH-NOTES-2.md`.
+
+- **F1/F4 [CRITICAL] — G5 was not a persistence oracle.** It recorded a create on the FIRST 2xx non-GET write, so
+  a preview/validation/telemetry 200 (or an ag-grid `count` POST) became a false `created` and `blocked` was
+  unreachable. Now waits for a **candidate-create** write (`mutationWritePredicate` = POST/PUT/PATCH to a
+  non-denylisted path) and requires a **positive persistence signal** (201 / `Location` / URL→detail / non-echoed
+  response id) — else `blocked` with the read reason. Generic token denylist for non-persistent paths.
+- **F2 [CRITICAL] — `findId` picked the wrong id.** It returned the first id at any depth, so `owner:{id:<company>}`
+  yielded the auth principal id → crud-merge derived a cross-tenant GET/PUT/**DELETE** corpus. Now prefers a
+  top-level (or `data`/`result`-wrapped) id, never descends into an auth-principal node, and rejects any value
+  echoed from the request body.
+- **F3 [CRITICAL] — G4 amplified writes.** `commitSubEntities` ran every step + a terminal ≥400 re-looped → sub-Saves
+  clicked up to 4× (many objects/form). Now runs once per form (step 0); 4xx retries the parent only, 5xx stops.
+- **G4-sel [MEDIUM]** — sub-entity container matched by word boundary (`\b(card|row|line|item|entry)\b`, not
+  `[class*=]` which hit Tailwind `items-center`/`ag-row`/`inline`) and must not contain the parent submit.
+- **F7/G3 [MEDIUM]** — blocking detection now covers a multilingual `<negation> … valid` (e.g. "non valide") AND
+  inline validation (`aria-invalid`, `.v-alert`/`.mat-error`/error helper-text), not just an `invalid` toast.
+- **bug#3 [MEDIUM]** — read-only discovery: the `openAddDialogs` guard ignores search-like fields (a list page's
+  search box no longer blocks the +Add dialog), and the typeahead probe is scoped to the open overlay (an unscoped
+  `input[placeholder*=search]` was typing into the page's own list-search box).
+- **F5 [MEDIUM]** — `crud-merge.mjs` gains `--session-writes`: the intermediate/nested writes (`session_writes[]`)
+  are seeded as extra BOLA/BOPLA requests, mutation-filtered (telemetry/preview/count/non-2xx/GET dropped);
+  `actions[]` stays the primary source. `crud-exerciser.md` passes it and documents the new oracle.
+- Fixed a latent TDZ bug (blocking-regex consts moved above the top-level-await block). Tests: +5 harness gap tests
+  + F5 merge test; all suites green (stealth 23, crud-merge 8). **Authenticated live re-benchmark NOT run — the
+  provided cookie is expired; a fresh operator cookie is required to re-validate the authenticated nested flow.**
+
+---
+
+## [2.4.37] + playwright [0.2.11] — 2026-07-11
+
+### Fixed / Added — crawl-write.mjs SPA / micro-frontend nested-form support (G1–G6)
+The `/pentest:crud` harness stalled on SPA / micro-frontend apps with nested forms (baseline on the demo
+target: `pages_visited:2, forms_processed:1 (login only), created:0`). Test-driven from a reference crawler +
+ground truth; each gap is a regression test in `crawl-write.test.mjs` (red before / green after), genericity
+preserved (no target-specific selector in the harness). Live dry-run after: `pages_visited 2→6, forms 1→3`.
+
+- **G1 — SPA route discovery.** `nextNavTarget` read only `a[href]` from the current page → stalled at 2 pages.
+  Now `collectRoutes` harvests `routerlink`/`data-href`/`data-route`/`role=link` tiles, a **global BFS frontier**
+  queue survives dead-end routes, and `mountSettle` waits for the micro-app to mount before introspecting.
+- **G2 — formless form-regions.** `INTROSPECT` keyed on named `input/select/textarea` → 0 fields on a Vuetify/
+  React region (no `<form>`, `role=combobox/textbox/spinbutton`, `contenteditable`, nameless). Now enumerates
+  those, derives a name from `aria-label`/`placeholder`, tags each with `data-cx-field` for reliable locating,
+  and fills `contenteditable`. `openAddDialogs` self-guards so it never fires a visible region's own submit.
+- **G3 — validation-aware option selection.** `fillWidgets` took the first option; the first can be poisoned
+  (blocking toast / inert submit). Now re-reads state after each pick and advances to the next option on a
+  blocking error (`readToast`/`hasBlockingError`).
+- **G4 — nested sub-entity commit order.** `commitSubEntities` clicks per-card/row Save buttons (create-hint,
+  not the terminal submit, inside a `card/row/line/item/li/tr`) in DOM order before the parent's terminal action
+  — the buyer→`POST /vendor`, line→`PUT /inventories/{id}` chain a linear wizard missed.
+- **G5 — state-delta oracle (`200 ≠ created`).** A create is recorded ONLY on a real 2xx in-scope write; a
+  submit that fired no 2xx write → `blocked[]` (`intent_blocked`) with the read toast reason, never a phantom
+  `created`; a 4xx/5xx response is never a create.
+- **G6 — intermediate writes + errors.** A session-wide `response` listener records every in-scope write
+  (`session_writes[]` seeds, incl. intermediate sub-entity writes) and routes 4xx/5xx to `findings[]`
+  (endpoint contract + server bug). New `session-writes.json` / `findings.json` outputs (additive; `crud-merge`
+  still consumes `actions[]`/`intents[]` unchanged). `crud-exerciser.md` phases 2–3 document the new behavior.
+- Tests: +5 gap tests (G1–G5), all `stealth/` suites green (18 assertions). See `stealth/PATCH-NOTES.md`.
+  Live end-to-end completion of the deepest fully-nested form remains best-effort; mechanisms are unit-proven.
+
+---
+
+## [2.4.36] — 2026-07-11
+
+### Fixed — adversarial multi-agent self-review of the plugin (prompts · code · orchestration)
+From a 6-dimension review (find → adversarially-verify → synthesize); 21 raw findings, 3 refuted, 18 confirmed.
+The theme was **incomplete propagation of good patterns already in-tree**, not conceptual gaps.
+
+- **[HIGH] csrf-tester was the lone verification/safety outlier — now aligned with every sibling tester.**
+  It confirmed CSRF on HTTP status alone (a 2xx/302 "success" is routinely a silent reject / redirect-to-login /
+  no-op) and fired 5 real account mutations *before* its approval gate. Rewrote it around a **state-delta oracle**
+  (re-read the field through a legitimate path; `before != after` is the only proof — else `probable`), a
+  **Phase-0 RoE/env gate** (forge submits run only against a controlled test account, mirroring `crud-exerciser`),
+  a **write ledger + revert**, and a reconciled confirmation bar (curl oracle confirms; `poc.html` is the
+  cross-site repro artifact, not the proof — the agent has no browser).
+- **[HIGH] idor-bola-tester ran its core authz-matrix engine via a bare path** — no repo-then-newest-cache
+  fallback, so from a cache install the BOLA/BFLA oracle (the agent's whole purpose) silently no-op'd while the
+  run reported complete. Ported the `injection-tester` resolver (`$AUTHZ_RUN`) + a coverage-gap-if-unresolved line.
+- **[MEDIUM] `<playwright-plugin>` / `<pentest-plugin>` placeholders reached `node` verbatim** in
+  `crud-exerciser`, `pentester-executor`, `inventory-javascript-mapper`, `recon.md`, and `pentest.md` — the
+  write-surface/stealth harness chain failed on a cache install. Added repo-then-newest-cache resolver blocks
+  (`$PW_STEALTH` / `$PENTEST_PLUGIN`) at first use in each.
+- **[MEDIUM] authz-matrix `run.mjs` aborted the entire cross-identity replay** (even `--dry-run`) on a single
+  host-less request with no `base_url` — an uncaught `TypeError` from `new URL()` outside the try/catch. It now
+  degrades that one cell to `{status:0, error:'unresolvable URL …'}` and the run continues. Regression test added.
+- **[MEDIUM] Flagship `/pentest:pentest` never exercised the write surface** — it deployed only the read-only
+  inventory agents, silently dropping the BOLA corpus + write-body injection params (no coverage gap). Added a
+  gated **Step 6.3b CRUD-exercise** sub-phase mirroring `/pentest:recon` Step 6b (RoE/env hard gate → deploy
+  `crud-exerciser`, else record an explicit coverage gap).
+- **[LOW] param-mine dropped single-char query params** (`?q=`, `?s=`) from the flat inventory (the `< 2` floor).
+  Lowered the floor to 1 for `where === 'query'` only (body/shorthand keeps floor 2 as noise-guard). Test added.
+- **[LOW] op-signature drift-guard was RED** — the vendored playwright copy had diverged from the canonical
+  (added `safeDecode`/`collectParams`/`paramRows`). Re-synced byte-for-byte (canonical now carries the same
+  functions); drift guard green.
+- **Docs drift:** `HYBRID_HANDOFF_SPEC` header (PROPOSITION → IMPLÉMENTÉ), `TEST_PLAN_FORMAT` (deprecated
+  "planner deploys / recursive spawning" → the planner/command split + quota model), `pentest-attacks` +
+  `TEST_PLAN_FORMAT` (added business-modeler/-tester + idor-bola-tester), `WORKFLOWS` + `CLAUDE.md` (added the
+  Step 6.3b CRUD + Step 6.3.4 hybrid-handoff lifecycle stages).
+- **Self-review round (`/code-review` on the diff) — 3 regressions in the above fixes caught and closed:**
+  (1) the new `$AUTHZ_RUN` / `$PW_STEALTH` vars were resolved in one Bash block but reused in a later one —
+  shell state does not persist across Bash calls, so the second block ran `node ""`; every execution block is
+  now **self-contained** (re-resolves in-block). (2) The single-char query floor was scoped to *all* `query`
+  adds, letting the noise-prone global text scan leak `?e=` phantoms from minified ternaries — floor-1 is now
+  confined to params pulled from a **real URL query string** (`force` flag), global scan keeps floor 2.
+  (3) Resolvers now validate the **actual `.mjs` with `-f`** (not just the plugin dir) and all carry the
+  coverage-gap guard uniformly (`pentester-executor`, `recon.md` no longer omit it).
+- Tests: +4 regression assertions (single-char query floor, ternary-phantom rejection, host-less-URL non-abort,
+  op-signature drift). All `.mjs` suites green (7 files, 54 assertions).
+
+---
+
+## [2.4.35] + playwright [0.2.10] — 2026-07-11
+
+### Fixed — code-review of the 2.4.34 quick-wins (3 confirmed self-inflicted regressions)
+- **Dead-link navigation starvation.** After D3 admitted hash/relative links, a dead SPA link whose click doesn't
+  change the URL was never marked visited (only the *landed* page was), so it was re-selected every iteration and
+  burned the whole `--max-views` budget — the opposite of D3's depth goal. Now the nav target is marked visited
+  when SELECTED (a separate `processed` set dedups page-work), so a dead link is tried once and navigation moves on.
+- **`--owner` bypassed the `labelish` guard.** `crud-merge` trusted `act.owner` verbatim, so a descriptive
+  `--owner "alice (tenant 5)"` flowed into `run.mjs` where it never matches an identity label — silently degrading
+  every BOLA row to "AUTHZ?" (the exact failure D2 meant to fix). Both `act.owner` and `act.identity` are now
+  passed through `labelish`; a descriptive value degrades to null (safe fallback) instead of a false non-match.
+- **Param-inventory merge dropped params on collision.** The `${method} ${endpoint}` merge kept the first row, so a
+  widget-discovered param colliding with a crud CREATE on the same endpoint was dropped instead of unioned. The
+  merge (and the intra-batch `--widgets` append) now UNION params by `in:name`.
+- Tests: dead-link no-starvation, `--owner` labelish guard (descriptive→null / bare kept), widget↔crud param union.
+  65 `.mjs` tests green.
+
+---
+
+## [2.4.34] + playwright [0.2.9] — 2026-07-11
+
+### Fixed / Added — /pentest:crud crawler review quick-wins (stability · performance · depth · params)
+From a multi-agent review of the whole `/pentest:crud` pathway (36 challenge-verified findings). The quick-wins pack:
+- **D1 [depth/params, flagship] — capture request BODY params, not just query.** The read-side listener recorded
+  only `{method,host,path,query}`, and the widget inventory hard-coded `in:'query'` — so ALL body params (nested
+  JSON, GraphQL `variables`, form) were dropped, and body-only endpoints were filtered out entirely. It is the
+  only param artifact produced in the default (dry-run) mode. Now captures `req.postData()`, folds JSON leaves via
+  `flattenParams` (`in:json`) / form keys (`in:form`), keys endpoints by `normPath`, and dedups by
+  `bodySignature` — reusing the vendored `op-signature.mjs` kernel (D6/D7). Typeahead-POST / ag-grid / GraphQL
+  params are now inventoried.
+- **D2 [params] — `--owner <label>`.** `owner` was hard-coded `null`, silently disabling the crud→idor BOLA
+  foreign-data oracle (`run.mjs` gates it on a real owner). The tool now stamps `--owner` on every action/intent.
+- **C1 [depth] — decoupled `--max-forms` from navigation.** `processedForms` was incremented on EVERY page
+  (incl. formless), capping the crawl at ~6 views regardless of `--max-views=15`. Now `--max-forms` bounds
+  submissions only (a page counts only if a form did real work); navigation is bounded by `--max-views`.
+- **D3 [depth] — hash-router SPAs no longer collapse to one page.** `routeKey` used pathname only, so `/#/vendors`
+  and `/#/customers` shared key `/` → the crawl stopped after one page. `routeKey` now includes a route hash
+  (`#/…`), and `nextNavTarget` no longer pre-drops relative/hash hrefs (scope is checked on the resolved URL).
+- **B1 [performance] — bounded `settle()`.** `networkidle(3000)+400ms` × ~80 widget settles/page made the crawl
+  look stuck on chatty SPAs. Now `networkidle(800)+250ms` (a debounced typeahead XHR still dispatches in-window).
+- **D4 [params plumbing] — `crud-merge --widgets <file>`.** The `widget-param-inventory.json` (produced even in
+  dry-run) had no deterministic consumer. `crud-merge` now merges it (and runs without `--crud`).
+- **D9 — fixed the dead `num()` ternary** (both branches returned `v`, so `salt` never varied a numeric field on retry).
+- Tests: body-param (nested JSON `in:json`) capture, `--owner` stamping, `crud-merge --widgets` merge + the
+  no-args error. 62 `.mjs` tests green.
+
+---
+
+## playwright [0.2.8] — 2026-07-11
+
+### Fixed
+- **`crawl-write.mjs` — the 0.2.7 generic completion was too aggressive and derailed real apps ("le crud exit").**
+  The armed completion ran PAGE-WIDE: `pickSubmit` would take "the last non-cancel button" anywhere on the page
+  (grabbing a nav/menu/logout button) and `fillWidgets` opened every dropdown on the page (nav/filters), so the
+  crawl wandered off the create flow and captured little. Fixes:
+  - **Scope all armed interaction to the open create dialog** (`[role=dialog]:visible`, mat-dialog, .modal, cdk
+    overlay) when there is one — fill/submit/widgets operate inside it, never on page-level chrome.
+  - **`pickSubmit` is conservative page-wide**: only a primary-styled or create-hinted button; the bare
+    "last non-cancel button" fallback is gated to `allowLast` (true ONLY inside a dialog, where a footer holds
+    just form actions). Label-agnostic where it is safe to be, not everywhere.
+  - Added `logout`/`signout`/`menu`/`help` to the excluded-labels set (a "Logout" button matched neither
+    destructive nor cancel before).
+  - Regression test: a page with page-level Logout/Menu buttons + the dialog create flow — asserts the nav
+    buttons are NEVER clicked and only the dialog's create fires.
+
+---
+
+## [2.4.33] + playwright [0.2.7] — 2026-07-10
+
+### Added
+- **`crawl-write.mjs` — generic "complete the form like a user, whatever the action is called".** The armed run
+  no longer just fills a flat `<form>` and clicks a create-labelled button. It now, GENERICALLY (not per-app):
+  opens the create dialog (via +add BUTTONS, not only links); fills native fields AND **drives custom
+  dropdowns/typeaheads** (opens each, selects a valid option — so required custom selects are satisfied);
+  **advances multi-step wizards** (`--max-steps`, re-introspecting each step); and clicks the final action
+  **LABEL-AGNOSTICALLY** — it does NOT match the button's name (Save / Submit / Valider / Simpan / Kirim / 確定
+  / …); it excludes cancel/back/close/destructive (multilingual) and takes the primary action, then captures the
+  write. Per-step write-wait shortened to 5s so a wizard doesn't burn the full timeout per non-final step.
+  - Test `crawl-write.test.mjs`: a stub with a page-level +add button → dialog → custom combobox → a Continue
+    step → a `確定`/Cancel footer; asserts the flow opens, fills the widget, advances, and submits via the
+    non-English primary (not Cancel), capturing a 2-step create.
+  - `crud-exerciser` Phase 3 documents the generic completion.
+
+---
+
+## [2.4.32] + playwright [0.2.6] — 2026-07-10
+
+### Added
+- **`crawl-write.mjs` — read-only custom-dropdown / typeahead param discovery (`--widgets`, default ON).**
+  Confirmed on a live target (a Vue `+add` dialog): the app's dropdowns are custom `<div role=combobox>`
+  widgets, NOT native `<select>`, and they hide injectable params — typing in the buyer typeahead fires
+  `GET /api/v1/vendor?…&keyword=…`, and picking an inventory item echoes its value into
+  `GET /api/v1/inventories?…&name=<value>`. A path-crawl, a native-`<select>` scrape, AND a first-option pick
+  all miss these. The new pass opens add-dialogs (via buttons, not just links) + ARIA/custom dropdowns, types a
+  probe into any revealed search input, and selects a few options — capturing the option-driven data endpoints
+  into `widget-param-inventory.json` (merged into `param-inventory.json` → fuzzed by `injection-tester`).
+  - **READ-ONLY** (search/select never submit a form; it never clicks a button inside a `<form>`), so it runs
+    even in dry-run and under a no-mutation RoE. Bounded by `--max-widgets` / `--max-options`.
+  - `crud-exerciser` Phase 3 documents the pass + an MCP fallback for non-ARIA custom widgets.
+  - Test `crawl-write.test.mjs`: a stub reproducing the Vue combobox→typeahead→`?keyword` /
+    option-select→`?name` pattern; asserts both are inventoried.
+
+---
+
 ## [2.4.31] — 2026-07-10
 
 ### Fixed

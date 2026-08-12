@@ -27,6 +27,10 @@ positives and false negatives.
 | `TEMPLATE-expr` | `render_template_string` | no user input in template source | user value used as template text |
 | `DESERIALIZE` | `pickle.loads`, `unserialize`, `readObject`, `yaml.load` | safe format + trusted source + integrity (HMAC) | untrusted bytes into native deser |
 | `PATH-component` | route/URL building | allowlist segment | concat into path/URL |
+| `NoSQL-operator` | `col.find({user: x})` | reject object-typed input / scalar-cast / operator allowlist | typed object (`{$ne:…}`/`{$gt:…}`) reaches a query-operator slot |
+| `NoSQL-where-js` | `$where`, `mapReduce`, `$expr` | never pass user data as JS/expression | user string embedded in `$where`/`mapReduce` JS |
+| `XML-entity` | XML parser (`DocumentBuilderFactory`, `lxml`, `simplexml`) | disable DOCTYPE + external general/parameter entities + network DTD | parser resolves external entities/DTD on attacker XML → XXE (file read, SSRF, billion-laughs) |
+| `PROTO-pollution` | recursive merge / `obj[k1][k2]=v` | null-proto objects / key allowlist / reject `__proto__`\|`constructor`\|`prototype` | user-controlled keys reach a recursive merge or dynamic property path |
 
 ## XSS (output) slots
 
@@ -37,14 +41,24 @@ positives and false negatives.
 | `JS-context` | `<script>var v={x}</script>` | JSON-serialize + JS-encode | HTML-encode used (wrong); raw interpolation |
 | `URL-context` | `href="{x}"` | scheme allowlist (`http(s)`) | raw user URL → `javascript:` |
 | `CSS-context` | `style="{x}"` | CSS-encode / avoid | raw interpolation |
-| `DOM-sink` | `location`, `eval`, `document.write`, `.innerHTML`, framework bypass | safe DOM API / sanitizer (DOMPurify) | tainted `location.hash`/`search` → sink |
+| `DOM-sink` | `.innerHTML`/`.html()`/`.append()`, `document.write`, `insertAdjacentHTML`, `eval`/`new Function`/`setTimeout(str)`, framework bypass | safe DOM API / sanitizer (DOMPurify) | tainted DOM source → sink: `location.hash`/`search`/`href`, `document.referrer`, `window.name`, `postMessage`, `URLSearchParams().get()` + URL-param helpers, `$(el).val()`/`.value` (server-populated → HTML-decoded), a `fetch`/XHR JSON field, `{{v\|escapejs}}` in inline JS, `localStorage`/`cookie` |
+
+> **Encoder ≠ context (very common false negative).** An encoder is valid only for the context it targets;
+> track that context and re-check it at the sink — the mere presence of *an* encoder never downgrades a
+> finding whose sink context differs:
+> - `escapejs` / JS-string-encode → then `innerHTML`/`.html()`/`document.write` → **vulnerable** (the string
+>   still holds `<img …>`, re-parsed as HTML).
+> - HTML-entity / attribute encode (incl. Django/Jinja auto-escape) → read back via `.val()`/`.value` and
+>   written to an HTML sink → **vulnerable** (`.val()` returns the decoded string).
+> - HTML-entity encode → placed inside a `<script>`/JS context or an event-handler attribute → **vulnerable**.
 
 ## SSRF slots
 
 | Slot | Sink | Correct defense | Mismatch |
 |------|------|-----------------|----------|
 | `URL-host` | HTTP client, fetch, webhook, image/PDF fetch, URL-import | host **allowlist** + DNS-rebind protection + block link-local/metadata (169.254.169.254, `*.internal`) | user-controlled host with no allowlist; blocklist-only |
-| `URL-scheme` | same | scheme allowlist | `file://`, `gopher://`, `dict://` reachable |
+| `URL-scheme` | same | scheme **allowlist** (`http(s)` only) | `file://`/`gopher://`/`dict://` reachable; on **Py2 `urlopen`/`build_opener()`** `file://`+`ftp://` resolve by default → SSRF **and** LFI (CWE-73/98) with no filesystem call |
+| `redirect-target` | `HttpResponseRedirect(x)`/`redirect(x)`/`redirect_to(x)`/`res.redirect(x)`, `Location:` header | relative-path only (no scheme/host) / on-site allowlist (`url_has_allowed_host_and_scheme`/`is_safe_url`) | user-controlled URL in a 3xx → open redirect (CWE-601, **A01**); class forms like `HttpResponseRedirect(next)` evade a `redirect(`-only grep |
 
 ## Access control slots (authz / IDOR / mass-assignment)
 
@@ -58,6 +72,11 @@ state-changing or data-returning handler and verify:
 - **Mass assignment**: does the handler bind a whole request object to a model without an allowlist of
   fields? User-settable `isAdmin`/`role`/`balance` → **mass assignment**.
 - **Indirect/horizontal**: can `userId` from the request override the session principal?
+- **Cross-site request forgery (CSRF)**: for a **cookie/session-authenticated, state-changing** handler,
+  is there a synchronizer/double-submit token validated server-side, or `SameSite=Strict|Lax` cookies with
+  no cross-site-reachable exemption? Ambient-cookie auth with **neither** token nor SameSite → **CSRF**
+  (CWE-352, A01). A handler authenticated by an `Authorization`/bearer header (not an ambient cookie) is
+  not CSRF-able. Flag only state-changing, cross-site-reachable handlers — a read-only GET is not CSRF.
 
 ## Auth slots
 

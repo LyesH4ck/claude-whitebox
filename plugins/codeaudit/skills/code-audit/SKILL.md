@@ -52,7 +52,10 @@ SOURCE (untrusted input)  →  [transforms / sanitizers]  →  SINK (dangerous o
 *writer* to the *reader*: trace write → store → read and exhibit **both** ends — the handler that persists
 attacker input, and the sink that consumes the stored value. Do not taint every DB read blindly (that is
 noise); prove the linkage. This is how stored XSS / stored SQLi (Fortify's "Persistent"/"Persistence"
-variants) are caught instead of missed.
+variants) are caught instead of missed. The store boundary is **any** persistence or service hop — DB,
+search index (Elasticsearch/Solr), cache, queue, or **your own JSON/GraphQL API**. "It came from our own
+backend/aggregation" is **not** a trust boundary: if any write path to that field is user-controllable and
+unsanitized, a value later read from it is tainted, even across a `fetch`/serializer round-trip.
 
 ## The verdict process (apply per path)
 
@@ -80,6 +83,14 @@ variants) are caught instead of missed.
    never `vulnerable` on suspicion. (This is Fortify's "Poor Validation" class — a real exploitable bug
    that a present-but-partial sanitizer otherwise hides as a false negative.)
 7. **Score confidence** (see below) and **assess reachability** (network-reachable vs internal-only).
+
+### Guards protect a variable, not a neighborhood
+
+A sanitizer/validator downgrades a finding **only if it is applied to the same variable** (or a provable
+derivation of it) that reaches the sink. A check on a *sibling* variable does not protect the sink variable
+— e.g. validating `filename.endswith('.xml')` does nothing for a sink that consumes `s3_url`. Never treat
+control-flow proximity ("there is a validation near the flow") as a data-flow guard; follow the actual
+variable into the sink. This is a general false-negative killer, not specific to any one class.
 
 ## Confidence scoring
 
@@ -115,7 +126,11 @@ Do NOT report a finding when:
 - The sink is not reachable from any network entry point (see reachability).
 - An ORM/query builder parameterizes by default and the code uses it idiomatically (no raw fragment).
 - The framework auto-escapes the output context by default and no escape-hatch (`dangerouslySetInnerHTML`,
-  `v-html`, `| safe`, `mark_safe`, `bypassSecurityTrust*`) is used on the tainted value.
+  `v-html`, `| safe`, `mark_safe`, `bypassSecurityTrust*`) is used on the tainted value. **Caveat —
+  auto-escape covers the HTML-text context only.** A tainted value in a URL attribute (`<a href={v}>` →
+  `javascript:`), an inline event handler, a `<script>`/JSON-in-JS block, a `style`/CSS slot, or a prop
+  spread (`{...v}`) still needs a **slot-specific** defense even with no escape-hatch — do not mark those
+  `safe` on auto-escape alone.
 
 When uncertain whether input is reachable or a helper sanitizes correctly, **downgrade confidence**
 rather than dropping or over-claiming. Record the assumption in `notes`.
@@ -134,8 +149,10 @@ true-positive, low-noise report — not a large count.
 
 If `target_url` is set in scope, you MAY corroborate a code finding against the running app (a single
 benign witness request, e.g. a quote for SQLi or `{{7*7}}` for SSTI). Live corroboration raises a
-`probable` to `high` and can attach a runtime evidence snippet. Absence of live access never lowers a
-code-derived verdict — the code trace stands on its own. Never run destructive payloads.
+`probable` to `high` **only when the response carries a named confirming observable** (an evaluated result,
+a DB/parser error, the marker reflected unencoded, a collaborator hit) — a bare 200/302 is not proof;
+record the observable with the witness. Absence of live access never lowers a code-derived verdict — the
+code trace stands on its own. Never run destructive payloads.
 
 ## What every auditor emits
 

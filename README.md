@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">claude-whitebox</h1>
   <p align="center">
-    White-box source-code audit + black-box penetration testing for Claude Code — 10 codeaudit auditors across 10 OWASP domains, and a 19-agent pentest framework with 64 attack categories and Kali MCP integration.
+    White-box source-code audit + black-box penetration testing for Claude Code — 10 codeaudit auditors across 10 OWASP domains, and a 20-agent pentest framework with 64 attack categories and Kali MCP integration.
     <br />
     Structured, human-in-the-loop, evidence-driven.
   </p>

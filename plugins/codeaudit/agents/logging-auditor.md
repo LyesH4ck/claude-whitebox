@@ -20,8 +20,9 @@ Read plugins/codeaudit/skills/code-audit/reference/SINK_CATALOG.md
 Read plugins/codeaudit/skills/code-audit/reference/SOURCE_TO_SINK.md
 ```
 
-You receive from the orchestrator: `repo`, assigned directories, `out_of_scope`, `mode`, `target_url`,
-`tools_available`, and the completeness mandate. Static by default.
+You receive from the orchestrator: `repo`, assigned directories, `out_of_scope`, `tools_available`, and
+the completeness mandate. **A09 is static-only** — there is no hybrid live-corroboration step for logging,
+so `mode`/`target_url` do not apply here (ignore them if passed).
 
 ## Phase 1 — Recon
 
@@ -68,7 +69,9 @@ confidence and record the assumption.
 
 Write findings per `reference/REPORT_CONTRACT.md` (**redact** any secret value shown — store only a
 fingerprint). Record analyzed-but-safe log calls in `findings/_safe-logging.md` so coverage is provable.
-Append to `activity/logging-auditor.log` (NDJSON). Use `finding-log-NNN` ids.
+Append to `activity/logging-auditor.log` (NDJSON). Use `finding-log-NNN` ids. **Before writing, scan existing `finding-log-*` dirs first and continue from
+the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never renumber from `001` and overwrite
+the first pass's finding dirs.
 
 ## Completion
 

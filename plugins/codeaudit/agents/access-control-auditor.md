@@ -9,7 +9,8 @@ tools: [Read, Grep, Glob, Bash, Write]
 
 Audit authorization: whether every state-changing and data-returning handler enforces that the
 authenticated principal is allowed to perform the action on the specific object. Covers broken
-function-level access control, IDOR (object-ownership), privilege escalation, and mass assignment.
+function-level access control, IDOR (object-ownership), privilege escalation, mass assignment, and
+cross-site request forgery (CSRF) on cookie-authenticated state-changing handlers.
 
 ## Mount first
 
@@ -32,6 +33,11 @@ handler.
 For each handler, read the code and answer:
 - **Function-level**: is there a role/permission guard on this handler (not only in the UI/router for
   other routes)? Is the guard applied or accidentally omitted/commented/optional?
+- **Token ≠ authentication**: a bare `Model.objects.get(token=…)` / API-key lookup is **not** authentication
+  unless the token is (a) bound to a principal authorized for the action and (b) not self-issued,
+  enumerable, or embedded in client-reachable responses/pages. Check how the token is minted
+  (`get_or_create_for_user`, page-embedded) before treating the endpoint as authenticated — otherwise rate
+  it as effectively unauthenticated.
 - **Object ownership (IDOR)**: when the handler loads an object by a user-supplied id, does it verify the
   authenticated principal owns or may access it (`WHERE id=? AND owner_id=session.user` or an explicit
   policy check)? Or does it trust the id blindly?
@@ -39,8 +45,21 @@ For each handler, read the code and answer:
   the session principal (horizontal)? Can a normal user reach an admin-only action (vertical)?
 - **Mass assignment**: is a whole request body bound to a model/ORM entity without an allowlist of
   fields? Are sensitive fields (`isAdmin`, `role`, `balance`, `verified`) settable?
+- **CSRF** (`SOURCE_TO_SINK.md` → CSRF bullet): for a **cookie/session-authenticated, state-changing**
+  handler, is there an anti-CSRF token validated server-side or `SameSite=Strict|Lax` with no cross-site
+  exemption? Ambient-cookie auth with neither → **CSRF** (CWE-352). Skip header/bearer-authenticated APIs
+  and read-only GETs — they are not CSRF-able.
+- **Open redirect** (CWE-601 / A01 — **owned here**): a user-controlled value in a redirect sink
+  (`HttpResponseRedirect(next)`/`HttpResponsePermanentRedirect(x)`/`redirect(x)`/`redirect_to(x)`/
+  `res.redirect(x)` or a `Location` header) with no allowlist is `vulnerable` unless the target is a
+  relative path (no scheme/host) or passes an on-site allowlist (`url_has_allowed_host_and_scheme`/
+  `is_safe_url`). The low-level class forms evade a `redirect(`-only grep — search the class names too.
 
-Record each with `file:line` and a snippet of the missing/insufficient check.
+Record each with `file:line` and a snippet of the missing/insufficient check. **Also capture the
+user-supplied identifier** that keys the object as the finding's `source` in `expr (file:line)` form —
+e.g. `req.params.id (orders.controller.ts:53)`, the request **read site**, not the check line — so the
+Step 6.6 aggregator can resolve the live endpoint for the hybrid handoff. The finding `location` stays the
+missing-check sink; `source` is the id read site.
 
 ## Phase 3 — Verdict
 
@@ -56,7 +75,9 @@ principal at the query layer; admin routes correctly guarded.
 ## Phase 4 — Emit
 
 Write findings per the contract; safe handlers → `findings/_safe-access-control.md`; append to
-`activity/access-control-auditor.log`. Use `finding-ac-NNN` ids.
+`activity/access-control-auditor.log`. Use `finding-ac-NNN` ids. **Before writing, scan existing
+`finding-ac-*` dirs first and continue from the highest free `NNN`** — a re-dispatched pass (Step 6.5.2)
+must never renumber from `001` and overwrite the first pass's finding dirs.
 
 ## Completion
 

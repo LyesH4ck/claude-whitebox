@@ -24,9 +24,34 @@ export async function launch({ headless = true, proxy = null } = {}) {
   });
 }
 
+// P0 — a `--cookie` string must be injected as REAL cookies (ctx.addCookies), NOT as an `extraHTTPHeaders.Cookie`
+// header. On HTTPS-through-a-proxy the browser silently DROPS a manual Cookie header on the wire, and it never
+// populates `document.cookie` — so a SPA's client-side auth guard reads no cookie and redirects to /login. Real
+// cookies are sent on the wire AND visible to JS, so the app authenticates. (Matches the working reference crawler.)
+// A leading-dot domain (`.example.com`) authenticates every in-scope subdomain; an IP/localhost can't take one.
+export function cookieDomainFor(scope) {
+  const s = String(scope || '').trim().toLowerCase().replace(/^\./, '');
+  if (!s) return null;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s) || !s.includes('.')) return s;   // IP or single-label host → exact domain
+  return '.' + s;                                                        // registrable domain → all subdomains
+}
+export function parseCookieString(raw, scope) {
+  const domain = cookieDomainFor(scope);
+  if (!raw || !domain) return [];
+  const out = [];
+  for (const part of String(raw).split(/;\s*/)) {           // "a=1; b=2" → pairs (split BEFORE the first '=' only:
+    const i = part.indexOf('=');                            // a value may itself contain '=', e.g. a base64 JWT)
+    if (i <= 0) continue;
+    const name = part.slice(0, i).trim();
+    if (!name) continue;
+    out.push({ name, value: part.slice(i + 1), domain, path: '/', sameSite: 'Lax' });
+  }
+  return out;
+}
+
 export async function newStealthContext(
   browser,
-  { userAgent, insecure = true, extraHeaders, storageState, viewport } = {}
+  { userAgent, insecure = true, extraHeaders, storageState, viewport, cookie, cookieScope, harPath } = {}
 ) {
   const ctx = await browser.newContext({
     userAgent: userAgent || DEFAULT_UA,
@@ -34,9 +59,18 @@ export async function newStealthContext(
     locale: 'en-US',
     timezoneId: 'America/New_York',
     ignoreHTTPSErrors: !!insecure,
-    extraHTTPHeaders: extraHeaders || undefined,
+    extraHTTPHeaders: extraHeaders || undefined,           // --header ONLY (Authorization Bearer etc. — browser-honored)
     storageState: storageState || undefined,               // carry an authenticated session (Playwright storageState JSON)
+    // COMPLETE-TRAFFIC BACKSTOP — record a full HAR (all methods/frames/bodies) so NO in-scope request is ever
+    // silently dropped: the interaction-triggered READ XHRs (picker-select ?name=…, row-drill /{id}) that the
+    // curated map misses are still on the wire → captured here → folded into the inventory by har-import.mjs.
+    // Flushes on ctx.close() (the harnesses always close in `finally`). Path is per-session unique (caller stamps it).
+    recordHar: harPath ? { path: harPath, mode: 'full', content: 'embed' } : undefined,
   });
   await ctx.addInitScript({ content: INIT_SCRIPT });
+  // Inject --cookie as real cookies. Add per-cookie (a name with '@'/'.' that Playwright rejects must not fail the lot).
+  if (cookie) {
+    for (const c of parseCookieString(cookie, cookieScope)) { try { await ctx.addCookies([c]); } catch { /* skip invalid cookie */ } }
+  }
   return ctx;
 }

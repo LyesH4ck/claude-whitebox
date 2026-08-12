@@ -50,8 +50,14 @@ is imported/used (`rg` the symbol). Used → keep severity; clearly unused → d
 
 ## Phase 4 — Emit
 
-Write findings per the contract (one finding per vulnerable component, or grouped by package). Append to
-`activity/deps-auditor.log`. Use `finding-deps-NNN` ids.
+Write findings per the contract (one finding per vulnerable component, or grouped by package). **Write the
+clean-scanned ecosystems to `findings/_safe-deps.md`** — this is the `tested_not_vulnerable` evidence, and
+the Step 6.6 aggregator harvests coverage only from `_safe-*.md`; without this file a clean SCA never
+appears as "tested", so a reader cannot tell "deps audited, none vulnerable" from "deps not audited". If no
+scanner was available, record that under coverage gaps in the same file. Append to
+`activity/deps-auditor.log`. Use `finding-deps-NNN` ids. **Before writing, scan existing `finding-deps-*`
+dirs first and continue from the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never
+renumber from `001` and overwrite the first pass's finding dirs.
 
 ## Completion
 

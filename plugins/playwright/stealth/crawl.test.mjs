@@ -98,3 +98,52 @@ test('crawl.mjs captures same-URL POST variants + pagination collapse + cross-fr
     await new Promise((r) => srv.close(r));
   }
 });
+
+// Phase 3 — interaction depth in READ recon: a picker-select fires GET /api/items?name=<item> (the incident
+// class). crawl.mjs alone (no crud/write crawler) must now trigger AND capture it, plus raw-traffic + completeness.
+const PICKER_HTML = `<!doctype html><html><head><meta charset=utf8></head><body>
+<h1>Invoice</h1>
+<div id="cb" role="combobox" tabindex="0">Select item</div>
+<div id="lb" role="listbox" style="display:none">
+  <input id="s" placeholder="search items"><div role="option" data-v="alpha">alpha</div><div role="option" data-v="beta">beta</div>
+</div>
+<table><tbody><tr role="row"><td>row-one</td></tr></tbody></table>
+<script>
+document.getElementById('cb').addEventListener('click',()=>{document.getElementById('lb').style.display='block';});
+document.getElementById('s').addEventListener('input',(e)=>{fetch('/api/items?keyword='+encodeURIComponent(e.target.value));});
+document.querySelectorAll('#lb [role=option]').forEach(o=>o.addEventListener('click',()=>{fetch('/api/items?limit=10&page=1&name='+encodeURIComponent(o.getAttribute('data-v')));document.getElementById('lb').style.display='none';}));
+document.querySelector('tr[role=row] td').addEventListener('click',()=>{fetch('/api/orders/123');});
+</script></body></html>`;
+function startPickerServer() {
+  return new Promise((resolve) => {
+    const srv = http.createServer((req, res) => {
+      if (req.url.startsWith('/api/items') || req.url.startsWith('/api/orders')) { res.setHeader('content-type', 'application/json'); res.end('[]'); return; }
+      res.setHeader('content-type', 'text/html'); res.end(PICKER_HTML);
+    });
+    srv.listen(0, '127.0.0.1', () => resolve({ srv, port: srv.address().port }));
+  });
+}
+
+test('crawl.mjs interaction engine fires + captures the picker-select read (?name) and row-drill in READ recon', { skip: HAVE_DEPS ? false : 'stealth deps/browser not installed' }, async () => {
+  const { srv, port } = await startPickerServer();
+  const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const dir = mkdtempSync(path.join(tmpdir(), 'crawlpk-'));
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [CRAWL, '--url', `http://127.0.0.1:${port}/`, '--scope', '127.0.0.1', '--scroll', '1', '--max-views', '1', '--max-options', '2', '--out', dir],
+      { timeout: 90000, maxBuffer: 16 * 1024 * 1024 });
+    const out = JSON.parse(stdout);
+    assert.equal(out.ok, true, out.error || 'crawl ok');
+    // *** the incident, in read recon *** — the picker-select ?name= read is now an endpoint with `name`
+    const items = out.endpoints.find((e) => e.path === '/api/items' && e.method === 'GET');
+    assert.ok(items, `picker-select GET /api/items captured (got ${out.endpoints.map((e) => e.method + ' ' + e.path)})`);
+    assert.ok(items.params.includes('query:name'), `the ?name param is captured (got ${items.params})`);
+    // row-drill fired the detail GET
+    assert.ok(out.endpoints.some((e) => e.path === '/api/orders/{id}' && e.method === 'GET'), 'row-drill GET …/{id} captured');
+    // Phase 2 artifacts: completeness block + raw-traffic corpus
+    assert.ok(out.completeness && out.completeness.observed_requests > 0, 'completeness block present');
+    const raw = readFileSync(path.join(dir, 'raw-traffic.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.ok(raw.some((r) => r.path === '/api/items' && /name=/.test(r.query || '')), 'raw-traffic.jsonl carries the picker read');
+  } finally { rmSync(dir, { recursive: true, force: true }); srv.close(); }
+});
