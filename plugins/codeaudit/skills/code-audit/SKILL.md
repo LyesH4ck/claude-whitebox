@@ -52,7 +52,10 @@ SOURCE (untrusted input)  →  [transforms / sanitizers]  →  SINK (dangerous o
 *writer* to the *reader*: trace write → store → read and exhibit **both** ends — the handler that persists
 attacker input, and the sink that consumes the stored value. Do not taint every DB read blindly (that is
 noise); prove the linkage. This is how stored XSS / stored SQLi (Fortify's "Persistent"/"Persistence"
-variants) are caught instead of missed.
+variants) are caught instead of missed. The store boundary is **any** persistence or service hop — DB,
+search index (Elasticsearch/Solr), cache, queue, or **your own JSON/GraphQL API**. "It came from our own
+backend/aggregation" is **not** a trust boundary: if any write path to that field is user-controllable and
+unsanitized, a value later read from it is tainted, even across a `fetch`/serializer round-trip.
 
 ## The verdict process (apply per path)
 
@@ -80,6 +83,14 @@ variants) are caught instead of missed.
    never `vulnerable` on suspicion. (This is Fortify's "Poor Validation" class — a real exploitable bug
    that a present-but-partial sanitizer otherwise hides as a false negative.)
 7. **Score confidence** (see below) and **assess reachability** (network-reachable vs internal-only).
+
+### Guards protect a variable, not a neighborhood
+
+A sanitizer/validator downgrades a finding **only if it is applied to the same variable** (or a provable
+derivation of it) that reaches the sink. A check on a *sibling* variable does not protect the sink variable
+— e.g. validating `filename.endswith('.xml')` does nothing for a sink that consumes `s3_url`. Never treat
+control-flow proximity ("there is a validation near the flow") as a data-flow guard; follow the actual
+variable into the sink. This is a general false-negative killer, not specific to any one class.
 
 ## Confidence scoring
 

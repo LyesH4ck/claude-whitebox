@@ -24,7 +24,8 @@ Read plugins/codeaudit/skills/code-audit/reference/SOURCE_TO_SINK.md
 ```
 
 You receive from the orchestrator: `repo` path, `engagement` name, `out_of_scope`, `focus` paths,
-`target_url` (or null), and the selected `classes`.
+`target_url` (or null), optional `extra_roots` (sibling first-party repos/dirs to include), and the
+selected `classes`. Treat each `extra_roots` entry as additional in-scope source to map.
 
 ## Workflow
 
@@ -57,6 +58,9 @@ Find every network-reachable entry point and the untrusted inputs it exposes:
 - Flag **AI/LLM/model-call sites** whose output flows onward: model responses are attacker-influenceable
   (SKILL → Source) and must be recorded as untrusted sources so the injection/xss/deserialization auditors
   seed from them, not only from HTTP inputs.
+- Note **externally-loaded first-party scripts** — `<script src>` to a sibling domain, `import('…/embed/*.js')`
+  from another service — as `coverage_gaps` ("front-end asset X loaded from an out-of-scope service; not
+  analysed"). They carry client-side sinks the audit cannot see unless that repo is added to `extra_roots`.
 
 Use Grep/Glob aggressively; read the route registry and middleware to know what is authenticated vs public.
 When the routing is **dynamic** (programmatic mounting, gateway rewrites) and a path cannot be resolved
@@ -89,6 +93,19 @@ add a `stored_sources` entry: the write-site `file:line`, the source expr, and �
 store identity it lands in (`table.column`, ORM `model.field`, cache key, or file path; `null` if not
 statically resolvable). Do **not** resolve the read-sites — that is the auditor's job; this is a checklist
 of "attacker input that becomes a second-order source when it is read back".
+
+**Client-side / DOM sink sweep (XSS).** DOM-XSS sinks live in inline `<script>…</script>` blocks inside
+HTML/templates **and** in `static/**/*.js` — not just framework component files. Grep both for the sink set
+below and record each with `file:line`, the sink API, and the **raw argument expression** (so the auditor
+can see whether it is built from a source):
+```
+\.html\(|\.append\(|\.prepend\(|\.before\(|\.after\(|\.replaceWith\(|\.wrap\(   # jQuery HTML sinks
+\.innerHTML|\.outerHTML|insertAdjacentHTML|document\.write                     # DOM sinks
+\beval\(|new Function\(|setTimeout\([^,]*['"]|setInterval\([^,]*['"]            # code-exec sinks
+```
+Cross-list any `{{ … }}` / `{{ …|escapejs }}` / `|json_script` / `|safe` that appears **inside** a `<script>`
+block as a candidate DOM **source** (it injects a server value straight into client JS). Record these under
+the `xss` sink key with their source expression.
 
 Also map the **security mechanisms**: auth/session machinery, authorization middleware/guards, input
 validation layers, output encoding defaults, the outbound HTTP client(s), crypto usage, and the logging

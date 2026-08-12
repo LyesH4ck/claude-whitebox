@@ -67,7 +67,8 @@ Session running with all plugins active. You can still use /codeaudit:codeaudit-
 Try to Read `.codeaudit-scope.json`.
 
 **If the file exists and is valid JSON**, extract `repo`, `engagement`, `out_of_scope`, `focus`,
-`target_url`, `depth` (default `"Thorough"`), and `output_formats` (default `[]`). Output:
+`target_url`, `depth` (default `"Thorough"`), `output_formats` (default `[]`), and `extra_roots` (default
+`[]` — sibling first-party repos/dirs to fold into scope, e.g. a separate front-end service). Output:
 
 ```
 ============================================================
@@ -141,6 +142,7 @@ After collecting, write `.codeaudit-scope.json` with status `"active"`:
   "target_url": {target_url or null},
   "depth": "{depth or "Thorough"}",
   "output_formats": {output_formats array},
+  "extra_roots": {extra_roots array or []},
   "status": "active"
 }
 ```
@@ -253,7 +255,7 @@ Log:
 ### Step 6.2 — Code-recon baseline
 
 Dispatch the **code-recon** agent via `Task`. Pass `repo`, `engagement`, `focus`, `out_of_scope`,
-`target_url`, and `classes`. Wait for completion. Confirm it wrote `recon/architecture.md`,
+`target_url`, `extra_roots`, and `classes`. Wait for completion. Confirm it wrote `recon/architecture.md`,
 `recon/attack-surface.md`, and `recon/sink-inventory.json`. If recon fails or finds zero sources/sinks,
 warn the operator (possibly wrong repo or unsupported stack) and ask whether to continue. Log
 `phase":"recon","action":"baseline-complete","sources":<N>,"sinks":<M>`.

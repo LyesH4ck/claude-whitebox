@@ -74,8 +74,17 @@ Attacker-controlled object **keys** reaching a recursive merge/clone or a dynami
 - Danger keys: `__proto__`, `constructor`, `prototype` appearing in user-controlled keys or a dotted path
 
 ## XSS / output
-- **DOM**: `innerHTML`, `outerHTML`, `document.write`, `insertAdjacentHTML`, `eval`, `setTimeout(str)`,
-  `location`/`location.href` assignment, `$(...).html()`
+- **DOM sinks**: `innerHTML`, `outerHTML`, `document.write`, `insertAdjacentHTML`, jQuery
+  `.html(`/`.append(`/`.prepend(`/`.before(`/`.after(`/`.replaceWith(`/`.wrap(`, `location`/`location.href`
+  assignment; **code-exec**: `eval(`, `new Function(`, `setTimeout(str)`, `setInterval(str)`
+- **DOM sources** (taint when read client-side): `location.hash`/`search`/`href`/`pathname`,
+  `document.referrer`, `window.name`, `postMessage` data, `URLSearchParams(...).get(...)` and custom
+  URL-param helpers (`getUrlParameter`/`getParameterByName`), `$(el).val()`/`el.value`/`.attr('value')`
+  **when server-populated from a request/URL param** (`.val()` returns the HTML-**decoded** string → server
+  escaping is undone), any `fetch`/`XHR`/`$.ajax` JSON response field, `{{ v|escapejs }}`/`{{ v|json_script }}`
+  injected into inline JS, and `localStorage`/`sessionStorage.getItem`, `document.cookie`
+- **Where they live**: inline `<script>…</script>` blocks inside HTML/templates **and** `static/**/*.js` —
+  grep these, not just framework component files
 - **Framework escape hatches**: `dangerouslySetInnerHTML` (React), `v-html` (Vue), `[innerHTML]`/
   `bypassSecurityTrust*` (Angular), `| safe`/`{% autoescape false %}` (Jinja), `mark_safe`/`\|safe`
   (Django), `raw`/`html_safe` (Rails), `=` unescaped (ERB)
@@ -84,13 +93,22 @@ Attacker-controlled object **keys** reaching a recursive merge/clone or a dynami
 ## SSRF / outbound requests
 - **JS/TS**: `fetch(`, `axios(`, `http.request`, `got(`, `request(`, `undici`
 - **Python**: `requests.*`, `urllib`, `httpx`, `aiohttp`
+- **Python (opener/builder — easy to miss)**: `urlopen(`, `urllib.request.build_opener(...).open(`,
+  `urllib2.build_opener(...).open(`, `OpenerDirector.open(`, `FancyURLopener().open(`,
+  `pycurl.Curl().setopt(...URL...)`, `http.client`/`httplib` `.request(`. **Py2 `build_opener()`/`urlopen`
+  resolve `file://`+`ftp://` by default** (FileHandler/FTPHandler) → also **LFI** (CWE-73/98), not just SSRF
 - **PHP**: `curl_*`, `file_get_contents("http...")`, `fopen` on URL
 - **Java**: `URL.openConnection`, `HttpClient`, `RestTemplate`
 - Common SSRF features: webhooks, URL preview/unfurl, PDF/image from URL, import-from-URL, SSO metadata,
   proxy endpoints, `redirect_uri` fetches
 
-## Open redirect
-- `redirect(` / `res.redirect(` / `Location` header set from user value without allowlist
+## Open redirect (CWE-601 — owned by access-control-auditor, A01)
+- **Django**: `HttpResponseRedirect(x)`, `HttpResponsePermanentRedirect(x)`, `redirect(x)` (django.shortcuts)
+- **Flask**: `redirect(x)` · **Express**: `res.redirect(x)`, `res.location(x)` · **Rails**: `redirect_to(x)`
+- **raw**: any `Location` header assembled from a request value
+- Safe iff the target is a **relative path with no scheme/host** or passes an on-site host allowlist
+  (`django.utils.http.url_has_allowed_host_and_scheme` / `is_safe_url`). The low-level class forms
+  (`HttpResponseRedirect(next)`) do **not** match a `redirect(`-only grep — search the class names too.
 
 ## Secrets (informational + high)
 - patterns: `AKIA[0-9A-Z]{16}`, `-----BEGIN .* PRIVATE KEY-----`, `xox[baprs]-`, `ghp_[0-9A-Za-z]{36}`,

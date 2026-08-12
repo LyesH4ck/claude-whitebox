@@ -33,6 +33,11 @@ handler.
 For each handler, read the code and answer:
 - **Function-level**: is there a role/permission guard on this handler (not only in the UI/router for
   other routes)? Is the guard applied or accidentally omitted/commented/optional?
+- **Token ≠ authentication**: a bare `Model.objects.get(token=…)` / API-key lookup is **not** authentication
+  unless the token is (a) bound to a principal authorized for the action and (b) not self-issued,
+  enumerable, or embedded in client-reachable responses/pages. Check how the token is minted
+  (`get_or_create_for_user`, page-embedded) before treating the endpoint as authenticated — otherwise rate
+  it as effectively unauthenticated.
 - **Object ownership (IDOR)**: when the handler loads an object by a user-supplied id, does it verify the
   authenticated principal owns or may access it (`WHERE id=? AND owner_id=session.user` or an explicit
   policy check)? Or does it trust the id blindly?
@@ -44,6 +49,11 @@ For each handler, read the code and answer:
   handler, is there an anti-CSRF token validated server-side or `SameSite=Strict|Lax` with no cross-site
   exemption? Ambient-cookie auth with neither → **CSRF** (CWE-352). Skip header/bearer-authenticated APIs
   and read-only GETs — they are not CSRF-able.
+- **Open redirect** (CWE-601 / A01 — **owned here**): a user-controlled value in a redirect sink
+  (`HttpResponseRedirect(next)`/`HttpResponsePermanentRedirect(x)`/`redirect(x)`/`redirect_to(x)`/
+  `res.redirect(x)` or a `Location` header) with no allowlist is `vulnerable` unless the target is a
+  relative path (no scheme/host) or passes an on-site allowlist (`url_has_allowed_host_and_scheme`/
+  `is_safe_url`). The low-level class forms evade a `redirect(`-only grep — search the class names too.
 
 Record each with `file:line` and a snippet of the missing/insufficient check. **Also capture the
 user-supplied identifier** that keys the object as the finding's `source` in `expr (file:line)` form —
