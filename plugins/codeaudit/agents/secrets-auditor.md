@@ -52,7 +52,9 @@ are not secrets, test/example data.
 
 Write findings per the contract (**redact** the secret value in the report — store only a fingerprint
 like first/last 4 chars + length). Safe/placeholder hits → `findings/_safe-secrets.md`. Append to
-`activity/secrets-auditor.log`. Use `finding-sec-NNN` ids.
+`activity/secrets-auditor.log`. Use `finding-sec-NNN` ids. **Before writing, scan existing `finding-sec-*` dirs first and continue from
+the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never renumber from `001` and overwrite
+the first pass's finding dirs.
 
 ## Completion
 

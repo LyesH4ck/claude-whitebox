@@ -54,7 +54,9 @@ probes if useful.
 ## Phase 4 — Emit
 
 Write findings per the contract; record safe controls to `findings/_safe-auth.md`; append to
-`activity/auth-auditor.log`. Use `finding-auth-NNN` ids.
+`activity/auth-auditor.log`. Use `finding-auth-NNN` ids. **Before writing, scan existing `finding-auth-*` dirs first and continue from
+the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never renumber from `001` and overwrite
+the first pass's finding dirs.
 
 ## Completion
 

@@ -47,7 +47,9 @@ env check.
 ## Phase 4 — Emit
 
 Write findings per the contract; safe controls → `findings/_safe-config.md`; append to
-`activity/config-auditor.log`. Use `finding-cfg-NNN` ids.
+`activity/config-auditor.log`. Use `finding-cfg-NNN` ids. **Before writing, scan existing `finding-cfg-*` dirs first and continue from
+the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never renumber from `001` and overwrite
+the first pass's finding dirs.
 
 ## Completion
 

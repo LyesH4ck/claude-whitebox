@@ -41,7 +41,7 @@ A run is **incomplete** if `report.md` does not exist.
   },
   "findings": [
     {
-      "id": "finding-001",
+      "id": "finding-inj-001",
       "title": "SQL injection via unvalidated ORDER BY in user listing",
       "severity": "high",
       "confidence": "high",
@@ -57,7 +57,7 @@ A run is **incomplete** if `report.md` does not exist.
       "slot_type": "SQL-keyword",
       "externally_reachable": true,
       "endpoint": { "method": "GET", "path": "/api/users", "param": "sort", "in": "query" },
-      "evidence": "findings/finding-001/description.md",
+      "evidence": "findings/finding-inj-001/description.md",
       "witness_payload": "?sort=id--"
     }
   ],
@@ -76,10 +76,21 @@ A run is **incomplete** if `report.md` does not exist.
 
 - **`findings[]`** — required keys: `id`, `title`, `severity`, `confidence`, `status`, `vuln_class`,
   `owasp`, `location` (file + line), `source`, `sink`. Optional: `cwe`, `cvss`, `trace`, `slot_type`,
-  `externally_reachable`, `endpoint`, `witness_payload`, `evidence`.
+  `externally_reachable`, `endpoint`, `witness_payload`, `write_site`, `evidence`.
+- **`id` / `evidence`** — auditors write per-class on-disk dirs `findings/finding-{prefix}-{NNN}/`
+  (`inj`/`xss`/`ac`/`ssrf`/`auth`/`sec`/`crypto`/`deps`/`cfg`/`log`) to stay collision-free across parallel
+  runs. **Keep that class-prefixed id as the finding `id`** — do NOT renumber to a flat `finding-001` —
+  and set `evidence` to the matching path `findings/finding-{prefix}-{NNN}/description.md`. The Step 6.6
+  aggregator MUST confirm each `evidence` path resolves on disk before writing the report; a dangling
+  `evidence` link breaks per-finding drill-down and SARIF/CSV ingestion.
 - **`source`** — the tainted input as `expr (file:line)` and the `file:line` is **required** (it is the
   entry-point-resolution key for `endpoint`, and is the *source* read site, distinct from the top-level
   `location` which is the *sink*). E.g. `"req.query.sort (src/api/userController.ts:42)"`.
+- **`write_site`** (optional; stored / second-order findings only) — for a stored XSS / stored SQLi /
+  second-order injection, the **write half** as `expr (file:line)` where the attacker value was persisted.
+  The read/render sink stays in `location`/`sink`; the read-back of the stored value is the `source`.
+  Seed it from `recon/sink-inventory.json` `stored_sources`. A stored finding reaches `high` only when it
+  carries **both** a `write_site` and a complete stored-value→sink trace (both halves exhibited).
 - **`endpoint`** (optional, request-reachable findings only) — the live HTTP binding
   `{ method, path, param, in }`, resolved by the **Step 6.6 aggregator** from `recon/sink-inventory.json`
   `entry_points`: match the finding's `source` (the param **name** + `file:line`) to an entry point's
@@ -90,9 +101,10 @@ A run is **incomplete** if `report.md` does not exist.
   never guess a path. This is what the pentest hybrid handoff consumes to route a code-confirmed finding
   straight to a live target (`HYBRID_HANDOFF_SPEC.md`); when absent, the handoff falls back to correlating
   the param against the black-box surface map.
-- **`confidence`** — `high` (complete, unambiguous code trace), `probable` (likely flaw, a branch/helper
-  not fully inspected), `unconfirmed` (suspected, no complete path — must also appear in `coverage_gaps`).
-  In hybrid mode a live corroboration may raise `probable`→`high`.
+- **`confidence`** — `high` (complete, unambiguous code trace) or `probable` (likely flaw, a branch/helper
+  not fully inspected) for every entry in `findings[]`. `unconfirmed` (suspected, no complete path) is
+  **not a finding**: record it under `coverage_gaps` only, never in `findings[]` — this keeps the headline
+  count deterministic across runs. In hybrid mode a live corroboration may raise `probable`→`high`.
 - **`status`** — `open` | `remediated` | `accepted-risk` (default `open`).
 - **`depth`** — `Quick` | `Standard` | `Thorough` (default). Records how far indirect/second-order flows
   were chased. It does NOT cap which sources were covered: a complete audit traces every in-scope source
@@ -101,6 +113,10 @@ A run is **incomplete** if `report.md` does not exist.
   could not be resolved statically, or a class with no scanner installed). First-class section. There is
   no time-based de-scoping — a code audit runs to completion.
 - **`tested_not_vulnerable`** — vectors analyzed and confirmed safe, so coverage is provable.
+- **`summary`** — severity counts computed over `findings[]` only. Because `findings[]` carries only
+  `high`/`probable` confidence (`unconfirmed` lives in `coverage_gaps`) and the headline vulnerability
+  tally excludes `informational` (see Exploitability bar), `summary.total` counts exactly the confirmed
+  findings (`confidence ∈ {high, probable}`, severity ≥ `low`) — the same input twice yields the same total.
 
 ## Severity rubric (impact × reachability × confidence)
 
@@ -112,8 +128,9 @@ A run is **incomplete** if `report.md` does not exist.
 - **low** — limited impact / hard to reach / defense-in-depth gap.
 - **informational** — hygiene (missing header, untracked secret, outdated-but-unexploited dep).
 
-Internal-only reachability drops severity by one band. `unconfirmed` confidence caps severity at
-`medium` until corroborated.
+Internal-only reachability drops severity by one band. (`unconfirmed` items are not findings — they live
+in `coverage_gaps` and carry no severity; see the `confidence` rule. A `probable` finding whose flaw
+hinges on an uninspected branch should not be rated above `high`.)
 
 **Exploitability bar.** A finding rated `low` or higher MUST carry a source→sink path or a concrete
 exploitation primitive. A bare missing-control observation (absent header, cookie flag, debug mode,
@@ -127,6 +144,24 @@ A01 Broken Access Control · A02 Cryptographic Failures · A03 Injection · A04 
 A05 Security Misconfiguration · A06 Vulnerable & Outdated Components · A07 Auth Failures ·
 A08 Software & Data Integrity (incl. insecure deserialization) · A09 Logging Failures ·
 A10 SSRF.
+
+## Default CWE by class (fill `cwe` deterministically)
+
+`cwe` feeds the SARIF `ruleId` (`{vuln_class}/{cwe}`), so fill it on every finding. Use the default below,
+refined to the specific sub-class where one applies:
+
+| class | default `cwe` (refine per finding) |
+|-------|------------------------------------|
+| injection | CWE-89 SQLi · CWE-943 NoSQLi · CWE-78 OS-cmd · CWE-22/98 path/LFI · CWE-1336 SSTI · CWE-611 XXE · CWE-502 deser · CWE-1321 proto-pollution |
+| xss | CWE-79 |
+| auth | CWE-287 · CWE-384 session · CWE-916 weak hash · CWE-345 JWT |
+| access-control | CWE-284 · CWE-639 IDOR · CWE-862 missing authz · CWE-269 privesc · CWE-915 mass-assign · CWE-352 CSRF |
+| ssrf | CWE-918 · CWE-601 open-redirect |
+| secrets | CWE-798 |
+| crypto | CWE-327 · CWE-330 weak RNG · CWE-916 password hash |
+| deps | CWE-1104 / CWE-937 |
+| config | CWE-16 · CWE-614/1004 cookie flags · CWE-942 CORS |
+| logging | CWE-532 · CWE-778 missing audit log · CWE-117 log injection · CWE-200 exposure |
 
 ## `report.md` — fixed consolidated template
 
