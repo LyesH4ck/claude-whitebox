@@ -297,8 +297,12 @@ class with surface gets an auditor. Follow your agent definition's schema."
    returns only a label; the *what* needs a free-text channel, per the convention in Step 2.) On Cancel,
    log and stop.
 3. On approval, dispatch every auditor in wave 1 **in parallel — all `Task` calls in a single message**,
-   `run_in_background=True`, using the real agent names from the plan. Each auditor prompt MUST include:
-   - the **scope**: `repo`, assigned directories, `out_of_scope`, `mode`, `target_url`, `tools_available`;
+   `run_in_background=True`, using the real agent names from the plan. **A sharded class appears as several
+   deployments with the same `agent` and distinct `shard` tags (large-codebase injection) — dispatch each
+   shard as its own parallel `Task` (pass its `shard` + `scope`), and track each as a separate auditor in
+   the completeness loop.** Each auditor prompt MUST include:
+   - the **scope**: `repo`, assigned directories, `out_of_scope`, `mode`, `target_url`, `tools_available`,
+     and the `shard` tag if the class was sharded;
    - the **completeness mandate**: "Trace EVERY source in your assigned scope across your class(es). You
      are done only when every enumerated source→sink path has a verdict and every safe vector is
      recorded — not after the first finding. There is no time budget; completeness is the goal. Apply
@@ -382,6 +386,12 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
      `description.md` and confirm the path resolves before writing the report (drop or flag any finding
      whose dir is missing). Keep `unconfirmed` items **out** of `findings[]` — they belong in
      `coverage_gaps` — so `summary.total` counts only `confidence ∈ {high, probable}`.
+   - **Union sharded registers.** When a class ran as several shards (same agent, distinct `shard` tags —
+     typically injection on a large codebase), merge their per-sub-class coverage registers: a sub-class is
+     **covered** only if **every** shard reports it `traced` or a seed-backed `no-surface`; sum the traced
+     counts. Gather every `_safe-injection-*.md`. Dedup findings across shards (they own disjoint sinks, so
+     real overlap is limited to second-order cross-region paths). If any shard reports `incomplete`/`errored`
+     for its scope, the class is **not** complete — re-dispatch that shard (Step 6.5).
 1b. **Resolve each finding's live endpoint (hybrid handoff, voie A).** Read
    `outputs/{engagement}/recon/sink-inventory.json` `entry_points`. For every **request-reachable** finding,
    take the param **name** and the **source `file:line`** from the finding's `source` string (strip the
