@@ -366,24 +366,30 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
    `phase":"audit","action":"auditors-complete","findings_count":<N>,"sources_enumerated":<E>,"sources_verdicted":<V>,"result":"scope-exhausted"`
    (with `E == V`, or every shortfall listed in `coverage_gaps`).
    Do not manufacture additional work once coverage is complete.
-6. **High-signal sink sweep (deterministic backstop — additive, never a scoper).** After the auditors'
-   free-exploration pass, run the deterministic sweep to catch **rare, near-always-dangerous** sinks that
-   live in files no auditor's scope reached (a top-level module, a giant file). It is a **script**, so it
-   cannot skip a class the way an LLM pass can — but it deliberately covers only high-signal patterns (SSRF
-   openers/`urlopen`, open-redirect classes, deserialization, SSTI, XXE, XSS escape-hatches). Ubiquitous
-   sinks (SQL `.query`, `.innerHTML`, `requests.get`) stay with the auditors' context-aware exploration —
-   grep is too noisy for those.
+6. **Semgrep corroboration (deterministic taint backstop — ONLY if `semgrep` ∈ `tools_available`).**
+   Semgrep does real dataflow taint, so it finds the source→sink paths the auditors' free-exploration pass
+   may have missed — **precisely** (not grep noise) and cheaply. Run it scoped to the selected classes +
+   detected frameworks:
    ```bash
-   node plugins/codeaudit/skills/code-audit/sink-sweep/sink-sweep.mjs "{repo}" "outputs/{engagement}" "{out_of_scope}"
+   cd {repo}
+   semgrep scan --json --quiet --metrics=off --timeout 180 \
+     --config p/security-audit --config p/owasp-top-ten \
+     # + per selected class:      p/xss · p/sql-injection · p/command-injection · p/secrets
+     # + per detected framework:  p/django · p/flask · p/express · p/nodejs · p/react
+     --exclude tests --exclude migrations --exclude node_modules --exclude vendor \
+     -o outputs/{engagement}/recon/semgrep.json 2>/dev/null || true
    ```
-   The script prints, per class, the files that contain that class's high-signal sinks but carry **no
-   verdict** for that class (`uncovered[class] = [{file, count, lines}]`). For each such class, **dispatch
-   that class's auditor once** at the listed files as an **additive backstop** — *"in addition to your
-   normal coverage, verdict any real sink in these files the first pass missed; they were outside the
-   initial scope. Most matches may be safe (e.g. internal `redirect('home')`) — triage with context."* It
-   is **NOT** a scope cap and never replaces free exploration. Re-run the sweep until `uncovered_files` is 0
-   for every class, or each residual file is recorded in `coverage_gaps` with a reason. Log
-   `phase":"audit","action":"sink-sweep","summary":<the script's summary block>`.
+   Treat each result as an **additive candidate**, never an accepted finding:
+   1. Map its `check_id`/message to a class (keyword: `xss` / `sqli`|`injection` / `command` / `ssrf` /
+      `redirect` / `deserial` / `secret`).
+   2. If its `path:line` is **not already verdicted** for that class (no finding/`_safe` there), **dispatch
+      that class's auditor once** to confirm-or-dismiss with a source→sink read — *"semgrep flagged a
+      possible <class> at <file:line>; verify from the code."* Semgrep has false positives, so the auditor's
+      verdict is authoritative — and semgrep **never** constrains the auditors' own exploration.
+   Log `phase":"audit","action":"semgrep","results":<N>,"dispatched":<M>`.
+
+   **If `semgrep` is not in `tools_available`, skip this step entirely** — the audit proceeds on the
+   auditors' free exploration alone (the standard behaviour).
 
 ### Step 6.6 — Aggregate + report
 
