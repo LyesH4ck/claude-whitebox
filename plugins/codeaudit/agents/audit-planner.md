@@ -44,7 +44,7 @@ you and will silently do nothing.
     {
       "wave": 1,
       "deployments": [
-        { "agent": "injection-auditor", "scope": "src/db/**, src/api/**", "owned_sinks": ["src/db/userRepo.ts:130","src/api/search.ts:44"], "sinks": 9, "priority": "high" },
+        { "agent": "injection-auditor", "scope": "src/db/**, src/api/**", "sinks": 9, "priority": "high" },
         { "agent": "access-control-auditor", "scope": "src/api/**, src/middleware/**", "priority": "high" },
         { "agent": "ssrf-auditor", "scope": "src/http/**, src/webhooks/**", "sinks": 3, "priority": "medium" }
       ]
@@ -60,8 +60,6 @@ you and will silently do nothing.
     }
   ],
   "skipped": [{ "agent": "xss-auditor", "reason": "API-only service, no HTML rendering surface" }],
-  "shared_files": [{ "file": "apps/api/views.py", "classes": ["injection","ssrf","access-control"], "reason": "19k-line multi-class file" }],
-  "unassigned_sinks": [],
   "escalation_plan": [
     "re-trace any 'probable' findings whose helper functions were not fully inspected",
     "if target_url provided, corroborate top injection/ssrf findings with a single benign witness request",
@@ -123,13 +121,4 @@ what was skipped and why, and the escalation plan (deepening probable findings, 
 - **Scope each auditor** to the directories where its sinks live (from `sink-inventory.json`) — don't
   send every auditor at the whole tree unless small. For a **dense class on a large codebase**, shard it
   into several same-agent instances scoped to disjoint directories (see "Sharding" above).
-- **Own every sink by `file:line`, not by directory (O1).** Each deployment carries `owned_sinks:
-  ["<file>:<line>", …]` from `sink-inventory.json`; directories are only *context*. The **union of
-  `owned_sinks` for class X MUST equal the set of class-X sinks in the inventory** — assert it, and record
-  any sink you cannot assign under `unassigned_sinks` (an error state, never silent). A sink's owner is
-  decided by the sink, **regardless of file location** (top-level module, unusual app, `edacad/`,
-  `store_in_s3.py`). This is what stops a sink falling into the hole between two directory-scoped auditors.
-- **Multi-class / large files (O4).** A file with sinks of >1 class, or > ~3k lines, goes into
-  `shared_files`; its sinks are listed in the `owned_sinks` of **every** relevant class auditor. Never
-  assign a 19k-line file to one auditor and orphan its other-class sinks.
 - Return a concise summary after writing both files. Follow this schema exactly.

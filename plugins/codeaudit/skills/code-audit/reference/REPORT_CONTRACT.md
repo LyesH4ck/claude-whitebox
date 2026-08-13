@@ -76,7 +76,7 @@ A run is **incomplete** if `report.md` does not exist.
 
 - **`findings[]`** — required keys: `id`, `title`, `severity`, `confidence`, `status`, `vuln_class`,
   `owasp`, `location` (file + line), `source`, `sink`. Optional: `cwe`, `cvss`, `trace`, `slot_type`,
-  `externally_reachable`, `endpoint`, `witness_payload`, `write_site`, `auth_state`, `evidence`.
+  `externally_reachable`, `endpoint`, `witness_payload`, `write_site`, `evidence`.
 - **`id` / `evidence`** — auditors write per-class on-disk dirs `findings/finding-{prefix}-{NNN}/`
   (`inj`/`xss`/`ac`/`ssrf`/`auth`/`sec`/`crypto`/`deps`/`cfg`/`log`) to stay collision-free across parallel
   runs. **Keep that class-prefixed id as the finding `id`** — do NOT renumber to a flat `finding-001` —
@@ -91,10 +91,6 @@ A run is **incomplete** if `report.md` does not exist.
   The read/render sink stays in `location`/`sink`; the read-back of the stored value is the `source`.
   Seed it from `recon/sink-inventory.json` `stored_sources`. A stored finding reaches `high` only when it
   carries **both** a `write_site` and a complete stored-value→sink trace (both halves exhibited).
-- **`auth_state`** (optional) — `unauthenticated` | `token` | `user` | `staff`: the access state required
-  to reach the sink. It **modulates severity, never existence** — a controllable sink behind auth is still
-  a finding (see SKILL → "Protected or not…"), just at a lower severity band with a justification. Never
-  downgrade a controllable sink to `safe` because auth or a sibling-variable guard is present.
 - **`endpoint`** (optional, request-reachable findings only) — the live HTTP binding
   `{ method, path, param, in }`, resolved by the **Step 6.6 aggregator** from `recon/sink-inventory.json`
   `entry_points`: match the finding's `source` (the param **name** + `file:line`) to an entry point's
