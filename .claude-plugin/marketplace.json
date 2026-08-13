@@ -35,7 +35,7 @@
       "name": "codeaudit",
       "source": "./plugins/codeaudit",
       "description": "White-box source code security audit - static source-to-sink analysis across 10 vulnerability domains with optional live correlation",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"
