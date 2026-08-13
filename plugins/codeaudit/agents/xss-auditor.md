@@ -24,7 +24,10 @@ Read plugins/pentest/skills/pentest/attacks/client-side/dom-based/dom-based-vuln
 ## Phase 1 — Recon
 
 Read `recon/attack-surface.md` + `recon/sink-inventory.json` (`xss` array). Identify the rendering layer:
-server templates (Jinja/ERB/Blade/Thymeleaf), SPA framework (React/Vue/Angular), or raw string HTML.
+server templates (Jinja/ERB/Blade/Thymeleaf), SPA framework (React/Vue/Angular), raw string HTML, **and
+non-template response paths** — API/JSON views that build the body as a **string** (`HttpResponse(...)`,
+DRF `Response`, Flask `make_response`) instead of via a template. These bypass template auto-escaping
+entirely, so check each one's `content_type` (Phase 3) — do not assume "it's an API, so it's not HTML".
 Determine the framework's **default** encoding behavior — this is the baseline defense. Scan assigned
 scope for escape hatches and DOM sinks. **Also read `sink-inventory.json` `stored_sources`** — each is a
 persisted attacker value that becomes a second-order source when it is read back **by any template,
@@ -67,6 +70,14 @@ that field name to the server view + serializer that emits it and to the underly
   encode (incl. Django/Jinja auto-escape) → read back via `.val()`/`.value` and written to an HTML sink
   → **vulnerable** (`.val()` returns the decoded string); HTML-entity encode → placed in a `<script>`/JS
   or event-handler slot → **vulnerable**.
+- **Server content-type mismatch (non-template reflection)**: a view returning reflected input in a
+  response body served as **`text/html`** is XSS with no template involved. Django `HttpResponse(...)` /
+  `HttpResponseBadRequest(...)` **default to `content_type='text/html'`**, and `json.dumps(x)` / an f-string /
+  string-concat body does **not** HTML-encode. So `HttpResponse(json.dumps({'q': request.GET['q']}))` with no
+  `content_type`, reflecting a GET param → **reflected XSS** (the browser parses `<script>` in the body as
+  HTML — `json.dumps` escapes for a JSON *string*, the wrong context). `safe` only when the content type is
+  explicitly non-HTML (`JsonResponse`, `content_type='application/json'`/`'text/plain'`) **or** the value is
+  HTML-encoded. This is the server-side twin of encoder ≠ context.
 - **DOM**: a tainted DOM source reaching `innerHTML`/`.html()`/`.append()`, `document.write`,
   `insertAdjacentHTML`, `eval`/`new Function`/`setTimeout(str)` without sanitization → `vulnerable`. DOM
   sources include `location.hash`/`search`/`href`/`pathname`, `document.referrer`, `window.name`,
