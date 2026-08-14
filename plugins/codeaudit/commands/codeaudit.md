@@ -366,30 +366,44 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
    `phase":"audit","action":"auditors-complete","findings_count":<N>,"sources_enumerated":<E>,"sources_verdicted":<V>,"result":"scope-exhausted"`
    (with `E == V`, or every shortfall listed in `coverage_gaps`).
    Do not manufacture additional work once coverage is complete.
-6. **Semgrep corroboration (deterministic taint backstop — ONLY if `semgrep` ∈ `tools_available`).**
-   Semgrep does real dataflow taint, so it finds the source→sink paths the auditors' free-exploration pass
-   may have missed — **precisely** (not grep noise) and cheaply. Run it scoped to the selected classes +
-   detected frameworks:
-   ```bash
-   cd {repo}
-   semgrep scan --json --quiet --metrics=off --timeout 180 \
-     --config p/security-audit --config p/owasp-top-ten \
-     # + per selected class:      p/xss · p/sql-injection · p/command-injection · p/secrets
-     # + per detected framework:  p/django · p/flask · p/express · p/nodejs · p/react
-     --exclude tests --exclude migrations --exclude node_modules --exclude vendor \
-     -o outputs/{engagement}/recon/semgrep.json 2>/dev/null || true
-   ```
-   Treat each result as an **additive candidate**, never an accepted finding:
-   1. Map its `check_id`/message to a class (keyword: `xss` / `sqli`|`injection` / `command` / `ssrf` /
-      `redirect` / `deserial` / `secret`).
-   2. If its `path:line` is **not already verdicted** for that class (no finding/`_safe` there), **dispatch
-      that class's auditor once** to confirm-or-dismiss with a source→sink read — *"semgrep flagged a
-      possible <class> at <file:line>; verify from the code."* Semgrep has false positives, so the auditor's
-      verdict is authoritative — and semgrep **never** constrains the auditors' own exploration.
-   Log `phase":"audit","action":"semgrep","results":<N>,"dispatched":<M>`.
+6. **Semgrep Pro taint pass on the LARGE files (only if `semgrep` ∈ `tools_available`).**
+   The auditors' free exploration reliably covers normal files, but no single LLM pass reaches deep into a
+   giant multi-purpose file (10k–20k lines) — exactly where taint sinks hide (the missed SSRF sat at
+   `spicemodels/views.py:11386` and `api/views.py:9601`). Semgrep **Pro**'s interprocedural dataflow does
+   reach them (it followed `read_data_from_url(url) → urlopen(url)` across functions where both the OSS
+   engine **and** the LLM found nothing). So run it **targeted at the big files only** — bounded cost: a
+   handful of files, ~2–4 min each — with the registry packs **plus this plugin's custom rules** that close
+   registry gaps (notably urllib `build_opener().open()`, which the registry SSRF rules miss).
 
-   **If `semgrep` is not in `tools_available`, skip this step entirely** — the audit proceeds on the
-   auditors' free exploration alone (the standard behaviour).
+   > **Why Pro, why big-files-only, why custom rules.** OSS semgrep found **0** on these files; only `--pro`
+   > (interprocedural) works — but it is ~2–4 min per 19k-line file, so whole-tree Pro is hours. Target only
+   > the few giant files where the LLM struggles; the auditors already cover the normal ones well. And even
+   > Pro's registry misses `build_opener().open()` → the custom ruleset covers it.
+
+   1. List in-scope source files over ~3000 lines (respect `out_of_scope`; take the ~10 largest):
+      ```bash
+      cd {repo}; for f in $(git ls-files '*.py' '*.js' '*.ts' '*.php' '*.rb' '*.java'); do
+        n=$(wc -l < "$f"); [ "$n" -gt 3000 ] && echo "$n $f"; done | sort -rn | head -10 | awk '{print $2}'
+      ```
+   2. Run semgrep **Pro** on exactly those files, registry packs + this plugin's custom rules:
+      ```bash
+      semgrep scan --pro --metrics=off --timeout 120 --json \
+        --config p/security-audit --config p/django \
+        --config plugins/codeaudit/skills/code-audit/semgrep-rules/ \
+        -o outputs/{engagement}/recon/semgrep-bigfiles.json <big-file-list> 2>/dev/null || true
+      ```
+      (If `--pro` is unavailable — engine not installed / not licensed — this step adds little here, since
+      OSS finds ~nothing on these files; let it fail and move on.)
+   3. Treat each result as an **additive candidate**, never an accepted finding. Map its `check_id`/`class`
+      metadata to a class (`ssrf` / `xss` / `injection` / `redirect`→access-control / `deserial` / …); if its
+      `path:line` is **not already verdicted** for that class, **dispatch that class's auditor once** to
+      confirm-or-dismiss with a source→sink read. Semgrep has false positives → the auditor's verdict is
+      authoritative, and semgrep **never** constrains the auditors' own exploration.
+   Log `phase":"audit","action":"semgrep-bigfiles","files":<N>,"results":<M>,"dispatched":<K>`.
+
+   **If `semgrep` is not in `tools_available`, skip this step** — the audit runs on the auditors' free
+   exploration + their built-in rules alone, which independently cover the sinks semgrep's rules miss
+   (`build_opener`/`file://`, DOM-in-`<script>`, content-type mismatch).
 
 ### Step 6.6 — Aggregate + report
 

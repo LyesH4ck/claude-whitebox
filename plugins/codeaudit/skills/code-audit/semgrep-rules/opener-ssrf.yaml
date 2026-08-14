@@ -1,0 +1,33 @@
+rules:
+  - id: urllib-opener-open-ssrf
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Outbound request via a urllib opener (build_opener().open / OpenerDirector.open).
+      If the URL is request-derived and there is no scheme/host allow-list, this is SSRF
+      (CWE-918). On Python 2, build_opener()/urlopen resolve file:// and ftp:// by default,
+      so it is ALSO arbitrary local file read (CWE-73/98); if the fetched bytes are returned
+      or stored-and-linked, rate it full-read (critical). The registry SSRF rules key on
+      urlopen() and miss this two-step opener form.
+    metadata:
+      category: security
+      cwe: "CWE-918: Server-Side Request Forgery (SSRF)"
+      class: ssrf
+      confidence: MEDIUM
+      references:
+        - https://cwe.mitre.org/data/definitions/918.html
+    patterns:
+      - pattern-either:
+          - pattern: $M.build_opener(...).open(...)
+          - pattern: build_opener(...).open(...)
+          - pattern: $M.OpenerDirector(...).open(...)
+          - patterns:
+              - pattern-inside: |
+                  $O = $M.build_opener(...)
+                  ...
+              - pattern: $O.open(...)
+          - patterns:
+              - pattern-inside: |
+                  $O = build_opener(...)
+                  ...
+              - pattern: $O.open(...)
