@@ -29,7 +29,11 @@ non-template response paths** — API/JSON views that build the body as a **stri
 DRF `Response`, Flask `make_response`) instead of via a template. These bypass template auto-escaping
 entirely, so check each one's `content_type` (Phase 3) — do not assume "it's an API, so it's not HTML".
 Determine the framework's **default** encoding behavior — this is the baseline defense. Scan assigned
-scope for escape hatches and DOM sinks. **Also read `sink-inventory.json` `stored_sources`** — each is a
+scope for escape hatches and DOM sinks — **including inline `<script>…</script>` blocks of `*.html`
+templates and `static/**/*.js`** (recon does **not** pre-enumerate these; you grep them yourself and
+**triage by context** — a `.innerHTML`/`.append` is a finding only when its value is fed by a source
+(`{{ q|escapejs }}`, `?q=`, a `fetch` field…), never for every idiomatic call). **Also read
+`sink-inventory.json` `stored_sources`** — each is a
 persisted attacker value that becomes a second-order source when it is read back **by any template,
 JSON/GraphQL API response, or client `fetch`** — not only a template; for every entry
 whose store is read in your scope, trace store→read→render as a candidate **stored-XSS** path (the write
@@ -101,7 +105,10 @@ Write findings per the contract; record safe vectors and unconfirmed items to
 `outputs/{engagement}/findings/_safe-xss.md`. Append traces/verdicts to
 `outputs/{engagement}/activity/xss-auditor.log`. Use `finding-xss-NNN` ids to avoid collisions. **Before writing, scan existing `finding-xss-*` dirs first
 and continue from the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never renumber from
-`001` and overwrite the first pass's finding dirs.
+`001` and overwrite the first pass's finding dirs. **If the orchestrator gave you a `shard` tag**
+(large-codebase sharding — you own the xss sinks in your assigned `scope` only, tracing each fully across
+file boundaries as needed), namespace **all** outputs so parallel instances never overwrite each other:
+`finding-xss-{shard}-{NNN}`, `_safe-xss-{shard}.md`, `xss-auditor-{shard}.log`.
 
 ## Completion
 

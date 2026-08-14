@@ -94,18 +94,16 @@ store identity it lands in (`table.column`, ORM `model.field`, cache key, or fil
 statically resolvable). Do **not** resolve the read-sites — that is the auditor's job; this is a checklist
 of "attacker input that becomes a second-order source when it is read back".
 
-**Client-side / DOM sink sweep (XSS).** DOM-XSS sinks live in inline `<script>…</script>` blocks inside
-HTML/templates **and** in `static/**/*.js` — not just framework component files. Grep both for the sink set
-below and record each with `file:line`, the sink API, and the **raw argument expression** (so the auditor
-can see whether it is built from a source):
-```
-\.html\(|\.append\(|\.prepend\(|\.before\(|\.after\(|\.replaceWith\(|\.wrap\(   # jQuery HTML sinks
-\.innerHTML|\.outerHTML|insertAdjacentHTML|document\.write                     # DOM sinks
-\beval\(|new Function\(|setTimeout\([^,]*['"]|setInterval\([^,]*['"]            # code-exec sinks
-```
-Cross-list any `{{ … }}` / `{{ …|escapejs }}` / `|json_script` / `|safe` that appears **inside** a `<script>`
-block as a candidate DOM **source** (it injects a server value straight into client JS). Record these under
-the `xss` sink key with their source expression.
+**Client-side rendering surface — locate it, do NOT enumerate every DOM sink.** DOM-XSS lives in inline
+`<script>…</script>` blocks of templates and in `static/**/*.js`. **Do not dump every `.innerHTML`/`.append`
+match into the `xss` sink array** — on a large codebase that is thousands of mostly-safe idiomatic calls; it
+floods the inventory and mis-drives the planner (it makes a normally-small class look "dense" and get
+over-sharded). Whether a given `.innerHTML` is actually fed by a source is a **context judgement — the
+xss-auditor's job** (it greps *and* reasons), not a blind recon dump. So here, just **record the client-side
+JS *locations*** in `attack-surface.md` / `security_mechanisms` (which template dirs carry inline `<script>`,
+which `static/**` JS bundles are shipped, and the framework's default output-encoding) so the xss-auditor
+knows where to scan. Keep the `xss` sink array to genuinely notable sinks (escape hatches, obvious
+source→sink), not the full grep dump.
 
 Also map the **security mechanisms**: auth/session machinery, authorization middleware/guards, input
 validation layers, output encoding defaults, the outbound HTTP client(s), crypto usage, and the logging

@@ -85,8 +85,11 @@ scoped to a disjoint set of directories (a *shard*):
   source wherever it lives (reading files outside its directories is expected — ownership is by *sink*, not
   source). A second-order write→read path is owned by the shard holding the **read/sink** (via the recon
   `stored_sources` map). No path falls between two shards.
-- General mechanism, but **defaults to injection** (the densest class). Apply it to xss/access-control only
-  if they are comparably dense.
+- **Applies to any class** — the injection, xss, access-control and ssrf auditors are all shard-aware (they
+  namespace their outputs per shard, so parallel instances never collide). Shard whichever selected class is
+  genuinely dense **from real sink counts** (not a grep dump — recon no longer floods the `xss` array with
+  every `.innerHTML`/`.append`); a normally-small class stays a single instance. Injection is just the most
+  common candidate, not the only one.
 
 Example sharded injection deployment (when dense):
 ```json

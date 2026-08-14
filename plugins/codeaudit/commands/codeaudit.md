@@ -424,12 +424,13 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
      `description.md` and confirm the path resolves before writing the report (drop or flag any finding
      whose dir is missing). Keep `unconfirmed` items **out** of `findings[]` — they belong in
      `coverage_gaps` — so `summary.total` counts only `confidence ∈ {high, probable}`.
-   - **Union sharded registers.** When a class ran as several shards (same agent, distinct `shard` tags —
-     typically injection on a large codebase), merge their per-sub-class coverage registers: a sub-class is
-     **covered** only if **every** shard reports it `traced` or a seed-backed `no-surface`; sum the traced
-     counts. Gather every `_safe-injection-*.md`. Dedup findings across shards (they own disjoint sinks, so
-     real overlap is limited to second-order cross-region paths). If any shard reports `incomplete`/`errored`
-     for its scope, the class is **not** complete — re-dispatch that shard (Step 6.5).
+   - **Union sharded classes.** When **any** class ran as several shards (same agent, distinct `shard` tags
+     — injection/xss/access-control/ssrf on a large codebase), gather every `_safe-{class}-{shard}.md` and
+     all `finding-{prefix}-{shard}-*` dirs, and dedup findings across shards (they own disjoint sinks, so
+     real overlap is limited to second-order cross-region paths). For **injection**, also union the
+     per-sub-class coverage registers: a sub-class is **covered** only if **every** shard reports it `traced`
+     or a seed-backed `no-surface`; sum the traced counts. If any shard reports `incomplete`/`errored` for
+     its scope, the class is **not** complete — re-dispatch that shard (Step 6.5).
 1b. **Resolve each finding's live endpoint (hybrid handoff, voie A).** Read
    `outputs/{engagement}/recon/sink-inventory.json` `entry_points`. For every **request-reachable** finding,
    take the param **name** and the **source `file:line`** from the finding's `source` string (strip the
