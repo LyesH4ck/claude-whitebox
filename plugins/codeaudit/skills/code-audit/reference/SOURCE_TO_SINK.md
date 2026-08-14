@@ -20,6 +20,8 @@ positives and false negatives.
 | `SQL-number` | numeric predicate | binding or strict int cast | concat of unvalidated string |
 | `SQL-identifier` | table/column name | **allowlist** (binding can't help) | binding assumed sufficient; concat |
 | `SQL-keyword` | `ORDER BY {dir}` | allowlist (`ASC`/`DESC`) | regex/escape on a keyword slot |
+| `SQL-funcarg` | `DATE_TRUNC('%s', x)`, `EXTRACT({f} FROM x)`, `CAST(… AS {t})` | allowlist of the function's legal keywords/types | `%`/format/f-string/concat into the function-arg slot (binding can't reach it) |
+| `SQL-limit` | `LIMIT {n} OFFSET {m}` | strict **int cast** | string-built limit/offset |
 | `CMD-argument` | `execve` argv array | array exec (`shell=False`) | string command + `shell=True` |
 | `CMD-string` | `system("...")` | avoid; else `shlex.quote` per arg | char blacklist (`;`,`|`,`&`) |
 | `FILE-path` | `open(path)` | canonicalize + boundary check | `../` blacklist; concat of user path |

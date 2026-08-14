@@ -56,6 +56,7 @@ For each candidate, read the code along the full path and record:
 - every **sanitizer** (name + `file:line` + type) and every **concat/format/interpolation** — flag any
   concat that occurs *after* a sanitizer (it re-introduces taint);
 - the **sink** call (`file:line`) and the **slot type** (SQL-value / SQL-identifier / SQL-keyword /
+  SQL-funcarg / SQL-limit /
   CMD-argument / CMD-string / FILE-path / FILE-include / TEMPLATE-expr / DESERIALIZE / PATH-component /
   NoSQL-operator / NoSQL-where-js / XML-entity / PROTO-pollution).
 
@@ -64,7 +65,18 @@ Fork paths when one source feeds multiple sinks. Log each trace line.
 ## Phase 3 — Verdict (slot ↔ defense matching)
 
 Apply `SOURCE_TO_SINK.md`:
-- **SQL**: binds for value/like/number; **allowlist** for identifier/keyword. Mismatch = vulnerable.
+- **SQL — name the slot for EVERY SQL sink (do not skim).** A parameter placeholder protects only a
+  **value / like / number** slot. **Identifier, keyword, function-argument, operator, and LIMIT/OFFSET**
+  slots are **non-bindable** → they need an **allowlist** (or a strict int cast for LIMIT/OFFSET). These are
+  the **sneaky** SQLi: the query *looks* safe because it uses `%s`/params elsewhere, so they get skipped.
+  **Decompose the query string and check each interpolation.** A request value reaching — via
+  `%` / `.format` / f-string / concat — any of:
+  - `ORDER BY {col}` / `{dir}`, `GROUP BY {col}`,
+  - a **function/keyword argument**: `DATE_TRUNC('%s', …)`, `EXTRACT({field} FROM …)`, `CAST(… AS {type})`,
+    `AT TIME ZONE {tz}`,
+  - a **table / column / schema identifier**, an **operator** (`= {op}`), or a string-built **LIMIT/OFFSET**
+  → is **`vulnerable`** (binding is irrelevant for these slots; only an allowlist / int-cast defends). Value
+  slots: binds for value/like/number, allowlist for identifier/keyword. Mismatch = vulnerable.
 - **Command**: array exec (`shell=False`) or per-arg `shlex.quote`. Char blacklist / `shell=True` = vuln.
 - **File/Path**: canonicalize + boundary check / static include allowlist. `../` blacklist / dynamic
   include = vuln.
