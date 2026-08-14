@@ -75,9 +75,16 @@ every SQL/NoSQL/cmd/file/SSTI/XXE/deser/proto sink across the whole tree can sat
 silently under-cover. When a class is dense, split it into **several instances of the same agent**, each
 scoped to a disjoint set of directories (a *shard*):
 
-- **Trigger** (per class, from `sink-inventory.json`): shard when the class has **> 40 sinks** OR its
-  in-scope files span **> ~150 files / many top-level modules**. Below that, one instance (default).
-- **How many**: `K = ceil(sinks / 25)`, capped at **6**. Balance the sink count across shards.
+- **Trigger** (per class, from `sink-inventory.json`): shard only when the class is **genuinely dense** —
+  **> ~80 sinks** OR its files span many top-level modules including a 10k+-line file. Below that, **one
+  instance** (the default — a single well-instructed auditor covers a normal class fine).
+- **How many — stay LEAN.** `K = min(ceil(sinks / 60), 3)` per class, **and a hard TOTAL budget across all
+  classes and waves of ≤ ~10 auditor instances** (a normal codebase needs 4–6). Spend the budget on the
+  densest classes first — do **NOT** give every class its own 6 shards. *Empirically, on a 1,133-sink Django
+  codebase, ~6 focused shards (injection ×3 · xss ×2 · ssrf ×1) found every critical — including an SSRF
+  buried at line 11 384 that even semgrep missed — whereas the planner's earlier 26 shards would only have
+  burned tokens for zero extra recall.* **Fewer, well-scoped shards reach deep sinks *better* than many thin
+  ones** (a bounded scope lets an agent go deep); over-sharding is pure cost, not coverage.
 - **Partition by SINK location.** Group the class's sinks by top-level module/directory and assign each
   module to **exactly one** shard, so every sink has exactly one owner — **no overlap, no gap**. Give each
   a distinct `shard` tag (`inj-s1`, `inj-s2`, …) and set its `scope` to its assigned directories.
@@ -90,6 +97,9 @@ scoped to a disjoint set of directories (a *shard*):
   genuinely dense **from real sink counts** (not a grep dump — recon no longer floods the `xss` array with
   every `.innerHTML`/`.append`); a normally-small class stays a single instance. Injection is just the most
   common candidate, not the only one.
+- **XSS must own the client-side JS surface.** Whichever xss instance(s) you create, **one MUST be scoped to
+  `static/**/*.js` + the inline `<script>` blocks of templates** — DOM-XSS lives there and recon does not
+  enumerate it, so it is easy to leave unowned. Never ship an xss plan that covers only templates + Python.
 
 Example sharded injection deployment (when dense):
 ```json
