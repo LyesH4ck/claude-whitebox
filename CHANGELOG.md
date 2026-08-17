@@ -4,6 +4,57 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.54] — 2026-08-17
+
+### Added — `coverage.mjs`: the report's denominator is now arithmetic, not a prompt instruction
+
+Validated against a real engagement (`snapeda-testing-2026-08`). That report shipped with **no `coverage` key
+at all**, while `tested_not_vulnerable` stated *"Injection: SQLi/ES/NoSQL/OS-command/SSTI across all reachable
+parameterized sinks"* — on the strength of **3 `sqli-detect` runs against 125 discovered parameters**. Nothing
+in the artifact let a reader see that. The coverage block is the plugin's own anti-false-negative guard, and
+asked of a model in prose it simply was not produced.
+
+`node coverage.mjs --in outputs/{engagement}` reads `inventory/` + `activity/` (no network, no mutation) and
+emits the contract's `coverage` object plus ready-to-paste `suggested_coverage_gaps`. On the real engagement:
+`parameters 8/125 (6%)`, `routes 9/116 (8%)`, `sqli-detect ran on 3/125`.
+
+It is built to avoid inventing gaps as carefully as it is built to expose them — the two errors are symmetric:
+- **Recon is not testing.** `inventory-*`, `business-modeler`, `crud-exerciser`, `form-driver` and the
+  orchestrator are excluded from `tested`; only `action: test|experiment|verify|exploit|probe|…` lines count.
+- **Unmeasured ≠ zero.** No executor log at all → `ok:false`, exit 3, no published figure. No log line carried
+  a host → `hosts.tested: null, unmeasured: true` rather than a fabricated `0/1`.
+- **Free-text logs make the figures a FLOOR.** Five `exec-blt-*` logs in the real engagement are prose, not
+  NDJSON, so their work is invisible to any parser. `coverage.lower_bound: true` and a caveat naming the files
+  is emitted *before* any ratio, so a logging bug is never read as a coverage gap.
+- **Routes ≠ endpoints.** Routes are `(method, normalized path)`, endpoints are distinct paths — a multi-verb
+  API is not overstated by testing one verb.
+- The `sqli-detect-*.json` file count is cross-checked against the parameter corpus separately: one file per
+  parameter actually run is the hardest coverage signal available, harder than a self-declared log line.
+
+`commands/pentest.md` Step 6.7/1b now runs the tool instead of describing the computation, and requires the
+denominator to be carried into every param-driven `tested_not_vulnerable` entry ("no signal on 8/125
+parameters probed", not "across all reachable parameterized sinks"). `REPORT_CONTRACT.md` is updated to match,
+including a HYBRID rule: state which basis covers what ("28/125 by code review, 8 probed, 89 untested") so a
+reader can tell a code-reviewed sink from a probed one from an untouched one.
+
+### Fixed — `reconcile-inventory.mjs` met a fourth param-inventory shape in the wild
+
+The same real engagement's `param-inventory.json` carried **nine** top-level keys and three param-carrying
+arrays at once (`parameters` flat rows, `params`, and `endpoints` rows with their own `params[]`), hand-merged
+by the business-modeler. Replaying the gate over it confirms the 2.4.52 fix holds: shape detected as
+`object.endpoints`, all nine keys preserved, `endpoints` merged 20 → 114. Pre-2.4.52 this file became `[]`.
+Test T-S5 pins that exact shape. `coverage.mjs` unions **every** param-carrying key rather than picking one,
+since picking one is how a denominator silently shrinks.
+
+Also observed in that run and worth stating plainly: `reconcile-report.json` recorded
+`"method": "manual (script absent)"` — the model hand-wrote the artifact because it could not resolve the
+script, and reported 9 merged routes where the real tool finds 52. The 2.4.53 `$PR` resolver addresses the
+cause; `coverage.mjs`'s `evidence.inventory_sources` now makes the discrepancy visible after the fact.
+
+Full plugin suite: 85/85 green across 12 files.
+
+---
+
 ## [2.4.53] — 2026-08-17
 
 ### Fixed — stale instructions the plugin never deleted, still contradicting the live ones
