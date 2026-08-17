@@ -4,6 +4,42 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.55] — 2026-08-17
+
+### Fixed — `coverage.mjs` parser gaps found by replaying all 11 archived engagements
+
+Two ways the tool read real work as "tested 0" — a parser failure that looks exactly like a coverage gap,
+which is the one confusion this tool exists to prevent:
+- **Scheme-less locators.** Executors log `target: "app.example.com/api/v1/x"` without `http://`. Whole
+  executors read as having tested nothing. Now parsed as host + path.
+- **Test lines with no endpoint.** Dozens of `action:"test"` lines carry no `endpoint`/`url`/`route`/`target`
+  at all. Crediting them would over-count; dropping them silently under-counts. They are now counted as
+  `evidence.activity.untraceable_test_lines`, they set `lower_bound: true`, and they emit their own caveat.
+
+### Baseline across all 11 archived engagements — no coverage figure is currently trustworthy
+
+| engagement | params | routes | floor cause |
+|---|---|---|---|
+| snapeda-testing-2026-08 | 8/125 | 9/116 | 5 free-text logs · 51 untraceable test lines |
+| moncompteformation-gouv-2026-07 | 2/13 | 4/12 | 51 untraceable |
+| demo-achilles-2026-07-tax | 0/47 | 0/141 | 46 untraceable |
+| demo-achilles-2026-07-pph21 | 0/0 | 0/107 | 45 untraceable |
+| cdc-net-2026-07 | 0/13 | 0/5 | 18 free-text logs · 2 untraceable |
+| 5 others | — | — | not measurable: no `inventory/`, or non-standard filenames |
+
+**Zero of eleven produce an exact figure.** The blocker is not the tool: executors do not log WHAT they
+tested. `action:"test"` without a locator is unattributable by construction, so `coverage.tested` is
+structurally unknowable today and every ratio above is a floor. Fixing the executor log contract (one
+mandatory `endpoint` field per test line) is now the highest-value change in the plugin — it is what makes
+every other coverage improvement measurable.
+
+The 5 unmeasurable engagements are correct refusals, not failures: they carry no `inventory/` at all, or
+ad-hoc filenames (`CONSOLIDATED-inventory.json`, `param-inventory-bola.json`) predating the canonical layout.
+
+Full plugin suite: 87/87 green.
+
+---
+
 ## [2.4.54] — 2026-08-17
 
 ### Added — `coverage.mjs`: the report's denominator is now arithmetic, not a prompt instruction
