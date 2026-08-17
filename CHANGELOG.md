@@ -4,6 +4,84 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.53] — 2026-08-17
+
+### Fixed — stale instructions the plugin never deleted, still contradicting the live ones
+
+Across 49 versions each refactor added the new rule but left the old one in place. An agent reads both and
+picks one. Seven contradictions removed at the source rather than patched in two places.
+
+- **`skills/pentest/SKILL.md` carried a second, obsolete engagement lifecycle.** Its Phases 1–6 told the
+  reader to deploy executors and **recursively spawn** more (impossible — subagents cannot spawn subagents),
+  and its Phase 6 moved **`findings/`, `activity/` and `reconnaissance/` into `processed/`**, demanding that
+  `ls outputs/{engagement}/` show ONLY `report/` and `processed/`. `pentester-executor` mounts this file for 9
+  of its 12 categories, so an executor could relocate the exact tree `commands/pentest.md` Step 6.7 was about
+  to read. Phases 1–6 and the matching "Output Organization Rules (PHASE 6)" are **deleted**, replaced by an
+  authoritative-source table (lifecycle → `commands/pentest.md`; deliverable → `REPORT_CONTRACT.md`; live
+  layout → `docs/reference/OUTPUT_STRUCTURE.md`) and an explicit "never reorganize the engagement directory".
+- **The destructive block itself is now gated.** `skills/pentest/reference/OUTPUT_STRUCTURE.md`'s migration
+  script is a post-delivery packaging pass, but nothing said so — and its
+  `mv *SUMMARY*.md *CHECKLIST*.md *.md processed/intermediate-reports/` is a blanket glob that sweeps up
+  **`report.md`**, a required deliverable, along with the drafts. Added a precondition check
+  (`pentest-report.json` + `report.md` must exist), an explicit "never run this as a subagent", and an
+  exclusion loop that keeps `report.md` where it belongs.
+- **"Stop when exploitation is confirmed"** (`agents/pentester-executor.md`) directly contradicted the
+  dispatcher's time contract ("Do NOT exit early after a single confirmation if budget remains"). The generic
+  executor covers ~30 categories, so this was systematic under-execution. Replaced with the escalation rule.
+- **`skills/common-appsec-patterns/SKILL.md` says "delegate ALL testing, your ONLY tool is Task"** — and is
+  mounted by 7 leaf testers that have no `Task` tool. Added a scope header at the top: those rules address the
+  dispatching session; a subagent takes the methodology and executes the testing itself.
+- **`csp-bypass-tester` used `browser_console_messages()` as its execution oracle** — the anti-pattern
+  `xss-tester.md` bans by name. An `alert()` is a dialog, not a console message, so a real bypass read as a
+  clean policy; worse, console output usually means the script was BLOCKED. Both sites now use a
+  `window.__cspbypass` beacon read back via `browser_evaluate` (the correct pattern was already 10 lines above
+  in the same file). Its "No CSP Present → high impact" also contradicted the contract rubric ("Low — missing
+  headers") — now Low, escalating only when chained to a confirmed injection point.
+- **`business-modeler` claimed "read-only, no state-changing requests"** while its learning pass deliberately
+  sends out-of-order / reused-id / out-of-bounds requests. Reframed as *non-mutating*: probes whose expected
+  outcome is a rejection are allowed; a probe that would SUCCEED and change state is deferred to the
+  `business-logic-tester` under the write gate (`{probe: "deferred-to-tester"}`).
+- **`csrf-tester` Phase 1 — the pass that runs WITHOUT write authorization — fired 9 bare `curl -X POST`**,
+  including at `/transfer` and `/admin/action`, to learn status codes. Now `OPTIONS`, which answers the same
+  question (does the route exist, does it take a write verb) and mutates nothing.
+
+### Fixed — `environment` was a hard gate that no command ever wrote
+
+Six sites gate state-changing testing on `.pentest-scope.json` `environment` (`crud-exerciser` Phase 0,
+`form-driver` Phase 0, `commands/crud.md` Step 2, `pentest.md` 6.3b, `recon.md` Step 6b). The only occurrence
+of the key in the whole plugin was a log line — no producer. The gate always fell to its unknown branch. Both
+scope-writing flows now ask for it (staging / demo / dev / prod, defaulting to `"unknown"`) and persist it.
+
+Relatedly, `commands/pentest.md` Step 2's inline scope write omitted `transport` and `rules_of_engagement`,
+so choosing "Enter new scope" silently **dropped** the operator's Burp proxy and their standing
+write-authorization. It now reads the existing file first and carries through every key it did not collect.
+
+### Fixed — the knowledge base resolved only by accident of working directory
+
+The `.mjs` tools have a repo-then-cache resolver; the ~34 distinct markdown mounts across 16 agents did not —
+they are bare `plugins/pentest/…` paths that resolve only from a repo checkout, and break on the
+marketplace-only install `INSTALL.md` recommends. Worse, three paths (`../docs/reference/REPORT_CONTRACT.md`,
+`…/OUTPUT_STRUCTURE.md`, `…/TEST_PLAN_FORMAT.md`) were `../`-relative from a command/agent file and resolved
+from **no** working directory at all. All 16 agents now carry the `$PR` resolver before their first Read, with
+an explicit `kb-missing` log so a tester running without its payload files is visible rather than silently
+under-testing. The three `../docs/` paths are fixed.
+
+`pentester-executor` Phase 0 gets two further repairs: `{skill}` was an unbound placeholder (the dispatch
+never passes it) — it now falls back to `skills/pentest/SKILL.md` and logs; and "read the quickstart and
+cheat-sheet referenced in SKILL.md" pointed at an index that references no attack files — replaced by a
+deterministic `ls` of the category directory, with a `payloads/*` fallback for the ~12 categories that ship no
+quickstart, and a coverage gap when the directory is absent.
+
+### Fixed — `/pentest:pentest-exit` could not run its own teardown
+
+`allowed-tools` was `[AskUserQuestion, Read, Write]`, but Step 6 is
+`kill "$(cat …/oast/client.pid)"` and Step 2 globs `findings/finding-*/`. The only documented OAST teardown
+was unrunnable, leaving an interactsh client alive after every engagement. Added `Bash` and `Glob`.
+
+Full plugin suite: 75/75 green (no behavioural code changed in this release — the `.mjs` layer is untouched).
+
+---
+
 ## [2.4.52] — 2026-08-17
 
 ### Fixed — the deterministic layer broke the rule it enforces on the agents: a failed run looked like a clean one
