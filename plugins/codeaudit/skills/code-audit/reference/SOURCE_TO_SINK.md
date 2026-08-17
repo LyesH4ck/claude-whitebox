@@ -20,6 +20,8 @@ positives and false negatives.
 | `SQL-number` | numeric predicate | binding or strict int cast | concat of unvalidated string |
 | `SQL-identifier` | table/column name | **allowlist** (binding can't help) | binding assumed sufficient; concat |
 | `SQL-keyword` | `ORDER BY {dir}` | allowlist (`ASC`/`DESC`) | regex/escape on a keyword slot |
+| `SQL-funcarg` | `DATE_TRUNC('%s', x)`, `EXTRACT({f} FROM x)`, `CAST(… AS {t})` | allowlist of the function's legal keywords/types | `%`/format/f-string/concat into the function-arg slot (binding can't reach it) |
+| `SQL-limit` | `LIMIT {n} OFFSET {m}` | strict **int cast** | string-built limit/offset |
 | `CMD-argument` | `execve` argv array | array exec (`shell=False`) | string command + `shell=True` |
 | `CMD-string` | `system("...")` | avoid; else `shlex.quote` per arg | char blacklist (`;`,`|`,`&`) |
 | `FILE-path` | `open(path)` | canonicalize + boundary check | `../` blacklist; concat of user path |
@@ -51,6 +53,13 @@ positives and false negatives.
 > - HTML-entity / attribute encode (incl. Django/Jinja auto-escape) → read back via `.val()`/`.value` and
 >   written to an HTML sink → **vulnerable** (`.val()` returns the decoded string).
 > - HTML-entity encode → placed inside a `<script>`/JS context or an event-handler attribute → **vulnerable**.
+
+> **Server content-type mismatch (non-template XSS).** A response body served as `text/html` is an HTML
+> sink even with **no template**: Django `HttpResponse(...)`/`HttpResponseBadRequest(...)` default to
+> `content_type='text/html'`, and `json.dumps()`/f-strings/concat do **not** HTML-encode. Reflected input in
+> such a body → **reflected XSS**. Safe only with an explicit non-HTML content type (`JsonResponse`,
+> `content_type='application/json'|'text/plain'`) or HTML-encoding. (`json.dumps` escapes a JSON *string* —
+> the wrong context for a `text/html` response.)
 
 ## SSRF slots
 

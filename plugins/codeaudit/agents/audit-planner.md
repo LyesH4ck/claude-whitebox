@@ -68,6 +68,48 @@ you and will silently do nothing.
 }
 ```
 
+### Sharding a dense class across code regions (large codebases)
+
+A single auditor instance has **one context window**. On a large codebase, one `injection-auditor` tracing
+every SQL/NoSQL/cmd/file/SSTI/XXE/deser/proto sink across the whole tree can saturate its context and
+silently under-cover. When a class is dense, split it into **several instances of the same agent**, each
+scoped to a disjoint set of directories (a *shard*):
+
+- **Trigger** (per class, from `sink-inventory.json`): shard only when the class is **genuinely dense** —
+  **> ~80 sinks** OR its files span many top-level modules including a 10k+-line file. Below that, **one
+  instance** (the default — a single well-instructed auditor covers a normal class fine).
+- **How many — stay LEAN.** `K = min(ceil(sinks / 60), 3)` per class, **and a hard TOTAL budget across all
+  classes and waves of ≤ ~10 auditor instances** (a normal codebase needs 4–6). Spend the budget on the
+  densest classes first — do **NOT** give every class its own 6 shards. *Empirically, on a 1,133-sink Django
+  codebase, ~6 focused shards (injection ×3 · xss ×2 · ssrf ×1) found every critical — including an SSRF
+  buried at line 11 384 that even semgrep missed — whereas the planner's earlier 26 shards would only have
+  burned tokens for zero extra recall.* **Fewer, well-scoped shards reach deep sinks *better* than many thin
+  ones** (a bounded scope lets an agent go deep); over-sharding is pure cost, not coverage.
+- **Partition by SINK location.** Group the class's sinks by top-level module/directory and assign each
+  module to **exactly one** shard, so every sink has exactly one owner — **no overlap, no gap**. Give each
+  a distinct `shard` tag (`inj-s1`, `inj-s2`, …) and set its `scope` to its assigned directories.
+- **Cross-region paths stay owned by the SINK's shard**: the owning instance traces each sink back to its
+  source wherever it lives (reading files outside its directories is expected — ownership is by *sink*, not
+  source). A second-order write→read path is owned by the shard holding the **read/sink** (via the recon
+  `stored_sources` map). No path falls between two shards.
+- **Applies to any class** — the injection, xss, access-control and ssrf auditors are all shard-aware (they
+  namespace their outputs per shard, so parallel instances never collide). Shard whichever selected class is
+  genuinely dense **from real sink counts** (not a grep dump — recon no longer floods the `xss` array with
+  every `.innerHTML`/`.append`); a normally-small class stays a single instance. Injection is just the most
+  common candidate, not the only one.
+- **XSS must own the client-side JS surface.** Whichever xss instance(s) you create, **one MUST be scoped to
+  `static/**/*.js` + the inline `<script>` blocks of templates** — DOM-XSS lives there and recon does not
+  enumerate it, so it is easy to leave unowned. Never ship an xss plan that covers only templates + Python.
+
+Example sharded injection deployment (when dense):
+```json
+"deployments": [
+  { "agent": "injection-auditor", "shard": "inj-s1", "scope": "src/api/**, src/db/**", "sinks": 24, "priority": "high" },
+  { "agent": "injection-auditor", "shard": "inj-s2", "scope": "src/workers/**, src/jobs/**", "sinks": 19, "priority": "high" },
+  { "agent": "injection-auditor", "shard": "inj-s3", "scope": "src/legacy/**", "sinks": 16, "priority": "high" }
+]
+```
+
 Map selected `classes` to agents: injection→`injection-auditor`, xss→`xss-auditor`, auth→`auth-auditor`,
 access-control→`access-control-auditor`, ssrf→`ssrf-auditor`, secrets→`secrets-auditor`,
 crypto→`crypto-auditor`, deps→`deps-auditor`, config→`config-auditor`, logging→`logging-auditor`.
@@ -90,5 +132,6 @@ what was skipped and why, and the escalation plan (deepening probable findings, 
   sinks on network-reachable paths (from `attack-surface.md`) go in wave 1 so high-value findings surface
   first, but every wave still runs.
 - **Scope each auditor** to the directories where its sinks live (from `sink-inventory.json`) — don't
-  send every auditor at the whole tree unless small.
+  send every auditor at the whole tree unless small. For a **dense class on a large codebase**, shard it
+  into several same-agent instances scoped to disjoint directories (see "Sharding" above).
 - Return a concise summary after writing both files. Follow this schema exactly.

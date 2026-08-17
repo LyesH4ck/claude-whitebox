@@ -24,7 +24,18 @@ Read plugins/pentest/skills/pentest/attacks/injection/ssti/ssti-quickstart.md
 ```
 
 The orchestrator passes: `repo`, `engagement`, assigned `scope` paths, `out_of_scope`, `target_url`,
-`mode` (static|hybrid), and the depth setting. There is no time budget — trace your full assigned scope.
+`mode` (static|hybrid), the depth setting, and — on a large codebase — an optional **`shard` tag**
+(`inj-s1`, `inj-s2`, …) when the planner runs **several injection instances in parallel**, each scoped to a
+disjoint set of directories. There is no time budget — trace your full assigned scope.
+
+**When you are a shard:** you **own the injection SINKS in your assigned `scope`**, not the whole tree.
+Trace each of your sinks fully — reading source files *outside* your scope is allowed and expected, because
+ownership is by **sink location**, not source. Do **not** trace sinks living outside your assigned
+directories — another shard owns them (no double-work, no gap). A second-order write→read path is owned by
+the shard holding the **read/sink** (via `stored_sources`). **Namespace ALL your outputs with the shard
+tag** so parallel instances never overwrite each other: finding dirs `finding-inj-{shard}-{NNN}`, safe file
+`_safe-injection-{shard}.md`, activity log `injection-auditor-{shard}.log`. (No `shard` given = single
+instance, use the plain names below.)
 
 ## Phase 1 — Recon (enumerate sources & sinks)
 
@@ -45,6 +56,7 @@ For each candidate, read the code along the full path and record:
 - every **sanitizer** (name + `file:line` + type) and every **concat/format/interpolation** — flag any
   concat that occurs *after* a sanitizer (it re-introduces taint);
 - the **sink** call (`file:line`) and the **slot type** (SQL-value / SQL-identifier / SQL-keyword /
+  SQL-funcarg / SQL-limit /
   CMD-argument / CMD-string / FILE-path / FILE-include / TEMPLATE-expr / DESERIALIZE / PATH-component /
   NoSQL-operator / NoSQL-where-js / XML-entity / PROTO-pollution).
 
@@ -53,7 +65,18 @@ Fork paths when one source feeds multiple sinks. Log each trace line.
 ## Phase 3 — Verdict (slot ↔ defense matching)
 
 Apply `SOURCE_TO_SINK.md`:
-- **SQL**: binds for value/like/number; **allowlist** for identifier/keyword. Mismatch = vulnerable.
+- **SQL — name the slot for EVERY SQL sink (do not skim).** A parameter placeholder protects only a
+  **value / like / number** slot. **Identifier, keyword, function-argument, operator, and LIMIT/OFFSET**
+  slots are **non-bindable** → they need an **allowlist** (or a strict int cast for LIMIT/OFFSET). These are
+  the **sneaky** SQLi: the query *looks* safe because it uses `%s`/params elsewhere, so they get skipped.
+  **Decompose the query string and check each interpolation.** A request value reaching — via
+  `%` / `.format` / f-string / concat — any of:
+  - `ORDER BY {col}` / `{dir}`, `GROUP BY {col}`,
+  - a **function/keyword argument**: `DATE_TRUNC('%s', …)`, `EXTRACT({field} FROM …)`, `CAST(… AS {type})`,
+    `AT TIME ZONE {tz}`,
+  - a **table / column / schema identifier**, an **operator** (`= {op}`), or a string-built **LIMIT/OFFSET**
+  → is **`vulnerable`** (binding is irrelevant for these slots; only an allowlist / int-cast defends). Value
+  slots: binds for value/like/number, allowlist for identifier/keyword. Mismatch = vulnerable.
 - **Command**: array exec (`shell=False`) or per-arg `shlex.quote`. Char blacklist / `shell=True` = vuln.
 - **File/Path**: canonicalize + boundary check / static include allowlist. `../` blacklist / dynamic
   include = vuln.
@@ -84,7 +107,8 @@ generic 200/302 is **not** corroboration: leave it `probable`. Never destructive
 For each `vulnerable` path, write `outputs/{engagement}/findings/finding-inj-{NNN}/` per the contract
 (`description.md`, `snippet.txt`, `trace.md`, optional `poc.md`/`corroboration.txt`). Use the next free
 `NNN` within your class prefix (check existing `finding-inj-*` dirs first and continue from the highest).
-The class prefix keeps ids collision-free across parallel auditors.
+**If you were given a `shard` tag, use `finding-inj-{shard}-{NNN}`** (e.g. `finding-inj-s1-001`) — the shard
+tag keeps ids collision-free across the parallel injection instances.
 
 Record every `safe` vector for the `tested_not_vulnerable` section (write to
 `outputs/{engagement}/findings/_safe-injection.md`). List `unconfirmed` items as coverage gaps in the
@@ -111,7 +135,9 @@ For each key record exactly one of:
 
 A key marked `no-surface` **without** having run its seeds is a coverage gap, not a clean result — go run
 the seeds. `nosqli`, `xxe`, and `proto-pollution` are the historically-missed sub-classes: never mark them
-`no-surface` by omission.
+`no-surface` by omission. (If you are a **shard**, `traced`/`no-surface` are relative to **your** scope —
+the orchestrator unions every shard's register, so a sub-class counts as covered only once **all** shards
+report it traced or seed-backed-`no-surface`.)
 
 ### Announce
 

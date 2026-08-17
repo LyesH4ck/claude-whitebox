@@ -73,7 +73,10 @@ internal metadata endpoints without explicit authorization.
 Write findings per the contract; safe sinks → `findings/_safe-ssrf.md`; append to
 `activity/ssrf-auditor.log`. Use `finding-ssrf-NNN` ids. **Before writing, scan existing `finding-ssrf-*`
 dirs first and continue from the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never
-renumber from `001` and overwrite the first pass's finding dirs.
+renumber from `001` and overwrite the first pass's finding dirs. **If the orchestrator gave you a `shard`
+tag** (large-codebase sharding — you own the ssrf sinks in your assigned `scope` only), namespace **all**
+outputs so parallel instances never overwrite each other: `finding-ssrf-{shard}-{NNN}`,
+`_safe-ssrf-{shard}.md`, `ssrf-auditor-{shard}.log`.
 
 ## Completion
 

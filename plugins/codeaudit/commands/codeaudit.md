@@ -197,7 +197,7 @@ Map selections to the class keys above; if none selected, default to all ten. St
 
 Probe for optional scanners that auditors will prefer if present (never install anything):
 ```bash
-for t in gitleaks trufflehog osv-scanner pip-audit govulncheck trivy semgrep pandoc; do
+for t in gitleaks trufflehog osv-scanner pip-audit govulncheck trivy pandoc; do
   command -v "$t" >/dev/null 2>&1 && echo "$t=available" || echo "$t=missing"
 done
 ```
@@ -297,8 +297,12 @@ class with surface gets an auditor. Follow your agent definition's schema."
    returns only a label; the *what* needs a free-text channel, per the convention in Step 2.) On Cancel,
    log and stop.
 3. On approval, dispatch every auditor in wave 1 **in parallel — all `Task` calls in a single message**,
-   `run_in_background=True`, using the real agent names from the plan. Each auditor prompt MUST include:
-   - the **scope**: `repo`, assigned directories, `out_of_scope`, `mode`, `target_url`, `tools_available`;
+   `run_in_background=True`, using the real agent names from the plan. **A sharded class appears as several
+   deployments with the same `agent` and distinct `shard` tags (large-codebase injection) — dispatch each
+   shard as its own parallel `Task` (pass its `shard` + `scope`), and track each as a separate auditor in
+   the completeness loop.** Each auditor prompt MUST include:
+   - the **scope**: `repo`, assigned directories, `out_of_scope`, `mode`, `target_url`, `tools_available`,
+     and the `shard` tag if the class was sharded;
    - the **completeness mandate**: "Trace EVERY source in your assigned scope across your class(es). You
      are done only when every enumerated source→sink path has a verdict and every safe vector is
      recorded — not after the first finding. There is no time budget; completeness is the goal. Apply
@@ -363,6 +367,13 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
    (with `E == V`, or every shortfall listed in `coverage_gaps`).
    Do not manufacture additional work once coverage is complete.
 
+> The auditors' own free exploration + their built-in rules are the engine — they independently reach the
+> deep sinks in large files (a real 1,133-sink Django audit found every critical, incl. an SSRF at line
+> 11 384, with ~6 focused shards and no external scanner). There is **no semgrep/external-taint step**: it
+> proved redundant (the LLM caught sinks semgrep missed, e.g. `build_opener().open()`), unreliable (skipped),
+> and slow. Keep the `build_opener`/`file://`, DOM-in-`<script>` and content-type-mismatch rules in the
+> auditors — that is what does the work.
+
 ### Step 6.6 — Aggregate + report
 
 1. **Verification + de-duplication pass.** Read every `outputs/{engagement}/findings/finding-*/description.md`,
@@ -382,6 +393,13 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
      `description.md` and confirm the path resolves before writing the report (drop or flag any finding
      whose dir is missing). Keep `unconfirmed` items **out** of `findings[]` — they belong in
      `coverage_gaps` — so `summary.total` counts only `confidence ∈ {high, probable}`.
+   - **Union sharded classes.** When **any** class ran as several shards (same agent, distinct `shard` tags
+     — injection/xss/access-control/ssrf on a large codebase), gather every `_safe-{class}-{shard}.md` and
+     all `finding-{prefix}-{shard}-*` dirs, and dedup findings across shards (they own disjoint sinks, so
+     real overlap is limited to second-order cross-region paths). For **injection**, also union the
+     per-sub-class coverage registers: a sub-class is **covered** only if **every** shard reports it `traced`
+     or a seed-backed `no-surface`; sum the traced counts. If any shard reports `incomplete`/`errored` for
+     its scope, the class is **not** complete — re-dispatch that shard (Step 6.5).
 1b. **Resolve each finding's live endpoint (hybrid handoff, voie A).** Read
    `outputs/{engagement}/recon/sink-inventory.json` `entry_points`. For every **request-reachable** finding,
    take the param **name** and the **source `file:line`** from the finding's `source` string (strip the

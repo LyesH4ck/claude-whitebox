@@ -77,7 +77,10 @@ principal at the query layer; admin routes correctly guarded.
 Write findings per the contract; safe handlers → `findings/_safe-access-control.md`; append to
 `activity/access-control-auditor.log`. Use `finding-ac-NNN` ids. **Before writing, scan existing
 `finding-ac-*` dirs first and continue from the highest free `NNN`** — a re-dispatched pass (Step 6.5.2)
-must never renumber from `001` and overwrite the first pass's finding dirs.
+must never renumber from `001` and overwrite the first pass's finding dirs. **If the orchestrator gave you a
+`shard` tag** (large-codebase sharding — you own the access-control sinks in your assigned `scope` only),
+namespace **all** outputs so parallel instances never overwrite each other: `finding-ac-{shard}-{NNN}`,
+`_safe-access-control-{shard}.md`, `access-control-auditor-{shard}.log`.
 
 ## Completion
 

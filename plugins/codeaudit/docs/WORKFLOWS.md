@@ -100,8 +100,9 @@ Per-finding depth lives in `outputs/{engagement}/findings/finding-*/`. The full 
 
 Auditors prefer these if installed but never install them (and degrade gracefully): `gitleaks` /
 `trufflehog` (secrets), `osv-scanner` / `npm audit` / `pip-audit` / `govulncheck` / `trivy` (SCA),
-`semgrep` (extra static rules), `pandoc` (PDF/DOCX render). Missing tools become logged coverage notes,
-not failures.
+`pandoc` (PDF/DOCX render). Missing tools become logged coverage notes, not failures. (Taint analysis is
+done by the auditors themselves + their rules — not an external scanner; an in-repo trial showed the LLM
+auditors caught sinks even semgrep missed.)
 
 ## Knowledge reuse
 
