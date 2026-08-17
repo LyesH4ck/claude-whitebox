@@ -4,6 +4,46 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.51 / pw 0.2.20] — 2026-08-17
+
+### Fixed — the only agent that WRITES to the target was the only one not given `out_of_scope`
+
+`out_of_scope` appeared **zero** times in `agents/crud-exerciser.md`, and neither dispatch site passed it
+(`commands/pentest.md` 6.3b, `commands/recon.md` Step 6b) — while every read-only agent received it. The
+crawler's sole boundary was `crawl-write.mjs`'s `--scope`, a **registrable-domain suffix** allow-list
+defaulting to the start host's domain: `inScope()` matched `host === s || host.endsWith('.' + s)` with no
+deny-list and no path component. So an ARMED run (`--submit --marker`) would fill and submit forms on any
+sibling subdomain of the target — a third-party IdP, a shared SSO host, a prod twin — none of which the
+operator ever named, and all of which they may have explicitly excluded. The read-only `crawl.mjs` had the
+same allow-only model, so excluded hosts also entered the recon corpus.
+
+**Fix — a real deny-list, enforced in three places (`crawl-write.mjs`), plus capture-level in `crawl.mjs`:**
+- New `--exclude` on both crawlers: comma-separated entries, `/`-prefixed ones matched as **path prefixes**,
+  the rest as **host suffixes**. **Deny beats allow**, so it overrides the registrable-domain allow-list.
+  `inScope(host)` → `inScope(host, pathname)` at all 7 call sites, so path exclusions actually bite.
+- **Crawl frontier** — an excluded route is never harvested (`collectRoutes`) nor enqueued (seed routes).
+- **Hard pre-submit gate** — placed before `commitSubEntities()`, not at the terminal submit, because the
+  sub-entity Saves are real writes too. Refuses the whole armed pass and records a `blocked` entry with the
+  reason. This is the only defence when an SPA `pushState`es onto an excluded route (no document fetch to
+  intercept) — covered by test T-X2b, with T-X2c as the control proving the gate is what blocked.
+- **Wire-level abort** — `ctx.route()` aborts requests to excluded hosts/paths, since a browser-driven
+  crawler cannot know a button's target before it fires. Installed **only** when `--exclude` is passed, so
+  the default crawl keeps its un-intercepted network path (test T-X5).
+- An excluded form no longer reaches the `form-driver` AI tier: `blocked` growing used to read as
+  "submit-no-write" and dispatch the AI driver at the very form the gate refused (test T-X3).
+- The deny is never silent: `out_of_scope_blocked {count, samples}` in the output and in `totals`, so an
+  empty result over an excluded area reads as "not tested (out of scope)", never "tested, nothing there".
+
+**Plumbing** — `out_of_scope` now flows to the write path: dispatched by `commands/pentest.md` 6.3b,
+`commands/recon.md` Step 6b and `commands/crud.md`; `agents/crud-exerciser.md` gains a mandatory Phase-0
+translation step (host → bare entry, path → keep the `/`) and logs the resulting `exclude` value;
+`agents/form-driver.md` (hand-driven, so no flag protects it) must re-check the page URL before every submit;
+`agents/inventory-javascript-mapper.md` passes `--exclude` to `crawl.mjs`.
+
+7 regression tests added (T-X1…T-X5, T-X2b/c). Full stealth suite: 52/52 green.
+
+---
+
 ## [2.4.50] — 2026-08-17
 
 ### Fixed — `/pentest:pentest` ran its whole recon wave and its testers UNAUTHENTICATED

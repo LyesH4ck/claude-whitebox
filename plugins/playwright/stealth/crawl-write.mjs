@@ -23,7 +23,8 @@
 //   node crawl-write.mjs --url https://app/ [--cookie "sess=…"|--header "Authorization: Bearer …"|--state s.json]
 //     --marker PENTEST-run7 --submit           # ARM: actually create marker-tagged objects
 //     [--dry-run]                              # (default) discover + preview, submit nothing
-//     [--scope host.com] [--proxy http://127.0.0.1:8080] [--max-forms 6] [--out outputs/ENG/crud]
+//     [--scope host.com] [--exclude idp.host.com,/admin] [--proxy http://127.0.0.1:8080]
+//     [--max-forms 6] [--out outputs/ENG/crud]
 //     [--viewport 1366x900] [--timeout 30000] [--no-headless] [--insecure]
 
 import { parseArgs } from 'node:util';
@@ -45,6 +46,7 @@ try {
     marker:   { type: 'string' },
     owner:    { type: 'string' },   // identity label to stamp on captured creates (feeds the BOLA oracle via crud-merge)
     scope:    { type: 'string' },
+    exclude:  { type: 'string' },   // out-of-scope deny-list: host suffixes and/or '/path' prefixes (comma-separated)
     state:    { type: 'string' },
     cookie:   { type: 'string' },
     header:   { type: 'string', multiple: true },
@@ -79,7 +81,27 @@ const startHost = new URL(a.url).hostname;
 const MULTI_SUFFIX = /\.(co|com|net|org|gov|edu|ac|or|ne|go)\.[a-z]{2}$/i;
 const defaultScope = (MULTI_SUFFIX.test(startHost) ? startHost.split('.').slice(-3) : startHost.split('.').slice(-2)).join('.');
 const SCOPE = (a.scope ? a.scope.split(',') : [defaultScope]).map((s) => s.trim().toLowerCase()).filter(Boolean);
-const inScope = (host) => SCOPE.some((s) => host === s || host.endsWith('.' + s));
+// ── out-of-scope deny-list (--exclude): entries starting with '/' are PATH prefixes, the rest are HOST suffixes ──
+// DENY BEATS ALLOW. This matters because the allow-list above is a *registrable-domain* suffix match, so it admits
+// every sibling subdomain of the start host — including ones the operator explicitly excluded (a third-party IdP,
+// a shared SSO host, a prod twin). Without this, an ARMED run fills and SUBMITS forms on hosts that were never
+// authorized. The check is applied to every URL the crawler records, enqueues, navigates to, or submits on.
+const EX = (a.exclude ? a.exclude.split(',') : []).map((s) => s.trim().toLowerCase()).filter(Boolean);
+const EXCLUDE_HOSTS = EX.filter((s) => !s.startsWith('/'));
+const EXCLUDE_PATHS = EX.filter((s) => s.startsWith('/'));
+const excluded = { hits: 0, samples: [] };   // reported in the output so a silent deny is still visible
+const isExcluded = (host, pathname) =>
+  EXCLUDE_HOSTS.some((s) => host === s || host.endsWith('.' + s)) ||
+  (!!pathname && EXCLUDE_PATHS.some((p) => pathname.toLowerCase().startsWith(p)));
+const inScope = (host, pathname = '') => {
+  if (!SCOPE.some((s) => host === s || host.endsWith('.' + s))) return false;
+  if (isExcluded(host, pathname)) {
+    excluded.hits++;
+    if (excluded.samples.length < 10 && !excluded.samples.includes(host + pathname)) excluded.samples.push(host + pathname);
+    return false;
+  }
+  return true;
+};
 const timeout = +a.timeout;
 const viewport = a.viewport ? { width: +a.viewport.split('x')[0], height: +a.viewport.split('x')[1] } : undefined;
 
@@ -240,7 +262,8 @@ const INTROSPECT = `(formEl) => {
 }`;
 
 const { launch, newStealthContext } = await import('./browser.mjs');
-const emitOut = { ok: true, armed, marker: armed ? MARKER : null, mode: armed ? 'submit' : 'dry-run', start_url: a.url, scope: SCOPE };
+const emitOut = { ok: true, armed, marker: armed ? MARKER : null, mode: armed ? 'submit' : 'dry-run', start_url: a.url,
+  scope: SCOPE, exclude: { hosts: EXCLUDE_HOSTS, paths: EXCLUDE_PATHS } };
 const actions = [];
 const intents = [];
 const blocked = [];        // G5: submits that fired no real write (client no-op / validation block) + the read reason
@@ -261,6 +284,25 @@ try {
   ctx = await newStealthContext(browser, { insecure: a.insecure, viewport, harPath, storageState: a.state || undefined,
     extraHeaders: Object.keys(extraHeaders).length ? extraHeaders : undefined, cookie: a.cookie || undefined, cookieScope: SCOPE[0] });
 
+  // Wire-level enforcement of --exclude. The frontier filter and the pre-submit gate stop us NAVIGATING to or
+  // WRITING on an excluded page, but an in-scope page's own JS can still fire an XHR at an excluded host/path
+  // (a shared IdP, an /admin API) — and a browser-driven crawler cannot know a button's target before it fires.
+  // Aborting at the request layer is the only place that guarantee can be made. Installed ONLY when the operator
+  // actually passed --exclude, so the default crawl keeps its untouched, un-intercepted network path.
+  if (EX.length) {
+    await ctx.route('**/*', (route) => {
+      try {
+        const u = new URL(route.request().url());
+        if (isExcluded(u.hostname.toLowerCase(), u.pathname)) {
+          excluded.hits++;
+          if (excluded.samples.length < 10 && !excluded.samples.includes(u.hostname + u.pathname)) excluded.samples.push(u.hostname + u.pathname);
+          return route.abort('blockedbyclient');
+        }
+      } catch { /* unparseable URL — fall through to continue */ }
+      return route.continue();
+    });
+  }
+
   // Read-only data-request capture (for widget/typeahead param discovery): record in-scope XHR/fetch WITH their
   // request BODY, deduped by operation signature. A dropdown search (?keyword=…), an option select (?name=…),
   // OR a POST-body param (typeahead POST, ag-grid filterModel.keyword, GraphQL variables) becomes an inventoried,
@@ -271,7 +313,7 @@ try {
     try {
       if (!['xhr', 'fetch'].includes(req.resourceType())) return;
       const u = new URL(req.url());
-      if (!inScope(u.hostname.toLowerCase())) return;
+      if (!inScope(u.hostname.toLowerCase(), u.pathname)) return;
       const post = req.postData() || null;
       // dedup by operation signature (method + normalized path + body shape + query) — the same canonical kernel
       // the recon crawler uses, so filter/sort variants of one grid POST stay distinct while pagination collapses.
@@ -290,7 +332,7 @@ try {
       const rq = resp.request(); const m = rq.method();
       if (m === 'GET' || m === 'HEAD') return;
       const u = new URL(rq.url());
-      if (!inScope(u.hostname.toLowerCase())) return;
+      if (!inScope(u.hostname.toLowerCase(), u.pathname)) return;
       const status = resp.status();
       const key = `${m} ${u.hostname}${normPath(u.pathname)} ${status}`;
       if (seenWrite.has(key)) return; seenWrite.add(key);
@@ -312,7 +354,7 @@ try {
   });
 
   // a write "landed" = a non-GET/HEAD in-scope response — used to await each sub-entity commit.
-  const writePredicate = (r) => { try { const rq = r.request(); return rq.method() !== 'GET' && rq.method() !== 'HEAD' && inScope(new URL(rq.url()).hostname.toLowerCase()); } catch { return false; } };
+  const writePredicate = (r) => { try { const rq = r.request(); const uu = new URL(rq.url()); return rq.method() !== 'GET' && rq.method() !== 'HEAD' && inScope(uu.hostname.toLowerCase(), uu.pathname); } catch { return false; } };
 
   const page = await ctx.newPage();
   await page.goto(a.url, { waitUntil: 'domcontentloaded', timeout }).catch(() => {});
@@ -344,8 +386,12 @@ try {
     // filler completes nothing). Flag a form-region the backbone did NOT complete, on two INDEPENDENT triggers:
     //  - submit-no-write: it clicked submit and captured no write (ANY form, picker or not) — the hardest forms;
     //  - picker-first:   a picker + a create-hint primary action it never drove to a write.
+    // An out-of-scope page must NOT reach this handoff: `blocked` grows when the gate refuses a form, which would
+    // otherwise read as "submit-no-write" and dispatch the form-driver AI tier against an excluded form — worse
+    // than the bug the gate exists to fix. Re-check the page here rather than infer it from `blocked`.
+    const pageInScope = (() => { try { const u = new URL(page.url()); return inScope(u.hostname.toLowerCase(), u.pathname); } catch { return false; } })();
     try {
-      if (armed && actions.length === beforeA && !formsToDrive.some((f) => f.url === page.url())) {
+      if (armed && pageInScope && actions.length === beforeA && !formsToDrive.some((f) => f.url === page.url())) {
         const submittedNoWrite = blocked.length > beforeB;
         const pickers = await page.$$eval(PICKER_SEL_VIS, (els) => els.slice(0, 6)
           .map((e) => (e.getAttribute('placeholder') || e.getAttribute('aria-label') || e.tagName).trim().slice(0, 60)).filter(Boolean));
@@ -388,7 +434,7 @@ try {
   const seedFrontier = [];
   for (const s of seedRoutes) {
     let abs; try { abs = new URL(s, a.url).href; } catch { continue; }
-    try { if (!inScope(new URL(abs).hostname.toLowerCase())) continue; } catch { continue; }
+    try { const uu = new URL(abs); if (!inScope(uu.hostname.toLowerCase(), uu.pathname)) continue; } catch { continue; }
     const k = routeKey(abs);
     if (!enqueued.has(k) && !visited.has(k)) { enqueued.add(k); seedFrontier.push(abs); }
   }
@@ -440,6 +486,10 @@ try {
   emitOut.findings = findings;              // G6 — 4xx/5xx writes (endpoint contract + server bug)
   emitOut.blocked = blocked;                // G5 — submits that produced no real create + the read reason
   emitOut.forms_to_drive = formsToDrive;    // HANDOFF — complex forms for the AI tier to drive (see ARCHITECTURE)
+  // A deny is never silent: the operator sees WHAT the --exclude list kept the crawler away from, so an empty
+  // result on an excluded area reads as "not tested (out of scope)", never as "tested, nothing there".
+  emitOut.out_of_scope_blocked = { count: excluded.hits, samples: excluded.samples };
+  emitOut.totals.out_of_scope_blocked = excluded.hits;
   emitOut.totals.forms_to_drive = formsToDrive.length;
   // discovery output is written even in dry-run (read-only) — it feeds /pentest:sql etc.
   if (a.out && paramInv.length) { await mkdir(a.out, { recursive: true }); await writeFile(path.join(a.out, 'widget-param-inventory.json'), JSON.stringify(paramInv, null, 2)); }
@@ -548,6 +598,18 @@ try {
     // ARMED — complete the form like a user testing it, WITHIN the dialog scope: fill native fields + drive
     // custom widgets, COMMIT nested sub-entities (each with its own Save), ADVANCE through multi-step, then
     // SUBMIT via the primary action — label-AGNOSTIC but only clicked page-wide where it is safe. Capture the write.
+    // HARD OUT-OF-SCOPE GATE — last line of defence before anything is written. The frontier and the route
+    // harvester already filter, but an SPA transition, a redirect, or an operator seed can leave us standing on
+    // an excluded page; commitSubEntities() below clicks real Saves, so the check must happen BEFORE it, not at
+    // the terminal submit. Refuse the whole armed pass for this form rather than write off-target.
+    try {
+      const here = new URL(pg.url());
+      if (!inScope(here.hostname.toLowerCase(), here.pathname)) {
+        blocked.push({ resource, ui_route: routeOf(pg.url()), reason: 'out-of-scope (--exclude) — no write attempted' });
+        return false;
+      }
+    } catch { return false; }
+
     let clickedSubmit = false;
     for (let step = 0; step < MAX_STEPS; step++) {
       const fields = step === 0 ? fields0 : await introspectFields(pg, await scopeEl());   // re-introspect each step
@@ -571,13 +633,13 @@ try {
       const onResp = (resp) => {
         try {
           const rq = resp.request(); if (!/^(POST|PUT|PATCH)$/i.test(rq.method())) return;
-          const uu = new URL(rq.url()); if (!inScope(uu.hostname.toLowerCase())) return;
+          const uu = new URL(rq.url()); if (!inScope(uu.hostname.toLowerCase(), uu.pathname)) return;
           raw.push({ resp, rq, u: uu, status: resp.status(), loc: resp.headers()['location'] || null });
         } catch { /* ignore */ }
       };
       pg.on('response', onResp);
       await Promise.all([
-        pg.waitForResponse((r) => { try { const rq = r.request(); return /^(POST|PUT|PATCH)$/i.test(rq.method()) && inScope(new URL(rq.url()).hostname.toLowerCase()); } catch { return false; } }, { timeout: Math.min(timeout, 5000) }).catch(() => null),
+        pg.waitForResponse((r) => { try { const rq = r.request(); const uu = new URL(rq.url()); return /^(POST|PUT|PATCH)$/i.test(rq.method()) && inScope(uu.hostname.toLowerCase(), uu.pathname); } catch { return false; } }, { timeout: Math.min(timeout, 5000) }).catch(() => null),
         submitLoc.click({ timeout: 3000 }).catch(() => {}),
       ]);
       await settle(pg);
@@ -864,7 +926,7 @@ async function collectRoutes(page) {
     if (!l.href || l.href === '#' || /^(javascript:|mailto:|tel:|data:)/i.test(l.href) || l.href.startsWith('//')) continue;
     if (AVOID_LINK.test(l.href) || AVOID_LINK.test(l.text)) continue;   // never a logout/delete route
     let abs; try { abs = new URL(l.href, baseUrl); } catch { continue; }
-    if (!inScope(abs.hostname.toLowerCase())) continue;                 // scope checked on the RESOLVED URL
+    if (!inScope(abs.hostname.toLowerCase(), abs.pathname)) continue;   // scope + exclusions on the RESOLVED URL
     out.push({ href: abs.href, text: l.text });
   }
   return out;

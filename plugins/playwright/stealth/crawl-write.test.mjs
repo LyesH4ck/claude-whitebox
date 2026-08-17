@@ -1095,3 +1095,125 @@ test('T-bug2: a GraphQL query / ag-grid list POST is classified mutation:false (
     assert.ok(log && log.mutation === false, 'a telemetry (activity-log) POST is mutation:false, not a seed');
   } finally { server.close(); }
 });
+
+// ── --exclude: the out-of-scope deny-list (armed writes must never land on an excluded page/host/path) ──────────
+// The --scope allow-list is a registrable-domain suffix match, so it admits every sibling subdomain of the start
+// host. Without a deny-list, an ARMED run fills and submits forms on hosts the operator explicitly excluded.
+
+test('T-X1: --exclude on a PATH prefix keeps the armed crawler off it — no write, and the route is never enqueued', async () => {
+  const { out, writes } = await run('/', ['--submit', '--marker', 'PENTEST-x1', '--exclude', '/vendors']);
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.exclude, { hosts: [], paths: ['/vendors'] }, 'the deny-list is echoed in the output');
+  assert.equal(writes.some((w) => w.path === '/api/v1/vendors'), false,
+    `no write may land under an excluded path (got ${JSON.stringify(writes.map((w) => w.path))})`);
+  assert.ok((out.totals.out_of_scope_blocked || 0) > 0, 'the deny is COUNTED, never silent');
+  assert.ok((out.out_of_scope_blocked.samples || []).some((s) => s.includes('/vendors')),
+    `the blocked sample names what was refused (got ${JSON.stringify(out.out_of_scope_blocked)})`);
+});
+
+test('T-X2: an excluded start page is refused at the wire — zero writes, and the deny is counted', async () => {
+  // The document request for /vendors/new is itself aborted, so the page never loads and no form can be driven.
+  const { out, writes } = await run('/vendors/new', ['--submit', '--marker', 'PENTEST-x2', '--exclude', '/vendors']);
+  assert.equal(out.ok, true);
+  assert.equal(writes.length, 0, `an excluded start page must produce ZERO writes (got ${JSON.stringify(writes)})`);
+  assert.equal((out.actions || []).length, 0, 'no create is claimed');
+  assert.ok((out.totals.out_of_scope_blocked || 0) > 0, 'the deny is counted, not silent');
+});
+
+// SPA stub: an IN-SCOPE document that pushState()s onto an EXCLUDED route and renders the create form there.
+// No document fetch happens for the new route, so the wire-level abort cannot see it — the pre-submit gate in
+// the armed path is the ONLY thing standing between the crawler and an out-of-scope write. This is the case
+// the gate exists for, and the reason it sits before commitSubEntities() rather than at the terminal submit.
+function startPushStateServer() {
+  const writes = [];
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (req.method === 'GET' && u.pathname === '/app') {
+      return html(res, page(`<h1>New vendor</h1>
+        <form onsubmit="return false">
+          <input name="name" type="text" required>
+          <input name="amount" type="number" min="1">
+          <button type="button" id="go">Create</button>
+        </form>
+        <script>
+          history.pushState({}, '', '/vendors/new');   /* in-scope doc, now standing on an EXCLUDED route */
+          document.getElementById('go').addEventListener('click', () => {
+            fetch('/api/v1/vendors', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: document.querySelector('[name=name]').value }) })
+              .then(r => r.json()).then(j => { document.title = 'ok ' + (j.id || ''); });
+          });
+        <\/script>`));
+    }
+    if (req.method === 'POST' && u.pathname === '/api/v1/vendors') {
+      const body = await readBody(req); writes.push({ path: u.pathname, body });
+      res.writeHead(201, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ id: 9001 }));
+    }
+    res.writeHead(404); res.end('nope');
+  });
+  server._writes = writes;
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+}
+
+async function runPushState(extraArgs) {
+  const server = await startPushStateServer();
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const dir = mkdtempSync(path.join(tmpdir(), 'crudw-'));
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', base + '/app', '--scope', '127.0.0.1', '--cookie', 'sess=x', '--out', dir, ...extraArgs],
+      { maxBuffer: 32 * 1024 * 1024 });
+    return { out: JSON.parse(stdout.trim()), writes: server._writes };
+  } finally { rmSync(dir, { recursive: true, force: true }); server.close(); }
+}
+
+test('T-X2b: the pre-submit gate stops a write after an SPA pushState onto an excluded route', async () => {
+  const { out, writes } = await runPushState(['--submit', '--marker', 'PENTEST-x2b', '--exclude', '/vendors']);
+  assert.equal(out.ok, true);
+  assert.equal(writes.length, 0,
+    `no write may fire from an excluded SPA route (got ${JSON.stringify(writes.map((w) => w.path))})`);
+  assert.ok((out.blocked || []).some((b) => /out-of-scope/.test(b.reason || '')),
+    `the gate records WHY it refused (got ${JSON.stringify(out.blocked)})`);
+});
+
+test('T-X2c: control — the same SPA route WITHOUT --exclude does create, so the gate is what blocked it', async () => {
+  const { out, writes } = await runPushState(['--submit', '--marker', 'PENTEST-x2c']);
+  assert.equal(out.ok, true);
+  assert.ok(writes.some((w) => w.path === '/api/v1/vendors'),
+    `the create lands when nothing is excluded (got ${JSON.stringify(writes)})`);
+});
+
+test('T-X3: an excluded form is NOT handed to the form-driver AI tier (blocked != "could not complete")', async () => {
+  // `blocked` grows when the gate refuses, which previously read as submit-no-write and dispatched the AI tier
+  // against the very form we refused to touch.
+  const { out } = await run('/vendors/new', ['--submit', '--marker', 'PENTEST-x3', '--exclude', '/vendors']);
+  assert.equal((out.forms_to_drive || []).length, 0,
+    `an out-of-scope form must never reach the AI tier (got ${JSON.stringify(out.forms_to_drive)})`);
+});
+
+test('T-X4: --exclude on a HOST suffix blocks it at the wire even when the page itself is in scope', async () => {
+  // 127.0.0.1 stays in scope; localhost (same server, different host label) is excluded. The page's own fetch to
+  // the excluded host must be aborted, not merely left out of the capture.
+  const server = await startServer();
+  const port = server.address().port;
+  const dir = mkdtempSync(path.join(tmpdir(), 'crudw-'));
+  try {
+    const { stdout } = await execFileP(process.execPath,
+      [TOOL, '--url', `http://127.0.0.1:${port}/vendors/new`, '--scope', '127.0.0.1,localhost',
+       '--exclude', 'localhost', '--cookie', 'sess=x', '--out', dir, '--submit', '--marker', 'PENTEST-x4'],
+      { maxBuffer: 32 * 1024 * 1024 });
+    const out = JSON.parse(stdout.trim());
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.exclude.hosts, ['localhost'], 'host exclusions are parsed as hosts, not paths');
+    // the in-scope host still works — the deny-list must not blanket-break the crawl
+    assert.ok(server._writes.some((w) => w.path === '/api/v1/vendors'),
+      `the IN-SCOPE write still happens (got ${JSON.stringify(server._writes.map((w) => w.path))})`);
+  } finally { rmSync(dir, { recursive: true, force: true }); server.close(); }
+});
+
+test('T-X5: no --exclude → untouched behaviour (no interception installed, the create still lands)', async () => {
+  const { out, writes } = await run('/vendors/new', ['--submit', '--marker', 'PENTEST-x5']);
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.exclude, { hosts: [], paths: [] });
+  assert.equal(out.totals.out_of_scope_blocked, 0);
+  assert.ok(writes.some((w) => w.path === '/api/v1/vendors'), 'the default path is unchanged');
+});
