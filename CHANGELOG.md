@@ -4,6 +4,39 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.56] — 2026-08-17
+
+### Fixed — executors did not log WHAT they tested, so coverage was unknowable on every engagement
+
+Replaying all 11 archived engagements through `coverage.mjs` produced **zero exact figures**: 195
+`action:"test"` lines across them carry no `endpoint`/`url`/`route`/`target` at all, and 23 executor logs are
+free text rather than NDJSON. A test line with no locator is unattributable *by construction* — no tool can
+map it back to a route — so `coverage.tested` was structurally unmeasurable and every ratio was a floor.
+
+The root cause was in the agent files themselves: **39 of 53 log examples shipped without a locator**, and
+agents copy the example. All 31 examples in the nine testing agents now carry `endpoint` (`"METHOD /path"`)
+and, for param-driven families, `param`.
+
+- **The locator rule is now normative** in `docs/reference/OUTPUT_STRUCTURE.md`: any line whose `action` is
+  `test`/`experiment`/`verify`/`exploit` MUST carry `endpoint`, plus `param` for injection, reflected XSS,
+  SSRF, mass-assignment and path traversal. It also states why relying on a `target` from a distant Phase-1
+  recon line does not work — a test line usually acts on a different route, and nothing links the two.
+- **NDJSON is mandated where it was being ignored.** `business-logic-tester` gets an explicit block with
+  worked examples: five of its executor logs in a real engagement were prose (`=== BLT dispatcher-guard
+  integrity ===`, `[1] action=… ON->OFF->ON clean`) and their entire contribution was invisible. The
+  narrative belongs in the finding markdown, not the log.
+- **`coverage.mjs --lint`** (exit 4) fails when the logs cannot support an exact figure, naming the offending
+  files and pointing at the rule. Wired into `commands/pentest.md` Step 6.7 so the caveat reaches the report
+  at write time instead of being discovered months later. `REPORT_CONTRACT.md` documents exit 3 (not
+  measurable) vs exit 4 (floor only).
+
+This is the change that makes every other coverage improvement measurable: until a test line names its route,
+adding testers or raising the quota produces no observable difference.
+
+Full plugin suite: 90/90 green.
+
+---
+
 ## [2.4.55] — 2026-08-17
 
 ### Fixed — `coverage.mjs` parser gaps found by replaying all 11 archived engagements
