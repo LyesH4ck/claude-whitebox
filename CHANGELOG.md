@@ -4,6 +4,65 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.52] — 2026-08-17
+
+### Fixed — the deterministic layer broke the rule it enforces on the agents: a failed run looked like a clean one
+
+The plugin's own bar is "an endpoint that was never executed can never be `tested_not_vulnerable`". The `.mjs`
+tools violated it: a transport failure returns `{status: 0, len: 0, ms: <elapsed>}`, and nothing downstream
+checked `status`. Four consequences, all of which made a broken run indistinguishable from a good one.
+
+**`sqli-detect.mjs` — a dropped request read as a 20-second delay (structural FALSE POSITIVE).**
+`send()` returns the elapsed time on abort, and the `--time-bypass` oracle compared `r.ms` without checking
+that a response arrived. The abort fires at `max(--timeout, 20s)`, clearing the `>= 13s` threshold →
+`verdict: LIKELY SQLi`, exit 0, against a target that never answered. `--time-bypass` is recommended precisely
+when a WAF is suspected — i.e. exactly when requests get dropped. Both time oracles (`sleep3/6`, WAF-bypass)
+now require `status !== 0`, and dropped probes are surfaced in a new `timed_out[]` (a coverage gap for that
+oracle, never a negative). `transport_errors[]` does the same for the differential probes. Regression test
+T-L1 reproduces the original repro with a stub that accepts the connection and never responds.
+
+**`sqli-detect.mjs` — two dead baselines compared "stable".** `{status:0,len:0}` equals `{status:0,len:0}`, so
+a wholly unreachable endpoint looked stable, scored `no signal`, and returned `ok: true` / exit 0 — which
+`injection-tester` maps to `tested_not_vulnerable`. Now: `ok: false`, exit 3, no `verdict` emitted at all
+(there is nothing to conclude). `agents/injection-tester.md` gains an explicit "check the exit code and the
+health fields BEFORE reading `verdict`" rule.
+
+**`authz-matrix/run.mjs` — a dead run printed a compliant matrix.** `succeeded()` maps `status: 0` to
+`observed: 'deny'`, which MATCHES an expected-deny and renders as `ok` — so an unreachable target produced
+`candidates: 0`, exit 0. Now tracks `transport_errors` and `identities_failing_own_requests` (expected-allow
+but observed-deny = that identity's session is dead, so every `deny` it produced is meaningless), marks those
+cells `⚠️ unmeasured` in the markdown instead of `ok`, warns above the table, and exits 3 when *every* cell
+failed. `--dry-run` is exempt (it sends nothing by design — B5 keeps its per-cell degradation).
+
+**`reconcile-inventory.mjs` — it destroyed the parameter corpus right before planning.** `param-mine.mjs`
+writes an OBJECT (`{ok, base, endpoints, params, pairs}`); the gate read only the bare-array shape, found
+nothing, skipped the merge, then rewrote the file as `[]` — while reporting `ok: true, orphans: 0`. (With
+orphans present it instead threw a TypeError on `paramInv.push`.) The gate now detects all three shapes in the
+wild (bare array · `{endpoints}`/`{param_inventory}` wrapper · param-mine's `{pairs}` keyed by `methods[]`),
+indexes rows under either the `method` or `methods[]` convention, appends new rows in the file's own
+convention, and **re-wraps exactly as found** so sibling keys survive. An unrecognized shape is now REFUSED
+(`ok: false`, exit 3, file untouched) rather than overwritten.
+
+**Consumers now branch on the exit code, not on the file existing.** The `[ -f "$X" ] || echo "NOT FOUND"`
+idiom followed by an unconditional `node "$X"` never branched. All three reconcile call sites
+(`commands/pentest.md` 6.3.6, `commands/recon.md`, `commands/crud.md`) are real `if/else` blocks that capture
+`$?` and emit a `GAP …` line when the corpus was not reconciled.
+
+### Fixed — the coverage calculation read a glob that matches nothing
+
+`commands/pentest.md` Step 6.7/1b computed `tested` from `activity/exec-*.log`. No agent writes that: every
+agent writes `activity/{agent-name}.log` (`OUTPUT_STRUCTURE.md`, `pentester-executor.md:155`). The one
+deterministic anti-false-negative measurement in the report was therefore always reading an empty set. Now
+resolves `activity/*.log` minus `pentester-orchestrator.log` and `inventory-*.log` (discovery is not testing),
+with an explicit `(host, normalized_path)` join key — and if the resolved list is empty while executors were
+dispatched, it emits "executor activity logs missing — coverage could not be computed" rather than reporting
+`tested: 0` as a result about the target.
+
+14 regression tests added (T-L1…T-L3, T-S1…T-S4, T-H1…T-H3, plus the earlier T-X set). Full plugin suite:
+75/75 green across 11 files.
+
+---
+
 ## [2.4.51 / pw 0.2.20] — 2026-08-17
 
 ### Fixed — the only agent that WRITES to the target was the only one not given `out_of_scope`

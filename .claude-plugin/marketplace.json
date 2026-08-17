@@ -23,7 +23,7 @@
       "name": "pentest",
       "source": "./plugins/pentest",
       "description": "Full penetration testing framework - 64 attack categories across 11 domains covering OWASP, injection, authentication, cloud, and more",
-      "version": "2.4.51",
+      "version": "2.4.52",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"
