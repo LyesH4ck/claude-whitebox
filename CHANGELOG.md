@@ -4,6 +4,47 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.50] — 2026-08-17
+
+### Fixed — `/pentest:pentest` ran its whole recon wave and its testers UNAUTHENTICATED
+
+`/pentest:pentest` collected credentials in Step 2 (`scope.auth`) and passed them to the *planner*
+(`- Auth: {auth}`), but never turned that free-text string into a live session before the producers ran.
+The only bootstrap lived in Step 6.3.5 — **after** the recon wave (6.3) and **after** the CRUD exercise
+(6.3b), both of which are its consumers. Three concrete breaks:
+
+- **Recon dispatched anonymously.** Step 6.3 passed exactly four things: target, engagement, out-of-scope,
+  `mks_active`/`mks_url`. None of the five `inventory-*` agents reads `.pentest-identities.json` on its own,
+  so `inventory-javascript-mapper`'s auth self-test + cookie-injection path (Phase 0, gated on "if the
+  engagement supplied auth") never fired, and `crawl.mjs` ran without `--cookie`/`--state` — authenticated
+  data POSTs came back 401 and the surface map covered the public app only, while looking green.
+- **Executors dispatched anonymously.** Step 6.5 enumerated target/surfaces/out-of-scope/MKS/OAST/proxy and
+  omitted the session — yet the same block already assumed "executors replay live session tokens through
+  this hop". `injection-tester`, `xss-tester`, `csrf-tester`, `csp-bypass-tester`,
+  `prototype-pollution-tester` and `pentester-executor` have zero references to `.pentest-identities.json`
+  or `scope.auth`, so they tested the login wall. The BOLA corpus `.pentest-authz-requests.json` seeded by
+  `crud-exerciser` was likewise never handed to `idor-bola-tester`.
+- **6.3b referenced identities that did not exist yet**, since 6.3.5 had not run.
+
+Every sibling command already did this correctly (`/pentest:recon` Step 3, then `sql`/`xss`/`ssrf`/`idor`/
+`crud` reuse the file) — the monolithic entry point was the outlier, which is why the gap stayed invisible
+to operators who start from `/pentest:recon`.
+
+**Fix** — the machinery was present but misplaced, so it was moved and wired, not rewritten:
+- New **Step 6.2b — Session / authentication**, right after pre-flight and before every producer: reuse
+  behind the Session Freshness Gate (`session-check.md`), else mint from `scope.auth` via the
+  `authenticating` skill, else ask the operator for a raw `Cookie:`/`Authorization:` header — and **probe it
+  once** before proceeding. Declining sets `session_active = false` and records a blocking coverage gap.
+- Steps **6.3**, **6.3b** and **6.5** now pass `session_headers` + `identities_path` explicitly, each with
+  the reason it matters (the js-mapper's crawler forwarding; the testers' lack of self-service).
+  6.5 additionally passes `.pentest-authz-requests.json` + the identity set to `idor-bola-tester`.
+- **Step 6.3.5** no longer re-mints the primary session — it now only tops up the B/second-org identities
+  the differential invariants need, and logs `differential_capable`.
+- **Step 6.7** coverage pass emits `coverage.authenticated` plus a blocking gap when the run was
+  unauthenticated, and a "single identity" gap when cross-identity oracles were degraded.
+
+---
+
 ## [2.4.48] — 2026-07-13
 
 ### Added — `/pentest:crud` folds its discoveries into the canonical corpus (reconcile pass)
