@@ -4,6 +4,66 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.57] — 2026-08-18
+
+Four fixes, every one of them found by running 2.4.49 against a live 16-hour engagement
+(`snapeda-testing-2026-08-v2`: 1525 routes, 846 params, 74 adjudicated findings) and then measuring the
+result. Nothing here comes from reading the code.
+
+### Fixed — tool resolution picked a 7-version-stale copy, silently
+
+The engagement ran from `/home/cbailleux/Audit/Pentest/…`, not the repo. Every agent's resolver was
+`plugins/pentest` (relative — misses) then `ls -d ~/.claude/plugins/cache/*/pentest/*/ | sort -V | tail -1`,
+which resolved to a **2.4.49** cache from six days earlier. So the run executed `sqli-detect` with **0 of the
+3 timeout guards**, the pre-fix `reconcile-inventory`, the pre-fix `authz-matrix`, and reported
+`coverage.mjs is NOT shipped` — all correct statements about the path it had resolved. Meanwhile `/plugin`
+displayed 2.4.56, because that screen shows the version the marketplace *offers*, not the one installed
+(`claude plugin list` shows the truth).
+
+Guessing the install path by sorting directory names is not resolution. All 16 agents now consult
+`~/.claude/plugins/installed_plugins.json` → `installPath` — the path the harness actually loaded — then
+`known_marketplaces.json` → `installLocation`, and only then fall back to the cache glob.
+
+**Step 6.1 now logs provenance** as its first act: resolved root, resolved version, the version the
+marketplace offers, and whether `coverage.mjs` is present. If resolved ≠ offered it sets `stale: true` and
+**stops** — a run attributed to the wrong build invalidates every conclusion drawn from it. One NDJSON line
+that would have turned a day of misattribution into a minute.
+
+### Fixed — the NDJSON mandate was aimed at last run's offender
+
+2.4.56 put the explicit "log NDJSON" block only in `business-logic-tester`, because that is where v1's prose
+logs were. In v2 the prose moved to `injection-tester`: five free-text logs (`w1d04-sqli-*`) plus 49
+locator-less lines, making the entire SQLi effort unmeasurable. Patching the agent that failed last time does
+not generalise. All **nine** testing agents now carry the mandate, with the cost stated plainly: a prose log
+means everything you tested counts as untested, and a family you cleared cannot be reported
+`tested_not_vulnerable` because it has no denominator.
+
+### Fixed — `by_family` invented ~50 families out of agent names
+
+`coverage.mjs` fell back to the agent name when a log line had no `type`, producing rows like
+`w1-d01-pentester-executor: 13/846` that buried the real gaps. Families are now matched against a known
+vuln-class list (longest-match, so `nosqli` is not swallowed by `sqli` and `sqli-time-based` folds onto
+`sqli`); anything unrecognised is `unclassified`. On the real run this collapsed ~50 rows to 7 — and made the
+actual signal legible: **`xss: 1/846`, `ssti: 0/846`** next to `sqli: 303/846`.
+
+### Added — `--ground-truth` / `--urlconf`: the number discovery-based coverage cannot produce
+
+`discovered` counts what recon FOUND; it cannot know what recon MISSED. The engagement's own orchestrator
+walked every `include()` in the Django URLconf and got **862 patterns against a `surface-map.json` of 247** —
+a 3.5x under-count invisible to any discovery-based metric. `coverage.mjs` now accepts an external true count
+(`--ground-truth N`) or parses Django route declarations (`--urlconf a.py,b.py`, skipping `include()`
+delegations and comments), reports `endpoints.discovery_shortfall`, and re-states coverage against the true
+denominator.
+
+The comparison sits on **endpoints**, not routes: a URLconf pattern declares a path, while `routes` fans that
+path out per HTTP method (~1.8x on this target). Comparing the two would have hidden a real shortfall behind
+an apples-to-oranges win. Against the v2 corpus the union of sources reaches 1272 paths vs 862 — shortfall
+correctly reported as 0, not invented.
+
+6 regression tests added (T-C15…T-C19). Full plugin suite: 95/95 green.
+
+---
+
 ## [2.4.56] — 2026-08-17
 
 ### Fixed — executors did not log WHAT they tested, so coverage was unknowable on every engagement
