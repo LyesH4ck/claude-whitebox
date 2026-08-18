@@ -4,6 +4,47 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.60] — 2026-08-18
+
+### Fixed — an unverified negative about a TOOL cost ~92% of an engagement's surface
+
+`snapeda-testing-2026-08-v3` logged, four minutes apart:
+
+```
+13:06:02  "browser-driver","note":"playwright MCP tools present in toolset; will confirm at first dispatch"
+13:10:47  "browser-driver","playwright_active":false,"result":"unreachable"
+```
+
+The second line carries **no error, no attempted call, no evidence of any kind** — and Playwright was in
+fact working (verified afterwards: `browser_navigate("about:blank")` returns a page, and all nine
+browser-driving agents have `mcp__plugin_playwright_playwright__*` correctly granted in their frontmatter).
+
+That single unevidenced line cascaded: `crud-exerciser` skipped with `reason: "no-browser"` → no write
+surface at all (`crud/` 2 files instead of 32) → parameter corpus stuck at 63 instead of ~850 →
+`inventory-javascript-mapper` degraded → surface 69 paths instead of ~1272 → four families de-scoped → and
+the engagement then declared that reduced surface "exhausted" at 2.7% of the real one.
+
+This is the same failure class the plugin polices everywhere else — a negative recorded without the evidence
+that would justify it — except aimed at a tool rather than a target, where it is considerably more expensive.
+
+- **Step 6.2 now mandates an actual probe:** `browser_navigate(url="about:blank")`. It touches no target,
+  sends no traffic and is in scope by construction; it proves only that the backend launches, which is
+  exactly the question. Tools appearing in the toolset is not evidence.
+- **A `playwright_active: false` with no captured `error` is inadmissible** — same bar as
+  `tested_not_vulnerable`. The verbatim tool error goes into the log
+  (`{"action":"browser-probe","result":"failed","probe":"about:blank","error":"…"}`), since the usual causes
+  are two-minute fixes: a stale stealth-profile lock, a missing chromium, an MCP server not started.
+  If you did not run the probe, you do not know — and "unknown" is not "unavailable".
+- **The 2.4.58 blocking gate now fires only after a probe has actually failed**, and quotes the error to the
+  operator instead of a bare "unreachable". Without this, that gate would have blocked v3 on a false
+  negative — turning a silent degradation into an unjustified halt.
+- **`crud-exerciser`'s `no-browser` skip must carry the probe error** (`probe_error`, required). A skip
+  justified by an unproven tool state is exactly how the write surface was dropped.
+
+Full plugin suite: 98/98 green (orchestration text — no executable code touched).
+
+---
+
 ## [2.4.59] — 2026-08-18
 
 ### Fixed — a whole vulnerability class can vanish from the plan without a trace
