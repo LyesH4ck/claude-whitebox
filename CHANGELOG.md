@@ -4,6 +4,44 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.59] — 2026-08-18
+
+### Fixed — a whole vulnerability class can vanish from the plan without a trace
+
+`snapeda-testing-2026-08-v3` reported zero open-redirects. The previous run on the same target found
+**four**. The cause was not the reduced surface: two of the vulnerable endpoints (`/account/logout/`,
+`/messages/inbox/`) were sitting in v3's discovered surface, and the payload set was on disk at
+`attacks/web-applications/open-redirect/payloads/basic.md`. The class simply appears **nowhere** in
+`deployment-plan.json` — not allocated, not de-scoped, absent. Nothing in the report could reveal that,
+because a class that was never planned leaves no artifact to be missing from.
+
+It worked in v2 only by luck: a generalist `pentester-executor` swept the class on its own initiative.
+Coverage that depends on a planner's inspiration is not coverage.
+
+- **New `class_coverage` block in the plan schema** (`pentester-orchestrator`): `profile_classes` (derived
+  from `attack_mode`) plus `allocated` and `not_allocated`. **Every class must appear in exactly one** —
+  a class in neither is a planning defect to reconcile before returning the plan. `not_allocated` reasons
+  must cite evidence ("no XML content-type observed on any endpoint"); "low priority" or "time" belongs in
+  `de_scoped_for_time`, which the report surfaces, rather than quietly in `not_allocated`.
+- **Report-time cross-check** (Step 6.7/1b): every `profile_classes` entry present in one of the two lists;
+  every `allocated` class has a matching executor log ("planned but never dispatched" otherwise); every
+  `not_allocated` reason is evidence-based. Each miss becomes a `coverage_gaps` entry.
+- **`kb_path` plumbed through.** ~24 web classes have KB content but no dedicated agent (open-redirect,
+  SSTI, XXE, path-traversal, file-upload, deserialization, host-header, cache-poisoning, clickjacking,
+  CORS, type-juggling, LFI/RFI …). The planner now allocates them to `pentester-executor` **with the KB
+  directory named**, and the command forwards it, so the executor loads the payload set instead of
+  improvising the class from memory.
+- **Explicit open-redirect sweep** in `pentester-executor`: the full sink list (`next`, `url`, `redirect`,
+  `redirect_uri`, `return`, `continue`, `dest`, `goto`, `callback`, …) on every 30x route *and* on
+  logout/login/message/tracking routes that answer 200; the host-filter bypasses (`///evil.tld`,
+  `/\/evil.tld`, `https://target.tld@evil.tld`, userinfo/`#`/`?` splits — a real finding on this target was
+  a **triple-slash bypass of a logout host filter**); and the oracle stated as the resolved `Location`, not
+  mere reflection.
+
+Full plugin suite: 98/98 green (documentation and schema change — no executable code touched).
+
+---
+
 ## [2.4.58] — 2026-08-18
 
 Diagnosed from `snapeda-testing-2026-08-v3` — the first run to actually execute the new machinery
