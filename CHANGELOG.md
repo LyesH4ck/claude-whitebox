@@ -4,6 +4,71 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.58] — 2026-08-18
+
+Diagnosed from `snapeda-testing-2026-08-v3` — the first run to actually execute the new machinery
+(`plugin-provenance` confirmed `2.4.57`, `stale: false`). It tested **23 of 69 discovered paths and 9 of 63
+parameters**, then logged `early-exit: surface-exhausted` after two hours — with `timing: unlimited` and
+`thoroughness: Deep`. Against the app's true surface (862 Django URL patterns) that is **2.7% coverage
+reported as exhaustion**, and no `pentest-report.json` or `report.md` was produced at all.
+
+### Fixed — `unlimited` turned the quota loop OFF instead of turning it UP
+
+Step 6.1 mapped `unlimited` → `CAP_SECONDS: none`, so Step 6.6's escalation trigger (`elapsed < quota`) had
+nothing to evaluate: no mid-run checkpoint ever fired and the loop stopped after wave 2. The budget setting
+that means "spend whatever it takes" delivered the **least** testing of any setting.
+
+`unlimited` now sets `EXHAUSTION_REQUIRED = true`: the escalation loop runs unconditionally, checkpoints
+fire every wave instead of at 50% of a clock that does not exist, and the only exit is proven exhaustion.
+
+### Fixed — the early-exit gate was prose, now it is arithmetic
+
+The run's justification was genuinely well-argued (it named Playwright, RoE re-approval and 404s per
+vector) — and it was still wrong, because 46 paths and 54 parameters had never been touched. A paragraph
+cannot establish exhaustion. The gate is now:
+`routes.discovered - routes.tested == 0`, `parameters.discovered - parameters.tested == 0`,
+`endpoints.discovery_shortfall == 0`. Any remainder must be named **individually** with its blocker
+(`needs-browser`, `needs-RoE-reapproval`, `404-unreachable`, …); "low-yield" is not a blocker, it is a
+decision that belongs to the operator. Step 6.6/3 now dispatches at `discovered_not_tested` **before** any
+discretionary escalation, and 6.6/1 recomputes coverage every wave so the loop is driven by remaining
+surface, not only by the clock.
+
+**New 6.6/4b: every termination path continues to Step 6.7.** Early exit ends the testing phase, never the
+engagement — the run left 28 findings on disk and nothing a client could read.
+
+### Fixed — Playwright unavailable is now a blocking preflight question
+
+Four of the planner's seven de-scoped items were browser-dependent, but the second cost is the invisible
+one: `inventory-javascript-mapper`'s SPA/AJAX crawl and the whole `crud-exerciser` write-surface pass both
+need it. Without them there is **no write surface at all** — `crud/` held 2 files instead of 32 and the
+parameter corpus stopped at 63 instead of ~850. The missing browser did not just remove families, it
+**capped what recon could discover**, and the engagement then declared that reduced surface exhausted.
+Pre-flight now stops and asks: abort and fix the browser, or accept a capped surface as a blocking gap.
+
+### Fixed — `injection-tester` ran `sqli-detect` zero times on a 63-parameter corpus
+
+Six test lines total, no invocation of the deterministic detector the agent is mandated to run on every
+parameter. It must now emit its own denominator
+(`{"action":"summary","params_in_corpus":N,"params_probed":M,"sqli_detect_runs":K,"skipped":[…]}`), and
+`sqli_detect_runs: 0` with a non-empty corpus is stated as a defect, not a result.
+
+### Fixed — `coverage.mjs` was manufacturing the false gap it exists to prevent
+
+Recon logs are excluded from `tested` by design, so their formatting cannot make a figure a floor — yet a
+single prose `inventory-directory-scanner.log` flagged the whole engagement `lower_bound` while all twelve
+executor logs were clean. Prose logs are now split executor-vs-recon (falling back to the **filename** when
+a log has no parseable `agent` — precisely the case for the unparseable logs this matters for), with recon
+reported separately as informational `recon_noise`.
+
+Likewise, `cve-tester` legitimately targets a component+version rather than a path: a line carrying
+`component`/`cve`/`product` now counts as located. On the real run these two fixes took the reported
+violations from 15 to **11 real ones**, with executor prose logs at **0** — so `lower_bound: true` is now
+earned rather than invented.
+
+3 regression tests added (T-C20…T-C22). Full plugin suite: 98/98 green.
+
+---
+
 ## [2.4.57] — 2026-08-18
 
 Four fixes, every one of them found by running 2.4.49 against a live 16-hour engagement
