@@ -4,6 +4,38 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.62] — 2026-08-20
+
+### Fixed — the coverage contract can only report classes it knows about
+
+Measured against PortSwigger's published vulnerability list for Gin & Juice Shop
+(`https://ginandjuice.shop/vulnerabilities`), the run found **9 of the 10 substantive classes**: SQLi,
+reflected XSS, DOM XSS, DOM-based open redirection, client-side prototype pollution, client-side template
+injection, XXE, request-URL override, and the vulnerable AngularJS 1.7.7 dependency.
+
+The single miss was **HTTP response header injection** on `/catalog` — and it was not a de-scoping decision.
+No agent in the plugin covered the class, and it was absent from `profile_classes`, so the 2.4.59 contract
+could not flag it either: **a class missing from that list is not "de-scoped", it is invisible**, and no
+report will ever mention it. The list is the ceiling of what can ever be reported missing.
+
+- `profile_classes` gains `response-header-injection`, `csti`, `xml-injection` and `access-control`, with a
+  note stating the ceiling property explicitly: when a target's own documentation or a scanner names a class
+  you do not have, add it here first — otherwise the gap is silent.
+- `pentester-executor` gains the class with its oracle. Any parameter reaching a RESPONSE header is a
+  candidate (`Location` after a redirect, `Set-Cookie`, `Content-Disposition` filenames, custom `X-*` echoes,
+  3xx targets built from input) — easy to miss precisely because the reflection is not in the body, so a
+  body-only reflection scan sees nothing. Payloads cover plain, single-`%0a`, double-encoded and
+  unicode/overlong CRLF. **Oracle: the injected header must appear as a real header line**
+  (`curl -sS -D - -o /dev/null`, grep the header block) — a payload echoed inside an existing header's value
+  is reflection, not injection.
+
+Note for the record: `host-header` was allocated and is a *different* class (poisoning via the inbound
+header), not injection into an outbound one — which is part of why the gap read as covered.
+
+Full plugin suite: 103/103 green (contract and agent text — no executable code touched).
+
+---
+
 ## [2.4.61] — 2026-08-20
 
 Diagnosed from `ginandjuice-shop-2026-08` — the first fully clean run: provenance `2.4.60`/`stale:false`,
