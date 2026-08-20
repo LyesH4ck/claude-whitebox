@@ -4,6 +4,64 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.61] — 2026-08-20
+
+Diagnosed from `ginandjuice-shop-2026-08` — the first fully clean run: provenance `2.4.60`/`stale:false`,
+browser probe `ok`, `class_coverage` present, **`lower_bound: false`** (11 executor logs, 0 prose, 0
+locator-less lines), and all five deliverables produced. Recall against PortSwigger's known vuln set was
+strong: SQLi, reflected XSS, DOM XSS, XXE/SSRF, AngularJS CSTI, prototype pollution, open redirect,
+`X-Original-URL` authz bypass, BOLA on order details.
+
+The defect surfaced anyway: the planner de-scoped `open-redirect` as *"no GET redirect param exists"* — and
+a confirmed open-redirect on `GET /blog/post?back=` sat in the findings directory. The planner's reasoning
+was sound; its **input** was wrong. `back` was in none of the 11 inventoried parameters.
+
+### Fixed — the reconcile gate fires once, before any testing has happened
+
+The gate is a pre-planning barrier (Step 6.3.6). On this run it executed at **14:40**; `xss-tester` appended
+`/blog/post?back=` to `route-ledger.jsonl` at **15:05**. Everything executors discover after the barrier
+lands in the ledger and never folds back into `param-inventory.json` / `surface-map.json` — the next wave
+cannot see it, coverage cannot count it, and de-scoping decisions are never revisited. It now re-runs
+**after every wave** and **once more before the report**, and a non-zero merge is escalation input: any class
+de-scoped for "no such parameter" must be re-examined against the grown corpus.
+
+### Fixed — a parameter on an already-mapped route was invisible to the gate
+
+Merging only handled *route* orphans. `back` was discovered on `/blog`, a route the surface-map already
+carried, so it was not an orphan and the parameter was dropped. Knowing a route says nothing about knowing
+its parameters. `reconcile-inventory.mjs` now unions params onto known routes too, reporting
+`merged_params_on_known_routes`.
+
+### Fixed — `coverage.mjs` could not read half the route ledger
+
+Executors write the path under `route`; the tool read `path`/`endpoint`/`url`. **15 of 47 ledger lines
+carried only `route`** and were invisible — their routes and params counted in no denominator.
+(`reconcile-inventory.mjs` already tolerated `route`.)
+
+### Added — `param-mine` mines INBOUND parameters, not just outbound calls
+
+Two blind spots, both by design rather than by bug:
+- **The base page never entered the corpus.** It was fetched only to harvest `<script src>` and then
+  discarded, so inline `<script>` and `on*` handlers — where `back` lives — were never scanned.
+- **Only outbound calls were mined.** Params were recorded solely when attached to a `/api|rest|v\d/` URL in
+  a `fetch`/`axios`/`$http` call: parameters the front-end *sends*. Parameters the client *reads* off the
+  current URL and consumes locally (redirect targets, template keys, file names) ride in no request and sit
+  on no API path, so a call-based miner cannot see them at all.
+
+`param-mine` now scans the base HTML and mines DOM sources — `URLSearchParams().get()`, `$routeParams`,
+`$route.query`, `router.query`, `useSearchParams()`, `getParameterByName()`, string-built `"?x=" + v` — plus
+a `.get('name')` pattern **gated** on the file containing `useSearchParams`/`URLSearchParams` (bare `.get()`
+is far too common to scan unconditionally). Reported as `dom_source_params`.
+
+This is what de-scoped three classes on one incomplete list: `open-redirect` (saved by luck — an executor hit
+the sink while working the neighbouring DOM-XSS), and `path-traversal` and `mass-assignment`, both dismissed
+as "no such parameter among the discovered params" against an inventory that by construction contained no
+client-consumed parameter at all.
+
+8 regression tests added (T-P3…T-P5, T-S6, T-S7). Full plugin suite: 103/103 green.
+
+---
+
 ## [2.4.60] — 2026-08-18
 
 ### Fixed — an unverified negative about a TOOL cost ~92% of an engagement's surface
