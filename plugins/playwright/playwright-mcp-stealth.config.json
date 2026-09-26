@@ -1,7 +1,7 @@
 {
-  "_comment": "Stealth config for @playwright/mcp, loaded by this plugin's .mcp.json via --config. PORTABLE DEFAULT: bundled Chromium + headless + JS-level stealth (realistic UA/viewport/locale, --disable-blink-features=AutomationControlled, webdriver init script) — works on headless servers. Requires 'npx playwright install chromium' once.",
+  "_comment": "Stealth config for @playwright/mcp, loaded by this plugin's .mcp.json via --config. PORTABLE DEFAULT: bundled Chromium + headless + JS-level stealth (realistic UA/viewport/locale, --disable-blink-features=AutomationControlled, webdriver init script) \u2014 works on headless servers. Requires 'npx playwright install chromium' once.",
   "_maxstealth_hint": "For MAXIMUM stealth on a DESKTOP with real Google Chrome + a display, set launchOptions.channel='chrome' and launchOptions.headless=false. Note: channel='chrome' fails if Chrome isn't installed; headless=false needs a display (use xvfb-run on a server).",
-  "_note": "initScript MUST be a file path (relative to this config), not inline JS — inline strings crash the server with 'Init script file does not exist'.",
+  "_note": "initScript MUST be a file path (relative to this config), not inline JS \u2014 inline strings crash the server with 'Init script file does not exist'.",
   "browser": {
     "browserName": "chromium",
     "isolated": false,
@@ -11,16 +11,36 @@
         "--disable-blink-features=AutomationControlled",
         "--no-sandbox",
         "--disable-dev-shm-usage"
-      ]
+      ],
+      "proxy": {
+        "server": "http://host.internal:8080"
+      }
     },
-    "_recordHar_note": "COMPLETE-TRAFFIC BACKSTOP: recordHar makes EVERY MCP-driven agent session auto-record a full HAR (all methods/frames/bodies incl. WebSocket) with ZERO per-agent code — so interaction-triggered READ XHRs (picker-select ?name=…, row-drill /{id}) that the curated map misses are still captured, then folded into the recon inventory by har-import.mjs. The persistent context (isolated:false) flushes the HAR on server shutdown, so this ONE path holds the whole engagement session's traffic; it is overwritten only across server restarts (a new engagement). SECRETS: the HAR contains Authorization/Cookie/response bodies — har-import strips header values, and the raw .har is gitignored. If the resolved @playwright/mcp does not honor contextOptions.recordHar, fall back to a Playwright trace (--save-trace) and parse its network log.",
+    "_recordHar_note": "COMPLETE-TRAFFIC BACKSTOP: recordHar makes EVERY MCP-driven agent session auto-record a full HAR (all methods/frames/bodies incl. WebSocket) with ZERO per-agent code \u2014 so interaction-triggered READ XHRs (picker-select ?name=\u2026, row-drill /{id}) that the curated map misses are still captured, then folded into the recon inventory by har-import.mjs. The persistent context (isolated:false) flushes the HAR on server shutdown, so this ONE path holds the whole engagement session's traffic; it is overwritten only across server restarts (a new engagement). SECRETS: the HAR contains Authorization/Cookie/response bodies \u2014 har-import strips header values, and the raw .har is gitignored. If the resolved @playwright/mcp does not honor contextOptions.recordHar, fall back to a Playwright trace (--save-trace) and parse its network log.",
     "contextOptions": {
       "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "viewport": { "width": 1366, "height": 900 },
+      "viewport": {
+        "width": 1366,
+        "height": 900
+      },
       "locale": "en-US",
       "timezoneId": "America/New_York",
-      "recordHar": { "path": "playwright-mcp-session.har", "mode": "full", "content": "embed" }
+      "recordHar": {
+        "path": "playwright-mcp-session.har",
+        "mode": "full",
+        "content": "embed"
+      },
+      "ignoreHTTPSErrors": true,
+      "extraHTTPHeaders": {
+        "Sec-Ch-Ua": "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \"Not-A.Brand\";v=\"99\"",
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": "\"Linux\""
+      }
     },
-    "initScript": ["stealth-init.js"]
-  }
+    "initScript": [
+      "stealth-init.js"
+    ]
+  },
+  "_clienthints_note": "extraHTTPHeaders overriding Sec-Ch-Ua is a REAL stealth fix, not cosmetic. This config spoofs contextOptions.userAgent to Chrome/124 but the CLIENT HINTS still report the actual binary, so every request went out carrying Sec-Ch-Ua: \"HeadlessChrome\";v=\"<n>\" while the UA claimed Chrome. WAFs block on exactly that mismatch. Established by replaying through an intercepting proxy with everything else byte-identical: no client hints -> 200, Sec-Ch-Ua=HeadlessChrome -> 403, Sec-Ch-Ua=Google Chrome -> 200. This affects ANY Akamai/Cloudflare-fronted target, so keep the three Sec-Ch-Ua headers in sync with contextOptions.userAgent whenever you bump the spoofed Chrome version \u2014 a UA/client-hint mismatch is more detectable than either value alone.",
+  "_proxy_note": "launchOptions.proxy routes every Playwright session through the operator's intercepting proxy (capture is the default posture here \u2014 traffic should be reviewable). It is NOT a stealth measure: a TLS-fingerprint theory for the block above was tested and was WRONG, the browser reached the target fine without any proxy. Operational requirement: while this line is set, a proxy must be listening at the configured address or every session fails to reach the target. Change the address to match your own setup."
 }
