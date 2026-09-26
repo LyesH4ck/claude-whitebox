@@ -37,9 +37,9 @@ Otherwise `has_existing = false`.
 Use AskUserQuestion with **multiSelect: true**:
 
 "Which vulnerability classes should the audit cover? (Select all that apply — leaving all unselected
-defaults to all ten.)"
+defaults to all seventeen.)"
 
-Present exactly these options (multi-select):
+Present exactly these options (multi-select) — core ten then extended seven:
 - "Injection — SQLi, NoSQLi, command, LFI/RFI, SSTI, XXE, path traversal, deserialization"
 - "XSS — reflected, stored, DOM, framework escape hatches"
 - "Auth — password storage, sessions, JWT, reset flows, MFA, enumeration"
@@ -50,9 +50,18 @@ Present exactly these options (multi-select):
 - "Dependencies — vulnerable & outdated components (SCA)"
 - "Configuration — headers, CORS, cookies, debug mode, defaults"
 - "Logging — sensitive data in logs/telemetry/error responses, missing audit logging, log injection (A09)"
+- "Business logic — workflow skip/replay, business races, numeric/temporal abuse, insecure defaults (A04)"
+- "Feature abuse — export=exfil, import=injection, search/enumeration oracles, preview leak, webhook-SSRF (A04/A01)"
+- "Data lifecycle — multi-tenant isolation, cache/index ACL drift, soft-delete bypass, stale authz, export scope (A01)"
+- "Client-side — DOM XSS, DOM clobbering, prototype pollution, postMessage, CORS, service-worker, XS-Leaks, clickjacking"
+- "HTTP protocol — request smuggling/desync, cache poisoning/deception, host-header trust, response splitting (A05)"
+- "AI / LLM — indirect prompt injection, context/memory poisoning, tool-arg injection, confused-deputy, MCP identity"
+- "Resource exhaustion — ReDoS/superlinear parsing, decompression bombs, query amplification, unbounded buffering, descriptor leaks, retry/poison-record storms (A04)"
 
 Map the selected labels to these class keys: `injection`, `xss`, `auth`, `access-control`, `ssrf`,
-`secrets`, `crypto`, `deps`, `config`, `logging`. If none selected, set all ten. Store as `classes`.
+`secrets`, `crypto`, `deps`, `config`, `logging`, `business-logic`, `feature-abuse`, `data-lifecycle`,
+`client-side`, `http-protocol`, `ai-llm`, `resource-exhaustion`. If none selected, set all seventeen.
+Store as `classes`.
 
 ## Step 3 — Save
 

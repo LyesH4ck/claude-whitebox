@@ -70,8 +70,30 @@ statically, record the entry point without a `path` — do not guess (the handof
 
 Using `SINK_CATALOG.md` patterns, locate dangerous sinks for each selected class and record `file:line`
 for each. For each sink, note the immediately-surrounding context (what value flows in). Cover the
-selected classes among: injection, xss, auth, access-control, ssrf, secrets, crypto, deps, config,
-logging.
+selected classes among the **core ten** — injection, xss, auth, access-control, ssrf, secrets, crypto,
+deps, config, logging — and the **extended seven** — business-logic, feature-abuse, data-lifecycle,
+client-side, http-protocol, ai-llm, resource-exhaustion.
+
+**The extended seven are workflow/surface-shaped, not always grep-sink-shaped** — do not force a raw sink
+dump for them; instead record the *surface* each auditor needs and put it in the matching sink array (an
+entry may be a workflow/feature/store/boundary, not only a `file:line` API call):
+- **business-logic** — the multi-step/stateful workflows (checkout/payment, approval, provisioning,
+  quota/balance changes, publish/cancel/refund) and where their state/step enums + transition guards live.
+- **feature-abuse** — export/backup/report, import/restore, search/filter/sort list endpoints,
+  preview/draft/share-token routes, and user-settable webhook/callback URLs the server later fetches.
+- **data-lifecycle** — the multi-tenant/owner-scoped stores and their derived copies (cache, search/index,
+  analytics, export, backup) plus soft-delete/revocation predicates; note the tenancy model (row-level
+  policy / ORM default scope / `tenant_id`).
+- **client-side** — already located via the client-side JS surface note below (record locations, not a
+  full DOM-sink dump).
+- **http-protocol** — any in-repo HTTP parser, reverse-proxy/CDN/gateway config, cache-key construction,
+  and code building absolute URLs / response headers from request metadata (`Host`/`X-Forwarded-*`).
+- **ai-llm** — model-call sites (already flagged as untrusted sources below), prompt-assembly, RAG/memory
+  read+write, tool/function definitions + dispatcher, and MCP server/client wiring.
+- **resource-exhaustion** — input→cost paths: user-supplied/user-matched regex, decompression
+  (`unzip`/`zlib`/`extractall`/`tarfile`/image-decode), recursion over user structures, query
+  fan-out (`include`/`expand`/pagination), unbounded reads/streams, resource acquisition without a
+  `finally`/`defer`/`with`, retry loops, and queue consumers — note what runs **before auth**.
 
 For the **logging** class (A09 / CWE-532), run the cheap, high-signal egress sweep — sensitive values
 reaching log/telemetry/error sinks (run even if `logging` is not selected, to feed the coverage warning
@@ -133,7 +155,14 @@ Write three deliverables (create dirs with `mkdir -p` first):
        "xss": [],
        "ssrf": [{ "file": "src/http/fetchUrl.ts", "line": 12, "api": "axios.get", "feeds": "body.url" }],
        "secrets": [], "crypto": [], "access-control": [], "auth": [], "config": [], "deps": [],
-       "logging": [{ "file": "src/security/OAuthClient.php", "line": 53, "api": "logger->info(raw token response)", "feeds": "access_token/refresh_token" }]
+       "logging": [{ "file": "src/security/OAuthClient.php", "line": 53, "api": "logger->info(raw token response)", "feeds": "access_token/refresh_token" }],
+       "business-logic": [{ "workflow": "checkout", "state_field": "orders.status", "guard": "src/order/checkout.ts:88", "note": "payment-capture → ship transition" }],
+       "feature-abuse": [{ "feature": "export", "file": "src/report/export.ts", "line": 40, "api": "GET /reports/:id/export", "note": "per-item authz after selection?" }],
+       "data-lifecycle": [{ "store": "documents", "file": "src/doc/repo.ts", "line": 22, "api": "findById (no tenant predicate)", "note": "tenant binding + soft-delete predicate" }],
+       "client-side": [{ "file": "static/js/app.js", "line": 210, "api": "el.innerHTML", "feeds": "location.hash" }],
+       "http-protocol": [{ "file": "deploy/nginx.conf", "line": 30, "api": "proxy_cache_key omits Host", "note": "cache poisoning via unkeyed Host" }],
+       "ai-llm": [{ "file": "src/agent/tools.ts", "line": 55, "api": "tool 'run_query' → db.query(args.sql)", "note": "model-produced arg reaches SQL sink" }],
+       "resource-exhaustion": [{ "file": "src/parse/csv.ts", "line": 18, "api": "no decompressed-size cap on upload", "feeds": "multipart file", "note": "input→cost, pre-auth" }]
      },
      "security_mechanisms": {
        "auth": "src/auth/*", "authz": "src/middleware/requireRole.ts",

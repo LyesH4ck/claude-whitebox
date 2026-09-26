@@ -162,3 +162,91 @@ especially the *whole object / raw HTTP response body* logged in one shot.
   object (`['data' => $dto]`, `extra: {response}`) is the most common offender.
 - **Also flag** (A09 gaps): security events with **no** audit log (login success/failure, authz denial,
   privilege change), and **log injection** (unsanitized newline/CRLF user input into a log line).
+
+## Client-side — browser classes beyond DOM-XSS (owned by client-side-auditor)
+
+DOM-XSS sources/sinks are above (§XSS / Prototype pollution). These are the *additional* browser sinks —
+a controllable browser source must reach one AND impact a victim session / another origin / shared
+persistence (self-injection is not a finding). Full slot logic in `CLIENT_SIDE.md`.
+- **DOM clobbering**: markup with attacker `id`/`name` that shadows a global/config/init flag later read
+  (`window.<x>`, `document.<x>`, `config.<x>` trusted after an HTML sink). Grep sanitizer allowlists that
+  keep `id`/`name`.
+- **postMessage origin trust**: `addEventListener('message', …)` / `onmessage` handlers — flag any that
+  act on `event.data` without an **exact** `event.origin` allowlist (substring/`indexOf`/`startsWith`/
+  unanchored-regex = not a check). Send side: `postMessage(data, '*')` with sensitive data.
+- **Credentialed CORS**: server reflecting/weak-matching `Origin` with `Access-Control-Allow-Credentials:
+  true` (grep both headers together; a bare `*`+credentials is browser-rejected — report the reflected path).
+- **Cross-site WebSocket**: `new WebSocket(` upgrade accepting ambient cookies with no `Origin` check /
+  channel token + a state-touching message handler.
+- **Service worker**: `navigator.serviceWorker.register(`, `Service-Worker-Allowed`, `caches.*` — attacker-
+  influenced script/scope, or personalized responses cached without account/tenant in the key.
+- **Browser storage / stale auth**: `localStorage`/`sessionStorage`/`indexedDB`/`caches` holding tokens or
+  private data readable by a lower-trust same-origin component or used after logout/revocation.
+- **Clickjacking**: state-changing action framed without effective `frame-ancestors`/`X-Frame-Options`.
+- **Client-side redirect / reverse tabnabbing**: `location = <src>` / `window.open(` to `javascript:`/
+  `data:` from a client source; retained `window.opener`.
+
+## HTTP framing / cache / header trust (owned by http-protocol-auditor)
+
+A framing/cache finding needs **two** components interpreting the same request/response/key differently —
+name both. Full slot logic in `HTTP_PROTOCOL.md`. Most surface exists only when a **custom parser or an
+in-repo proxy/CDN config** is present; otherwise downgrade to a coverage gap.
+- **Request framing / desync**: `Content-Length` + `Transfer-Encoding` both handled, `chunked` parsing,
+  raw `recv(`/`readline(` HTTP parsing, HTTP/2→1 downgrade, header-name normalization. Grep proxy config
+  (`nginx.conf`, `haproxy`, `Caddyfile`, `varnish`, `cloudfront`, ingress) alongside app parsing.
+- **Cache poisoning (unkeyed input)** / **deception**: `Cache-Control`/`s-maxage`/`surrogate-control`,
+  `proxy_cache_key`/cache-key builders — a request value (forwarded host/scheme, cookie, lang/device
+  header) that changes the response but is absent from the key; a private dynamic path cached as a static
+  asset (suffix/path-param normalization mismatch).
+- **Host / forwarded-header trust**: `req.headers.host`/`request.get_host()`/`X-Forwarded-Host`/`Forwarded`
+  used to build absolute URLs, **password-reset links**, tenant routing, cache keys, or the client IP used
+  for authz — confirm trusted ingress strips client copies.
+- **Response-header injection / splitting**: request-derived value reaching `Location`/`Set-Cookie`/CSP via
+  `setHeader`/`addHeader`/`write_head` with unsafe CR/LF (verify the framework doesn't already reject it).
+
+---
+
+# Extended-class seeds (business-logic · feature-abuse · data-lifecycle · client-side · http-protocol · ai-llm)
+
+The extended seven are **surface/workflow-shaped**, not all pure `file:line` API sinks — the seeds below are
+starting greps; the authoritative method lives in the matching reference file
+(`BUSINESS_LOGIC.md`, `FEATURE_ABUSE.md`, `DATA_LIFECYCLE.md`, `CLIENT_SIDE.md`, `HTTP_PROTOCOL.md`, `AI_LLM.md`).
+
+## Client-side / DOM & browser (client-side-auditor — A03/A05)
+- **DOM sources**: `location.(hash|search|href|pathname)`, `document.referrer`, `window.name`,
+  `addEventListener('message'` / `onmessage`, `localStorage`/`sessionStorage`/`indexedDB`, `URLSearchParams`
+- **Executing sinks**: `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `eval(`,
+  `new Function(`, `setTimeout(`/`setInterval(` with a string, jQuery `.html(`/`$(`, `location=`/`.href=`,
+  `javascript:` URLs, `dangerouslySetInnerHTML`, `v-html`, Angular `bypassSecurityTrust*`
+- **Prototype pollution**: recursive merge / `__proto__` / `constructor` / `[key]=` deep-write (then a gadget)
+- **Cross-origin**: `postMessage(` (send-side `*`; recv-side weak origin check), `fetch(...credentials:'include'`,
+  `new WebSocket(`, permissive `Access-Control-Allow-Origin` reflection, `navigator.serviceWorker.register(`
+- Scan `static/**/*.js`, SPA bundles, browser-extension code, and inline `<script>` blocks of templates.
+
+## HTTP framing / cache / headers (http-protocol-auditor — A05)
+- **In-repo proxy/edge config** (the second interpreter): `nginx.conf`, `haproxy.cfg`, `Caddyfile`,
+  `*.vcl` (varnish), `cloudfront`/ingress rules, `proxy_pass`, `proxy_cache_key`, rewrite rules
+- **Framing**: custom request parsers, `Content-Length`, `Transfer-Encoding`, HTTP/2 handling, header-name
+  normalization, CR/LF handling
+- **Host/forwarded trust**: `req.headers.host`/`getHeader("Host")`/`X-Forwarded-*`/`Forwarded` used to build
+  absolute URLs, password-reset links, redirects, tenant routing, cache keys, or the client IP for authz
+- **Response headers**: `setHeader`/`addHeader`/`Location`/`Set-Cookie`/CSP built from request-derived values
+
+## Business-logic / feature-abuse / data-lifecycle / ai-llm (workflow-shaped)
+- **business-logic**: `status`/`state`/`step`/`stage` enums + transition guards; read-modify-write without a
+  transaction / row-lock / `SELECT … FOR UPDATE` / atomic increment; `balance`/`quota`/`credit`/`amount`
+  arithmetic; `expire`/`schedule`/`valid_until` comparisons.
+- **feature-abuse**: `export`/`download`/`report`/`snapshot`/`backup`/`csv`/`pdf`; `import`/`restore`/`upload`;
+  `search`/`filter`/`order_by`/`sort`/`?q=`; `preview`/`draft`/share-token/`sitemap`/`rss`;
+  `webhook`/`callback`/`notify_url`/`hook_url`.
+- **data-lifecycle**: `findById`/`.get(`/`WHERE id=` lookups lacking a tenant predicate; `unscoped`/service
+  clients; cache/object/search-doc keys omitting tenant; `deleted_at`/`is_deleted`/tombstone predicates;
+  membership/consent/role revocation not invalidating sessions/caches/jobs.
+- **ai-llm**: LLM SDK calls (`openai`/`anthropic`/`chat.completions`/`generate`/`invoke`); prompt assembly
+  (concatenated system/user/tool messages, caller-controlled role fields); RAG/`embedding`/`vector`/`upsert`;
+  tool/function definitions + dispatcher (`tools=`/`function_call`/`tool_call`); MCP server/client wiring.
+- **resource-exhaustion**: user-supplied/user-matched regex (`new RegExp`/`re.compile`/`.match(`/`.test(`);
+  decompression without a decompressed-size cap (`unzip`/`gunzip`/`zlib`/`inflate`/`extractall`/`tarfile`/
+  image-decode); recursion over user structures; query fan-out (`include`/`expand`/pagination, `IN (…)` from
+  a user list); unbounded reads/streams; resource acquisition without a matching `finally`/`defer`/`with`;
+  retry loops without jitter/ceiling; shared-queue consumers (poison-record / head-of-line blocking).

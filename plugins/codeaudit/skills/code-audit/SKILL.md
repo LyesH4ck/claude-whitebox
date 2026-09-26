@@ -92,6 +92,31 @@ derivation of it) that reaches the sink. A check on a *sibling* variable does no
 control-flow proximity ("there is a validation near the flow") as a data-flow guard; follow the actual
 variable into the sink. This is a general false-negative killer, not specific to any one class.
 
+## Hunting discipline (false-negative killers)
+
+The single-happy-path trace is where audits miss real bugs. Apply these three moves on **every** class —
+they cost little and turn "looks safe" into a proven verdict:
+
+1. **Test the sad paths, not just the happy path.** For each source/invariant, ask what the interface does
+   with **absent / empty / zero / negative / maximum / over-limit / duplicate / mixed-encoding / stale /
+   revoked / reordered / concurrent / partially-migrated / failed-dependency / rollback** state — but only
+   where the interface actually accepts that shape. A guard that holds for the normal value often collapses
+   on the boundary value (an `int` cast that accepts `-1`, a length check that a second decode defeats, a
+   regex anchored `^` but not `$`). Compare canonicalization and units at every parser/policy handoff.
+2. **The weakest parallel path is the policy.** The same effect (a state change, a data read, a sink) is
+   usually reachable through **several** routes — direct handler, batch/bulk endpoint, admin path,
+   import/restore, background job, retry, resumed flow, legacy/compat route, GraphQL vs REST. A defense
+   present on the polished UI route but missing on a sibling route is a real finding. Enumerate every door
+   to the same operation and audit the one with the least defense — not the most.
+3. **Diff cross-component guarantees.** Where component A validates and hands off to component B, compare
+   what A actually **guarantees** against what B **assumes** — truncation, type coercion, normalization,
+   tenant scope, default values, null handling. "It was validated on the way in" is not a guarantee if a
+   different write path, a serializer round-trip, or a later re-decode reintroduces the taint (this is the
+   second-order/stored-taint case, generalized to any trust boundary).
+
+These are FN killers, not new finding categories: a candidate they surface still passes the full verdict
+process and the exploitability bar before it is reported.
+
 ## Confidence scoring
 
 - **high** — complete, unambiguous source→sink trace; correct slot labeling; explicit missing/mismatched

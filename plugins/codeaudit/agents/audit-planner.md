@@ -78,9 +78,12 @@ scoped to a disjoint set of directories (a *shard*):
 - **Trigger** (per class, from `sink-inventory.json`): shard only when the class is **genuinely dense** —
   **> ~80 sinks** OR its files span many top-level modules including a 10k+-line file. Below that, **one
   instance** (the default — a single well-instructed auditor covers a normal class fine).
-- **How many — stay LEAN.** `K = min(ceil(sinks / 60), 3)` per class, **and a hard TOTAL budget across all
-  classes and waves of ≤ ~10 auditor instances** (a normal codebase needs 4–6). Spend the budget on the
-  densest classes first — do **NOT** give every class its own 6 shards. *Empirically, on a 1,133-sink Django
+- **How many — stay LEAN.** `K = min(ceil(sinks / 60), 3)` per class, **and a hard budget on the SHARD
+  fan-out of ≤ ~10 sharded instances across all grep-sink classes and waves** (a normal codebase needs
+  4–6). This cap governs *sharding* only — each selected class **with surface** still gets its one base
+  instance (extended classes are always single-instance; no-surface classes are skipped), and sharding
+  adds extra instances **on top** for the dense grep-sink classes. Spend the shard budget on the densest
+  classes first — do **NOT** give every class its own 6 shards. *Empirically, on a 1,133-sink Django
   codebase, ~6 focused shards (injection ×3 · xss ×2 · ssrf ×1) found every critical — including an SSRF
   buried at line 11 384 that even semgrep missed — whereas the planner's earlier 26 shards would only have
   burned tokens for zero extra recall.* **Fewer, well-scoped shards reach deep sinks *better* than many thin
@@ -110,13 +113,30 @@ Example sharded injection deployment (when dense):
 ]
 ```
 
-Map selected `classes` to agents: injection→`injection-auditor`, xss→`xss-auditor`, auth→`auth-auditor`,
-access-control→`access-control-auditor`, ssrf→`ssrf-auditor`, secrets→`secrets-auditor`,
+Map selected `classes` to agents. **Core ten:** injection→`injection-auditor`, xss→`xss-auditor`,
+auth→`auth-auditor`, access-control→`access-control-auditor`, ssrf→`ssrf-auditor`, secrets→`secrets-auditor`,
 crypto→`crypto-auditor`, deps→`deps-auditor`, config→`config-auditor`, logging→`logging-auditor`.
+**Extended seven:** business-logic→`business-logic-auditor`, feature-abuse→`feature-abuse-auditor`,
+data-lifecycle→`data-lifecycle-auditor`, client-side→`client-side-auditor`, http-protocol→`http-protocol-auditor`,
+ai-llm→`ai-agent-auditor`, resource-exhaustion→`resource-exhaustion-auditor`.
 **Skip** any class with no relevant surface in the baseline (record it under `skipped` with a reason —
 do not silently drop). The `logging` class (A09) covers sensitive data in logs/telemetry/error
 responses and audit-logging gaps; scope `logging-auditor` to where credentials/tokens/PII are handled
 (auth/SSO/OAuth, payment, webhooks, HTTP clients receiving token responses) plus the logging config.
+
+**Extended-class scoping & sharding.** The extended seven are **workflow/surface-shaped**, not sink-dense,
+so they run as **single instances — never shard them** (the sink-sharding rule below applies only to the
+grep-sink classes injection/xss/access-control/ssrf; `client-side` may shard like xss *only* on a very
+large client-side JS surface). Scope each extended auditor to where its surface lives in the baseline:
+`business-logic`/`feature-abuse` to the state-changing handlers and feature endpoints; `data-lifecycle` to
+the multi-tenant stores and their derived copies; `client-side` to `static/**` + SPA/template `<script>`;
+`http-protocol` to any in-repo parser/proxy/CDN config + request-metadata-derived URL/header builders;
+`ai-llm` to model-call/prompt/RAG/memory/tool/MCP code; `resource-exhaustion` to the input→cost paths
+(parsers, decompression, query fan-out, unbounded reads, retry/queue loops), prioritizing pre-auth
+surfaces. **Legitimately skip** an extended class when the baseline shows no surface (e.g. `ai-llm` on an
+app with no model calls, `http-protocol` with no in-repo proxy/parser) — record it under `skipped` with
+that reason. Put dense/high-value extended classes
+(`business-logic`, `data-lifecycle`) in an **early wave** since they yield high-impact design findings.
 
 ### 2. `outputs/{engagement}/plan/audit-plan.md`
 

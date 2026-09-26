@@ -24,7 +24,7 @@ install `codeaudit`.
 ```
 
 You provide a **repository path** (and optionally a running URL for hybrid corroboration) and which of
-the 10 vulnerability classes to cover. There is no time budget — the audit is bounded and runs until every
+the 16 vulnerability classes to cover. There is no time budget — the audit is bounded and runs until every
 source→sink path in scope is analyzed, then stops (depth is an optional knob, default complete). It
 produces
 `outputs/{engagement}/report.md` + `codeaudit-report.json`, with per-finding detail (source→sink trace,
@@ -32,8 +32,17 @@ code snippet, remediation) under `outputs/{engagement}/findings/`.
 
 ## What it covers
 
-Injection · XSS · Authentication · Access control (authz/IDOR/mass-assignment) · SSRF · Secrets ·
-Cryptography · Vulnerable dependencies (SCA) · Security configuration. (OWASP A01–A10.)
+**Core 10 (OWASP A01–A10):** Injection · XSS · Authentication · Access control (authz/IDOR/mass-assignment) ·
+SSRF · Secrets · Cryptography · Vulnerable dependencies (SCA) · Security configuration · Logging & sensitive
+data exposure.
+
+**Extended 6 (design/logic & modern surfaces):** Business logic (state-machine skip/replay, business races,
+numeric/temporal abuse) · Feature abuse & data leakage (export=exfil, import injection, search/enumeration
+oracles, webhook SSRF) · Data isolation & lifecycle (multi-tenant, cache/index ACL drift, soft-delete
+bypass, stale authz) · Client-side (DOM XSS, DOM clobbering, prototype pollution, postMessage/CORS,
+service-worker, XS-Leaks, clickjacking) · HTTP protocol (request smuggling/desync, cache poisoning/deception,
+host-header trust) · AI/LLM (indirect prompt injection, tool-arg→sink, confused-deputy agency, MCP identity).
+The planner skips any class with no surface, so extended classes cost nothing on a codebase that lacks them.
 
 ## How it works
 

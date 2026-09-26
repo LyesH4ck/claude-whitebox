@@ -15,9 +15,15 @@ single sink — you review the security of the auth machinery itself for missing
 ```
 Read plugins/codeaudit/skills/code-audit/SKILL.md
 Read plugins/codeaudit/skills/code-audit/reference/SOURCE_TO_SINK.md
+Read plugins/codeaudit/skills/code-audit/reference/WEB_AUTH.md
 Read plugins/pentest/skills/pentest/attacks/authentication/jwt/jwt-cheat-sheet.md
 Read plugins/pentest/skills/pentest/attacks/authentication/auth-bypass/authentication-quickstart.md
 ```
+
+`WEB_AUTH.md` carries the **federated-identity and deep-binding** surface (OAuth/OIDC callback binding,
+SAML signed-object binding, JWT `kid`/`jku`/`aud`/`iss`, session fixation/invalidation, MFA step-up &
+enrollment assurance, WebAuthn/passkey, account linking, API-key scope, mTLS identity). Cover it in
+addition to the base machinery below when the app has any of those flows.
 
 ## Phase 1 — Recon
 

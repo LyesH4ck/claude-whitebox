@@ -23,7 +23,7 @@
       "name": "pentest",
       "source": "./plugins/pentest",
       "description": "Full penetration testing framework - 64 attack categories across 11 domains covering OWASP, injection, authentication, cloud, and more",
-      "version": "2.4.62",
+      "version": "2.5.0",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"
@@ -36,6 +36,18 @@
       "source": "./plugins/codeaudit",
       "description": "White-box source code security audit - static source-to-sink analysis across 10 vulnerability domains with optional live correlation",
       "version": "0.1.17",
+      "author": {
+        "name": "Christophe Bailleux",
+        "url": "https://github.com/LyesH4ck"
+      },
+      "category": "security",
+      "strict": false
+    },
+    {
+      "name": "codeaudit-hybride",
+      "source": "./plugins/codeaudit-hybride",
+      "description": "Dual-engine white-box audit - the codeaudit pipeline (Claude) plus Codex (read-only, via codex-plugin-cc) as blind second detector, cross-verifier and false-negative hunter, with deterministic reconciliation. Requires codeaudit.",
+      "version": "0.1.0",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"

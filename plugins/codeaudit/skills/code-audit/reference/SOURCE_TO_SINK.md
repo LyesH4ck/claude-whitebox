@@ -158,3 +158,25 @@ verdict: vulnerable — SQL-keyword slot requires an allowlist; none present
 witness: ?sort=id--   (structure-influence probe, for optional live corroboration)
 confidence: high       reachable: true       owasp: A03 Injection   cwe: CWE-89
 ```
+
+## Extended classes — slot logic lives in the class reference
+
+The slot↔defense matrix above covers the source→sink classes (injection, xss, ssrf, access-control,
+auth-egress). The **extended classes** are workflow/boundary-shaped rather than a single tainted-value
+slot; their verdict logic lives in a dedicated reference the auditor mounts alongside this file:
+
+- **business-logic / chained trust boundaries** → `BUSINESS_LOGIC.md` (invariant-driven method; the
+  "slot" is a workflow rule, not a character context).
+- **feature-abuse & data-leakage** → `FEATURE_ABUSE.md` (per-item authz after selection is the "defense").
+- **data isolation & lifecycle** → `DATA_LIFECYCLE.md` (the tenant/owner/lifecycle predicate is the
+  "defense"; a stale derived copy is a post-sanitization-concat analogue).
+- **client-side (browser)** → `CLIENT_SIDE.md` (browser source → executing sink; the browser policy —
+  SOP/CSP/exact-origin — is the "defense").
+- **HTTP framing/cache/header** → `HTTP_PROTOCOL.md` (two components + the divergent normalized value).
+- **AI / LLM / agent** → `AI_LLM.md` (untrusted content → model/memory → capability; a deterministic
+  authorization/binding check is the "defense", never a guardrail prompt).
+- **federated identity / session binding** → `WEB_AUTH.md` (verification line + every required binding).
+
+The universal discipline still applies to all of them: guards protect a **variable/path**, not a
+neighborhood; the **weakest parallel path** is the policy; and a missing control with no reachable
+boundary violation is `informational` hardening, not a vulnerability.

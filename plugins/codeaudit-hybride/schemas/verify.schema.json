@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "codeaudit-hybride cross-verification result (shared by Codex and the Claude finding-verifier)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdicts"],
+  "properties": {
+    "verdicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["finding_id", "verdict", "sanitizer_file", "sanitizer_line", "argument", "corrected_severity"],
+        "properties": {
+          "finding_id": { "type": "string", "minLength": 1 },
+          "verdict": { "type": "string", "enum": ["confirmed", "refuted", "uncertain"] },
+          "sanitizer_file": { "type": ["string", "null"] },
+          "sanitizer_line": { "type": ["integer", "null"] },
+          "argument": { "type": "string", "minLength": 1 },
+          "corrected_severity": { "type": ["string", "null"], "enum": ["critical", "high", "medium", "low", "informational", null] }
+        }
+      }
+    }
+  }
+}

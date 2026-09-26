@@ -78,8 +78,10 @@ A run is **incomplete** if `report.md` does not exist.
   `owasp`, `location` (file + line), `source`, `sink`. Optional: `cwe`, `cvss`, `trace`, `slot_type`,
   `externally_reachable`, `endpoint`, `witness_payload`, `write_site`, `evidence`.
 - **`id` / `evidence`** — auditors write per-class on-disk dirs `findings/finding-{prefix}-{NNN}/`
-  (`inj`/`xss`/`ac`/`ssrf`/`auth`/`sec`/`crypto`/`deps`/`cfg`/`log`) to stay collision-free across parallel
-  runs. **Keep that class-prefixed id as the finding `id`** — do NOT renumber to a flat `finding-001` —
+  (core: `inj`/`xss`/`ac`/`ssrf`/`auth`/`sec`/`crypto`/`deps`/`cfg`/`log`; extended: `biz` business-logic /
+  `feat` feature-abuse / `life` data-lifecycle / `cli` client-side / `http` http-protocol / `ai` ai-llm /
+  `dos` resource-exhaustion) to
+  stay collision-free across parallel runs. **Keep that class-prefixed id as the finding `id`** — do NOT renumber to a flat `finding-001` —
   and set `evidence` to the matching path `findings/finding-{prefix}-{NNN}/description.md`. The Step 6.6
   aggregator MUST confirm each `evidence` path resolves on disk before writing the report; a dangling
   `evidence` link breaks per-finding drill-down and SARIF/CSV ingestion.
@@ -145,6 +147,13 @@ A05 Security Misconfiguration · A06 Vulnerable & Outdated Components · A07 Aut
 A08 Software & Data Integrity (incl. insecure deserialization) · A09 Logging Failures ·
 A10 SSRF.
 
+Extended-class OWASP anchors: **business-logic** → A04 Insecure Design; **feature-abuse** → A04 / A01;
+**data-lifecycle** → A01 Broken Access Control; **client-side** → A03 (DOM injection) / A05; **http-protocol**
+→ A05 Security Misconfiguration; **resource-exhaustion** → A04 Insecure Design (uncontrolled resource
+consumption); **ai-llm** → A04 Insecure Design, cross-referenced to the **OWASP LLM
+Top-10** (LLM01 prompt injection, LLM06 excessive agency, LLM08 vector/embedding, etc.) — an auditor MAY set
+`owasp` to the `LLMNN` code where it is the better fit.
+
 ## Default CWE by class (fill `cwe` deterministically)
 
 `cwe` feeds the SARIF `ruleId` (`{vuln_class}/{cwe}`), so fill it on every finding. Use the default below,
@@ -162,6 +171,13 @@ refined to the specific sub-class where one applies:
 | deps | CWE-1104 / CWE-937 |
 | config | CWE-16 · CWE-614/1004 cookie flags · CWE-942 CORS |
 | logging | CWE-532 · CWE-778 missing audit log · CWE-117 log injection · CWE-200 exposure |
+| business-logic | CWE-840 business-logic · CWE-841 workflow · CWE-362/367 race/TOCTOU · CWE-639 authz-logic · CWE-190 numeric |
+| feature-abuse | CWE-200 exposure · CWE-213 intended-info-exposure · CWE-639 IDOR-via-feature · CWE-918 webhook-SSRF |
+| data-lifecycle | CWE-639 IDOR · CWE-566 authz-bypass-via-key · CWE-283 unverified-ownership · CWE-459 incomplete-cleanup |
+| client-side | CWE-79 DOM-XSS · CWE-1321 prototype-pollution · CWE-346 origin · CWE-942 CORS · CWE-1021 clickjacking · CWE-601 navigation |
+| http-protocol | CWE-444 request-smuggling · CWE-524/525 cache · CWE-113 response-splitting · CWE-644 host-header |
+| ai-llm | CWE-1427 prompt-injection-to-action · CWE-77/74 downstream-injection · CWE-285/862 authorization · CWE-668 exposure |
+| resource-exhaustion | CWE-400 uncontrolled-consumption · CWE-770 alloc-without-limits · CWE-1333 ReDoS · CWE-409 decompression-bomb · CWE-834 excessive-iteration · CWE-405 asymmetric |
 
 ## `report.md` — fixed consolidated template
 

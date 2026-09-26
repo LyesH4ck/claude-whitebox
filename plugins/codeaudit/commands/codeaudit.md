@@ -170,16 +170,18 @@ Then use AskUserQuestion:
 
 Options:
 - "Use this profile — audit only the listed classes (Recommended)"
-- "Run all classes — audit the full set of 10 classes"
+- "Run all classes — audit the full set of 17 classes (core 10 + extended 7)"
 
 If "Use this profile": set `classes` from the file, update its `"status"` to `"active"`.
-If "Run all classes": set `classes = ["injection","xss","auth","access-control","ssrf","secrets","crypto","deps","config","logging"]`.
+If "Run all classes": set `classes = ["injection","xss","auth","access-control","ssrf","secrets","crypto","deps","config","logging","business-logic","feature-abuse","data-lifecycle","client-side","http-protocol","ai-llm","resource-exhaustion"]`
+(the core ten + the extended seven; the planner skips any class with no surface in the baseline, so
+non-applicable extended classes — e.g. `ai-llm` on a non-AI app — cost nothing).
 
 **If the file does not exist**, use AskUserQuestion with **multiSelect: true**:
 
-"Which vulnerability classes should the audit cover? (Select all that apply — default is all ten.)"
+"Which vulnerability classes should the audit cover? (Select all that apply — default is all seventeen.)"
 
-Options (multi-select):
+Options (multi-select) — **core ten**:
 - "Injection — SQLi, NoSQLi, command, LFI/RFI, SSTI, XXE, path traversal, deserialization"
 - "XSS — reflected, stored, DOM, framework escape hatches"
 - "Auth — password storage, sessions, JWT, reset flows, MFA, enumeration"
@@ -191,7 +193,19 @@ Options (multi-select):
 - "Configuration — headers, CORS, cookies, debug mode, defaults"
 - "Logging — sensitive data in logs/telemetry/error responses, missing audit logging, log injection (A09)"
 
-Map selections to the class keys above; if none selected, default to all ten. Store as `classes`.
+…and the **extended seven** (design/logic & modern surfaces):
+- "Business logic — state-machine skip/replay, business races, numeric/temporal abuse, insecure fallback (A04)"
+- "Feature abuse — export=exfil, import=injection, search/enumeration oracle, preview/webhook leakage (A04/A01)"
+- "Data lifecycle — multi-tenant isolation, cache/index ACL drift, soft-delete bypass, stale authz, export scope (A01)"
+- "Client-side — DOM XSS, DOM clobbering, prototype pollution, postMessage/CORS, service-worker, XS-Leaks, clickjacking"
+- "HTTP protocol — request smuggling/desync, cache poisoning/deception, host-header trust, response splitting (A05)"
+- "AI/LLM — indirect prompt injection, tool-arg→sink, confused-deputy agency, MCP identity, insecure output"
+- "Resource exhaustion — ReDoS/superlinear parsing, decompression bombs, query amplification, unbounded buffering, descriptor leaks, retry/poison-record storms (A04)"
+
+Map selections to these class keys — core: `injection`, `xss`, `auth`, `access-control`, `ssrf`, `secrets`,
+`crypto`, `deps`, `config`, `logging`; extended: `business-logic`, `feature-abuse`, `data-lifecycle`,
+`client-side`, `http-protocol`, `ai-llm`, `resource-exhaustion`. If none selected, default to all
+seventeen. Store as `classes`.
 
 ## Step 4 — Tooling Check (optional scanners)
 
