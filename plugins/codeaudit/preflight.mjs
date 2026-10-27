@@ -307,7 +307,7 @@ function checkArtifacts() {
  * back into prose — reconciliation by eye over hundreds of sources, hand-written reports that drop the
  * evidence sections. Blocking when a tool the command references is absent; warning when python3 is.
  */
-const TOOLS = ['reconcile.py', 'aggregate.py', 'render.py', 'context.py'];
+const TOOLS = ['reconcile.py', 'aggregate.py', 'render.py', 'context.py', 'recon-coverage.py'];
 function checkTools() {
   const cmd = read(path.join(PLUGIN, 'commands/codeaudit.md'));
   let present = 0;

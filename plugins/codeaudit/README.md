@@ -101,14 +101,20 @@ Three zero-dependency Python scripts the orchestrator runs by path (`$CA/tools/�
 engagement where its absence cost a result:
 
 ```sh
+python3 -I tools/recon-coverage.py outputs/<engagement> --repo <repo>   # Step 6.2: route-shaped files vs recon's inventory → missed families
 python3 -I tools/reconcile.py outputs/<engagement>                 # Step 6.5: enumerated vs verdicted sources → uncited residue
 python3 -I tools/aggregate.py outputs/<engagement> --dry-run       # Step 6.6: parse everything, print contract deviations
 python3 -I tools/aggregate.py outputs/<engagement> --write --relations plan/_relations.json --meta plan/_meta.json
 python3 -I tools/render.py    outputs/<engagement>                 # report.md + exec-summary / remediation-plan / csv / sarif
 ```
 
-`reconcile.py` turns an auditor's "complete" into a proof or a list of files for a follow-up (expanding path
-aliases declared in evidence files). `aggregate.py` de-duplicates, gates on confidence, applies the
+`recon-coverage.py` is the check on the check: `reconcile.py` proves every source recon enumerated got a
+verdict, and says nothing about the files recon never enumerated — a family of routes nobody is sent to is
+not reported missing, it is simply absent. The gate lists every tracked source file with a route-shaped
+marker for its language and compares it with recon's handler inventory; a directory of three or more such
+files with none covered, or under half covered overall, sends recon back on the residue before the threat
+model and the planner inherit the gap. `reconcile.py` turns an auditor's "complete" into a proof or a list of
+files for a follow-up (expanding path aliases declared in evidence files). `aggregate.py` de-duplicates, gates on confidence, applies the
 `privilege_required` caps, splits the four evidence arrays, merges relations and the two permitted
 orchestrator adjustments, and records every malformed input as a `contract_violations` entry instead of
 normalising it away. `render.py` renders the fixed report template plus the operator extras from one

@@ -224,9 +224,9 @@ test('exit codes are the contract: 0 clean, 1 warnings only, 2 blocking', () => 
   } finally { rmSync(bad, { recursive: true, force: true }); }
 });
 
-test('tools: the four Step 6.5–6.7 tools ship and are invoked by the command; a missing one blocks', () => {
+test('tools: the five Step 6.2–6.7 tools ship and are invoked by the command; a missing one blocks', () => {
   const clean = parse(run());
-  assert.equal(clean.stats.tools, 4);
+  assert.equal(clean.stats.tools, 5);
   assert.ok(!clean.problems.some((p) => p.check === 'tools'), 'clean plugin has no tools problem');
 
   const tmp = mkdtempSync(path.join(tmpdir(), 'codeaudit-pf-'));

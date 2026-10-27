@@ -15,7 +15,8 @@ outputs/{engagement}/
 ├── recon/                          # baseline (the foundation)
 │   ├── attack-surface.md           # entry points, sources, sinks, trust boundaries
 │   ├── architecture.md             # stack, frameworks, data flows, security mechanisms
-│   ├── sink-inventory.json         # machine-readable: sinks by class (file:line) + entry_points[] (route↔source map) + ecosystems[] (reference routing + version pins)
+│   ├── sink-inventory.json         # machine-readable: sinks by class (file:line) + entry_points[] (route↔source map) + exported_surface[] + ecosystems[] (reference routing + version pins)
+│   ├── _coverage.json              # written by tools/recon-coverage.py (Step 6.2 gate): route-shaped files vs recon's handler inventory, residue by directory
 │   └── threat-model.json           # the security contract: entry-point trust table, adversaries, properties provided/disclaimed, controls + assumptions, dispositions
 ├── plan/
 │   ├── deployment-plan.json        # which auditors, against which components

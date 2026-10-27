@@ -506,6 +506,74 @@ test('reconcile: a route-less module reconciles its exported_surface sources, no
   rmSync(root, { recursive: true, force: true });
 });
 
+/** A small polyglot repo for the recon-coverage gate: four Express route files in src/api, a worker, helpers. */
+function repoFixture() {
+  const repo = mkdtempSync(path.join(tmpdir(), 'codeaudit-repo-'));
+  for (const n of ['users', 'orders', 'billing', 'admin']) {
+    w(repo, `src/api/${n}.js`, `const r = require('express').Router();\nr.get('/${n}', (req, res) => res.json([]));\nmodule.exports = r;\n`);
+  }
+  w(repo, 'src/workers/mailer.js', `const { Worker } = require('bullmq');\nnew Worker('mail', async (job) => send(job.data));\n`);
+  w(repo, 'src/lib/util.js', 'module.exports = { add: (a, b) => a + b };\n');
+  w(repo, 'src/api/users.test.js', "r.get('/x', () => {});\n");                 // ignored: test file
+  w(repo, 'vendor/thing.js', "app.get('/vendored', () => {});\n");             // ignored: vendored
+  w(repo, 'README.md', '# svc\n');
+  return repo;
+}
+
+test('recon-coverage: a whole route family missed by recon fails the gate; covering it passes with the residue listed', () => {
+  const repo = repoFixture();
+  const out = mkdtempSync(path.join(tmpdir(), 'codeaudit-cov-'));
+  const run = (inv) => {
+    w(out, 'recon/sink-inventory.json', JSON.stringify(inv));
+    let code = 0, text = '';
+    try { text = py('recon-coverage.py', [out, '--repo', repo, '--json'], out); } catch (e) { code = e.status; text = e.stdout; }
+    return { code, r: JSON.parse(text) };
+  };
+  // recon saw only the worker: the whole src/api family is missing → FAIL
+  let { code, r } = run({ entry_points: [], exported_surface: [{ name: 'mailer', handler: 'src/workers/mailer.js:2', sources: [{ in: 'json', name: 'job.data', at: 'src/workers/mailer.js:2' }] }] });
+  assert.equal(code, 1);
+  assert.equal(r.route_shaped_files, 5, '4 api files + the worker; test and vendored files are not counted');
+  assert.equal(r.covered, 1);
+  assert.ok(r.failures.some((f) => /src\/api\/ — 4 route-shaped files, none/.test(f)));
+  assert.ok(r.failures.some((f) => /overall: 1\/5/.test(f)));
+  assert.ok(existsSync(path.join(out, 'recon/_coverage.json')));
+
+  // recon covers three of the four api files + the worker → PASS, one uncovered file listed by directory
+  ({ code, r } = run({ entry_points: ['users', 'orders', 'billing'].map((n) => ({ method: 'GET', path: `/${n}`, handler: `${n} (src/api/${n}.js:2)`, sources: [{ in: 'query', name: 'q', at: `src/api/${n}.js:2` }] })),
+    exported_surface: [{ name: 'mailer', handler: 'src/workers/mailer.js:2', sources: [] }] }));
+  assert.equal(code, 0);
+  assert.equal(r.passed, true);
+  assert.deepEqual(r.uncovered.map((u) => u.file), ['src/api/admin.js']);
+  assert.equal(r.families['src/api'].covered, 3);
+
+  // handler paths given absolute (under the repo) still match
+  ({ code, r } = run({ entry_points: ['users', 'orders', 'billing', 'admin'].map((n) => ({ handler: `${path.join(repo, 'src/api', n + '.js')}:2`, sources: [] })),
+    exported_surface: [{ handler: 'src/workers/mailer.js:2', sources: [] }] }));
+  assert.equal(r.covered, 5);
+  assert.equal(r.uncovered.length, 0);
+
+  // no inventory at all is a failed gate, not a crash
+  rmSync(path.join(out, 'recon/sink-inventory.json'));
+  let code2 = 0;
+  try { py('recon-coverage.py', [out, '--repo', repo], out); } catch (e) { code2 = e.status; }
+  assert.equal(code2, 1);
+  rmSync(repo, { recursive: true, force: true }); rmSync(out, { recursive: true, force: true });
+});
+
+test('recon-coverage: out_of_scope directories are excluded and a silent language is a warning, not a failure', () => {
+  const repo = repoFixture();
+  for (let i = 0; i < 20; i++) w(repo, `svc/py/m${i}.py`, 'def helper(x):\n    return x\n');   // python with no route markers
+  const out = mkdtempSync(path.join(tmpdir(), 'codeaudit-cov-'));
+  w(out, 'recon/sink-inventory.json', JSON.stringify({ entry_points: [], exported_surface: [{ handler: 'src/workers/mailer.js:2', sources: [] }] }));
+  let text = '';
+  try { text = py('recon-coverage.py', [out, '--repo', repo, '--out-of-scope', 'src/api,docs', '--json'], out); } catch (e) { text = e.stdout; }
+  const r = JSON.parse(text);
+  assert.equal(r.route_shaped_files, 1, 'src/api is out of scope; only the worker remains');
+  assert.equal(r.passed, true);
+  assert.ok(r.warnings.some((w_) => /^python: 20 source files and no route-shaped marker/.test(w_)));
+  rmSync(repo, { recursive: true, force: true }); rmSync(out, { recursive: true, force: true });
+});
+
 const CONTEXT = `# Audit context — fx
 <!-- codeaudit-context v1 — operator-owned. -->
 

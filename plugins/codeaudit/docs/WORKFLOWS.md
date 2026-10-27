@@ -33,6 +33,8 @@ Optional pre-configuration:
 1. code-recon  (Task)        → recon/architecture.md, attack-surface.md, sink-inventory.json
         │   the ONLY baseline pass: maps stack, sources, sinks, mechanisms, ecosystems + version pins
         │   WHAT EXISTS
+        │   → tools/recon-coverage.py gates it: every route-shaped source file vs the handler
+        │     inventory; a missed family sends recon back on the residue before anything inherits it
         ▼
 2. threat-modeler (Task)     → recon/threat-model.json
         │   entry-point trust table, adversaries, properties provided/disclaimed,

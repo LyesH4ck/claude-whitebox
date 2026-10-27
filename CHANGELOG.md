@@ -4,6 +4,30 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.77] — 2026-10-27
+
+### Added — `codeaudit` 0.16.0: the recon-coverage gate (the check on the check)
+
+`reconcile.py` proves every source recon enumerated got a verdict. It cannot see the files recon never
+enumerated, and recon, the threat model and the planner can all miss the same family of routes at once —
+after which no auditor is sent there and the report still prints "all in-scope sources traced". Only the
+blind-dig sweep could catch it, one directory per run.
+
+- **`tools/recon-coverage.py`** (Step 6.2, right after recon, before the threat model): lists every tracked
+  source file carrying a route-shaped marker for its language — route registrations, HTTP-method exports,
+  controllers, server actions, queue consumers, cron/webhook/lambda handlers, across JS/TS, Python, PHP,
+  Ruby, Go, JVM, C#, Rust, Elixir, Swift, Dart — minus vendored/generated/test trees and the operator's
+  `out_of_scope`, and checks each against the handler files in `entry_points[]` / `exported_surface[]`.
+  Policy v1: a directory of ≥3 route-shaped files with none covered fails; under 50 % covered overall (≥5
+  files) fails; a language with ≥20 source files and no marker hit warns (the table may not know the
+  stack). Writes `recon/_coverage.json`, prints the residue by directory, exit 1 on a failed gate.
+- **The command** re-dispatches recon once on the residue (as `focus`, extend-never-rewrite), re-runs the
+  gate, and carries anything still uncovered into `coverage_gaps`. A short residue on a passing gate is
+  read, not recorded: a marker hit on a test helper or an example string is noise. **code-recon** is told
+  its inventory is measured and must carry a `file:line` handler for every entry.
+- `tools.test.mjs` +2 (missed family fails / covered passes with residue / absolute handler paths / no
+  inventory; out_of_scope exclusion + silent-language warning); preflight tools count 5.
+
 ## [2.4.76] — 2026-10-27
 
 ### Added — `codeaudit` 0.15.0: fail-open shapes, infrastructure-as-code, and the stacks with no reference file

@@ -357,6 +357,29 @@ that field alone; if it is still empty, continue but note in the audit log and t
 warn the operator (possibly wrong repo or unsupported stack) and ask whether to continue. Log
 `phase":"recon","action":"baseline-complete","sources":<N>,"sinks":<M>`.
 
+**Then gate the baseline mechanically before anything consumes it.** Recon's `complete` is a claim about the
+files it read; the threat model, the planner and every auditor inherit whatever it did not. Run:
+```bash
+python3 -I "$CA/tools/recon-coverage.py" "outputs/{engagement}" --repo "{repo}" --out-of-scope "{out_of_scope}"
+```
+It lists every tracked source file that carries a route-shaped marker for its language (a route
+registration, an HTTP-method export, a controller, a server action, a queue consumer, a cron or webhook
+handler) and checks each against the handler files in `entry_points[]` / `exported_surface[]`. It writes
+`recon/_coverage.json` and prints the uncovered files grouped by directory. Exit `1` is a failed gate: a
+directory of three or more route-shaped files with none in the inventory, or fewer than half of all
+route-shaped files covered.
+- On a failed gate, **re-dispatch code-recon once** with the residue — the uncovered directories, verbatim
+  from the tool's output — as `focus`, telling it to extend `entry_points[]`/`exported_surface[]` (never
+  rewrite) and to say explicitly, for any residue file that is **not** an entry point, what it is. Re-run the
+  tool after it lands.
+- A still-failing gate does not stop the audit, but it changes what the report may claim: log
+  `phase":"recon","action":"coverage-gate","result":"failed","uncovered":<n>` and carry every remaining
+  uncovered file into the final report's `coverage_gaps` ("route-shaped file never inventoried by recon").
+- A passing gate with a short residue is normal: a marker hit on a file that is not an entry point (a test
+  helper, a matcher's own example strings, a docs snippet) is noise, and you record it nowhere. Read the
+  list before deciding — on a real engagement the residue is where the missed family lives.
+Log `phase":"recon","action":"coverage-gate","result":"<passed|failed>","route_shaped":<R>,"covered":<C>,"uncovered":<U>`.
+
 ### Step 6.2b — Threat model (the audit's security contract)
 
 Dispatch the **threat-modeler** agent via `Task`, pointing it at the baseline. Pass `repo`, `engagement`,

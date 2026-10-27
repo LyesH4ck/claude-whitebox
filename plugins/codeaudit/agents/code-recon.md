@@ -262,6 +262,16 @@ Write three deliverables (create dirs with `mkdir -p` first):
    reads both arrays; a route-less module with an empty `exported_surface` reconciles to "nothing to check",
    which is a false proof of coverage.
 
+   **Your inventory is measured, not trusted.** After you finish, the orchestrator runs
+   `tools/recon-coverage.py`, which lists every tracked source file carrying a route-shaped marker for its
+   language and checks each against the `handler` / `sources[].at` files you recorded. A directory of three
+   or more such files with none in your inventory fails the gate and sends you back with that directory as
+   `focus`. So: write the handler `file:line` for **every** entry point and exported-surface item (a bare
+   function name cannot be matched), and when you are re-dispatched on a residue, **extend** the arrays —
+   never rewrite them — and state, for each residue file that is genuinely not an entry point, what it is
+   (a test helper, a client-side route table, an example string) in `attack-surface.md`, so the orchestrator
+   can tell a false marker hit from a miss.
+
    **`ecosystems` is REQUIRED (not optional).** It tells every auditor which
    `skills/code-audit/reference/ecosystems/*` file to load and gives it the pinned versions those files'
    cutoffs are compared against. `key` must be one of `node | python | php | ruby | java-jvm | go | dotnet |
