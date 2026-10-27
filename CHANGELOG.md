@@ -4,6 +4,40 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.74] — 2026-10-27
+
+### Added — `codeaudit` 0.13.0: independent verification of every serious finding (Step 6.5c)
+
+An auditor that has just traced a path is the least adversarial reader of that path. codeaudit-hybride had
+the answer — a second agent whose job is to refute — but only when Codex was in the loop. It is now in the
+core pipeline, between the adversarial sweep and aggregation.
+
+- **`agents/finding-verifier.md`** — receives a batch of ≤6 finding directories and nothing else (no
+  `_safe-*.md`, no recon, no plan, no previous report — the orchestrator is told the independence is its
+  job to protect). Per finding: open the sink, rebuild the path backwards, hunt the refutation in cost order
+  (ecosystem *Safe or non-reportable forms* row → same-variable sanitizer for the slot → non-controllable
+  source → unreachable sink → subsuming precondition → framework default at the pinned version), check git
+  history, ask the fail-open question, then write `verification.md` next to the claim: `confirmed` /
+  `refuted` / `uncertain`, with a `[disposition]` + cited `file:line` **required** for a refutation — "no
+  citation → uncertain" is the rule, as in the hybride verifier. Carries the skipped register.
+- **`aggregate.py`** parses `verification.md`: `confirmed` keeps the finding (adjusted severity → a recorded
+  `severity_revision` by the verifier, caps still apply; adjusted confidence replaces the filer's);
+  `uncertain` holds confidence at `probable`; a cited `refuted` leaves `findings[]`, lands under
+  `tested_not_vulnerable` with that disposition, and is listed under a new top-level `refuted[]` so the
+  removal is visible. An uncited refutation is downgraded to `uncertain` with a violation. A merged
+  duplicate's verdict is adopted when the canonical has none. `--verified-min <severity>` turns every open
+  finding at or above that band with no verdict into a `coverage_gaps` entry (`kind: unverified`).
+  `orchestrator_adjustments.verification_overrides[]` reinstates a refuted finding as `uncertain` when the
+  cited line does not discharge it — reason required, recorded on the finding.
+- **`/codeaudit:codeaudit` Step 6.5c** — select every `high`/`critical` after caps (all findings when the
+  set is ≤12), batch by six, one parallel `Task` message, collect like auditors, spot-check every refutation
+  of a high/critical by opening the cited line, pass `--verified-min high` to the aggregator.
+- **`render.py`** — per-finding *Independent verification* line, a *Refuted by Independent Verification*
+  section, the verification tally in the executive summary, a `verification` column in the CSV and
+  property in SARIF (a refuted finding is not a SARIF result). `REPORT_CONTRACT.md` (`revalidation`,
+  `refuted`, `verification_overrides`), `OUTPUT_STRUCTURE.md` (file format), `WORKFLOWS.md` (step 6b)
+  updated; `preflight.mjs` includes the verifier in the skipped-register check. `tools.test.mjs` +4.
+
 ## [2.4.73] — 2026-10-27
 
 ### Added — `codeaudit` 0.12.0: the skipped register, and findings that keep their identity across runs

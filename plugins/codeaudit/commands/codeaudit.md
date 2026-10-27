@@ -587,6 +587,60 @@ Do not re-run a sweep to try to make it find something.
 
 Log `phase":"sweep","action":"sweeps-complete","blind_dig_target":"<dir|skipped>","exclusion_challenged":"<item|skipped>","exclusion_held":<true|false|null>,"findings":<N>`.
 
+### Step 6.5c — Independent verification (the second opinion on every serious claim)
+
+Every finding so far was written by the agent that found it, and an auditor that has just traced a path is
+the least adversarial reader of that path. This step gives each serious finding a **second agent that tries
+to refute it** from source — rebuilding the trace from the sink instead of trusting the filed one, hunting
+the guard the filer missed, checking git history for a fix — and writes a cited verdict next to the claim.
+On a static audit this pass is where most false positives die, and it is cheap: one read-only agent per
+batch, after all the tracing is done.
+
+1. **Select.** Run the aggregator read-only to see the filed set after caps:
+   ```bash
+   python3 -I "$CA/tools/aggregate.py" "outputs/{engagement}" --dry-run
+   ```
+   Select every finding whose **final** severity (after caps) is `high` or `critical`. When the whole filed
+   set is small (twelve findings or fewer), select all of them — the pass costs less than the arguing it
+   prevents. Skip nothing in the selected band: a finding that "obviously holds" is exactly the kind a
+   second reader is for. Log `phase":"verify","action":"select","selected":<N>,"of":<M>`.
+2. **Batch and dispatch.** Split the selection into batches of at most six finding directories, grouped by
+   class where possible, tagged `v1`, `v2`, …. Dispatch the **finding-verifier** agent via `Task` once per
+   batch, **all in a single parallel message**, `run_in_background=True`. Each brief carries: `repo`,
+   `engagement`, the `batch` tag, the `finding_dirs[]` (full paths), `out_of_scope`, the `ecosystems[]`
+   array verbatim from `recon/sink-inventory.json`, and the threat-model path when Step 6.2b produced one.
+   **Pass nothing else**: no `_safe-*.md`, no recon narrative, no plan, no previous report, and no summary
+   of what the filing auditor concluded — the verifier's independence is the whole value of the step, and
+   it is yours to protect, not the agent's. Log
+   `phase":"verify","action":"dispatch","batches":<B>`.
+3. **Collect.** Treat each verifier like an auditor in the status handling of 6.5 (`complete` /
+   `incomplete` / terminated-without-status) **and read its skipped register**: a directory in its batch
+   with no `verification.md` and no `[skipped]` entry means the batch did not complete. Re-dispatch once on
+   the missing directories; what still lacks a verdict afterwards stays unverified and the aggregator records
+   it under `coverage_gaps` (point 4). Log
+   `phase":"verify","action":"batch-done","batch":"<tag>","confirmed":<c>,"refuted":<r>,"uncertain":<u>,"skipped":<n|"unanswered">`.
+4. **What the verdicts do — and what you may do about them.** The aggregator (Step 6.6) applies them
+   mechanically, so you do not edit a finding by hand:
+   - `confirmed` → the finding stays, carrying `revalidation`; an `Adjusted severity` becomes a recorded
+     `severity_revision` by the verifier (caps still apply afterwards); an `Adjusted confidence` replaces the
+     filer's.
+   - `uncertain` → the finding stays; a `high` confidence drops to `probable` with the verifier's blocker
+     noted.
+   - `refuted` **with a disposition and a cited `file:line`** → the finding leaves `findings[]`, lands under
+     `tested_not_vulnerable` with that disposition and citation, and is listed under the report's `refuted[]`
+     so the removal is visible. A refutation **without** a citation is downgraded to `uncertain` with a
+     contract violation — an uncited opinion never removes a finding.
+   - **Spot-check every refutation of a `critical` or `high` finding yourself**: open the cited line. If the
+     citation does not discharge the finding (the guard is on a sibling variable, the "enum" is user-fed
+     upstream, the version row does not match the pin), reinstate it by writing a
+     `verification_overrides` entry in `plan/_relations.json` — `{ "id", "reason", "by", "evidence" }` —
+     which turns the verdict into `uncertain` and records who overrode it and why. Never delete a
+     `verification.md`, and never override a refutation you merely dislike: the override needs the line
+     that shows the citation wrong.
+   - Pass `--verified-min high` to the aggregator in Step 6.6 so a `high`/`critical` finding that still has
+     no verdict after the re-dispatch is a visible `coverage_gaps` entry, not a quiet omission.
+   Log `phase":"verify","action":"verify-complete","verified":<N>,"confirmed":<c>,"refuted":<r>,"uncertain":<u>,"unverified":<k>`.
+
 ### Step 6.6 — Aggregate + report
 
 The mechanical half of this step is a shipped tool; run it, read its violations, then do the judgement half:
@@ -594,7 +648,8 @@ The mechanical half of this step is a shipped tool; run it, read its violations,
 python3 -I "$CA/tools/aggregate.py" "outputs/{engagement}" --dry-run          # parse everything, write nothing
 python3 -I "$CA/tools/aggregate.py" "outputs/{engagement}" --write \
         --relations outputs/{engagement}/plan/_relations.json --meta outputs/{engagement}/plan/_meta.json \
-        {--previous "{previous_report}" when set} {--accepted "{accepted_file}" when set}
+        {--previous "{previous_report}" when set} {--accepted "{accepted_file}" when set} \
+        --verified-min high
 ```
 `--dry-run` prints every contract deviation it found (a `Severity` outside the enum, a `tested_not_vulnerable`
 line without a `[disposition]`, a `source` with no `file:line`) and the per-finding table
@@ -707,8 +762,9 @@ The rules it implements are the ones below — read them so you know what you ar
    `file:line` (see REPORT_CONTRACT `source` rule).
 2. Present a findings summary to the operator via AskUserQuestion before writing the final report (total;
    critical/high/medium/low/info counts; confidence breakdown; top 3; coverage gaps; **skipped paths**, if
-   any; and, when `--previous` ran, the `run_diff` line — `new / persisting / not re-found` — plus the
-   `accepted_risk` count when `--accepted` ran). Confirm: "Write the final report now?"
+   any; the **verification line** — verified / confirmed / uncertain / refuted, and which refutations you
+   spot-checked or overrode; and, when `--previous` ran, the `run_diff` line — `new / persisting / not
+   re-found` — plus the `accepted_risk` count when `--accepted` ran). Confirm: "Write the final report now?"
 3. On confirmation, produce the deliverables **exactly per** `$CA/skills/code-audit/reference/REPORT_CONTRACT.md`:
    - `outputs/{engagement}/codeaudit-report.json` — fixed schema (engagement/repo/commit/target_url
      metadata, findings[] with file:line/source/sink/slot/confidence/owasp/**`privilege_required`** **and

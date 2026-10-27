@@ -213,7 +213,7 @@ function checkSafeFileContract() {
  */
 function checkSkippedRegister() {
   let checked = 0;
-  const agents = agentFiles().filter((f) => /-auditor\.md$|adversarial-sweep\.md$/.test(f));
+  const agents = agentFiles().filter((f) => /-auditor\.md$|adversarial-sweep\.md$|finding-verifier\.md$/.test(f));
   for (const f of agents) {
     checked++;
     if (!/SKIPPED:\s*none/.test(read(f))) {

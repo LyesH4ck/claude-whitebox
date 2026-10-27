@@ -52,7 +52,12 @@ Optional pre-configuration:
         │              (context isolation is the method — it prevents anchoring)
         │   challenge-exclusion: take one exclusion the AUDIT made and try to refute it
         ▼
-7. aggregate + report        → de-dup → relations (duplicates/subsumed/chains) → confidence gate
+6b. finding-verifier (parallel Task, batches of ≤6)  → findings/finding-*/verification.md
+        │   every high/critical finding (or all, on a small set) gets a SECOND agent that tries to
+        │   refute it from source — rebuilt trace, guard hunt, git history — and writes a cited
+        │   verdict: confirmed / refuted (needs disposition + file:line) / uncertain
+        ▼
+7. aggregate + report        → de-dup → verification (refuted → tested_not_vulnerable) → relations
                              → privilege_required severity caps → OPERATOR CONFIRMS
                              → codeaudit-report.json + report.md (+ optional formats)
 ```

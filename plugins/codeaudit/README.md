@@ -124,6 +124,17 @@ of fixes. `--accepted` reads the operator's `.codeaudit-accepted.json` (fingerpr
 an accepted risk stays listed, keeps its rating, leaves the tally, and becomes a SARIF suppression. An
 acceptance is never inherited from an older report — the file is the only authority.
 
+## The second opinion (finding-verifier)
+
+After the sweep and before aggregation, every `high`/`critical` finding (every finding, on a small set) goes
+to a **finding-verifier**: a fresh agent that gets the claim and nothing else, rebuilds the path from the
+sink, hunts the guard the filer missed, checks git history, and writes a cited verdict next to the claim.
+`confirmed` keeps the finding, `uncertain` holds it at `probable`, and `refuted` — only with a disposition
+and the `file:line` that discharges it — moves it to *Vectors Tested — Not Vulnerable* and lists it under
+`refuted[]` so the removal is visible. An uncited refutation is downgraded to `uncertain`; the orchestrator
+spot-checks every refutation of a serious finding and can reinstate one with a recorded reason. This is the
+pass where most false positives of a static audit die, and it costs one read-only agent per six findings.
+
 ## The skipped register
 
 Before announcing, every auditor answers one question in writing: *did I decline, refuse, stop partway or not

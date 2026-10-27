@@ -367,6 +367,122 @@ test('render: run diff, skipped register, fingerprints and accepted risks reach 
   rmSync(prevRoot, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
 });
 
+function verification(verdict, { disposition = 'none', cited = 'none', sev = 'none', conf = 'none', reasoning = 'Rebuilt the path; the guard is on the same variable.' } = {}) {
+  return `# Verification — x
+**Verdict**: ${verdict}
+**Disposition**: ${disposition}
+**Cited**: ${cited}
+**Adjusted severity**: ${sev}
+**Adjusted confidence**: ${conf}
+**Verifier**: finding-verifier (batch v1)
+
+## Reasoning
+${reasoning}
+
+## Rebuilt trace
+src/handlers/a.ts:10 → src/db/repo.ts:99
+`;
+}
+
+test('verification: confirmed adjusts, uncertain demotes, refuted leaves findings[] into tested_not_vulnerable + refuted[]', () => {
+  const root = fixture();
+  // inj-001: confirmed with a severity correction down to high and confidence held
+  w(root, 'findings/finding-inj-001/verification.md', verification('confirmed', { sev: 'high', reasoning: 'Rebuilt; reachable only after login, so critical overstates it.' }));
+  // ac-001: refuted with a cited guard
+  w(root, 'findings/finding-ac-001/verification.md', verification('refuted', { disposition: 'guard_present', cited: 'src/mw/auth.ts:9', reasoning: 'ownerId is compared to the session principal at auth.ts:9 before findById.' }));
+  // xss-001 is unconfirmed anyway; give it an uncertain verdict to check it stays out of findings[]
+  w(root, 'findings/finding-xss-001/verification.md', verification('uncertain'));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--verified-min', 'high'], root);
+  const r = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  const by = Object.fromEntries(r.findings.map((f) => [f.id, f]));
+
+  assert.equal(by['finding-inj-001'].revalidation.verdict, 'confirmed');
+  assert.equal(by['finding-inj-001'].severity, 'high');
+  assert.equal(by['finding-inj-001'].severity_revision.by, 'finding-verifier (batch v1)');
+  assert.equal(by['finding-inj-001'].severity_revision.from, 'critical');
+  assert.equal(by['finding-inj-001'].severity_cap_applied, null, 'the verifier brought it below the authenticated cap');
+
+  assert.ok(!by['finding-ac-001'], 'a cited refutation removes the finding');
+  assert.equal(r.refuted.length, 1);
+  assert.equal(r.refuted[0].id, 'finding-ac-001');
+  assert.equal(r.refuted[0].cited, 'src/mw/auth.ts:9');
+  const tnv = r.tested_not_vulnerable.find((t) => t.refuted_finding === 'finding-ac-001');
+  assert.equal(tnv.disposition, 'guard_present');
+  assert.match(tnv.detail, /refuted by independent verification/);
+  assert.deepEqual(r.summary, { informational: 0, low: 0, medium: 0, high: 1, critical: 0, total: 1, accepted_risk: 0 });
+  assert.equal(r.aggregation_stats.verified, 2, 'inj-001 + ac-001 (xss-001 never reached findings[])');
+  assert.equal(r.aggregation_stats.refuted, 1);
+  assert.equal(r.aggregation_stats.unverified_at_or_above_min, 0);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('verification: an uncited refutation is downgraded to uncertain, demotes high→probable, and is a violation', () => {
+  const root = fixture();
+  w(root, 'findings/finding-inj-001/verification.md', verification('refuted', { reasoning: 'Looks parameterised to me.' }));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json'], root);
+  const r = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  const inj = r.findings.find((f) => f.id === 'finding-inj-001');
+  assert.ok(inj, 'the finding stays');
+  assert.equal(inj.revalidation.verdict, 'uncertain');
+  assert.equal(inj.confidence, 'probable');
+  assert.match(inj.confidence_note, /verifier uncertain/);
+  assert.equal(r.refuted.length, 0);
+  assert.ok(r.contract_violations.some((v) => v.where === 'finding-inj-001' && /refutes without/.test(v.issue)));
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('verification: --verified-min flags an unverified high finding; a verification_overrides entry reinstates a refuted one', () => {
+  const root = fixture();
+  w(root, 'findings/finding-ac-001/verification.md', verification('refuted', { disposition: 'not_attacker_controlled', cited: 'src/mw/auth.ts:9', reasoning: 'id comes from a server enum.' }));
+  const relp = path.join(root, 'plan/_relations.json');
+  const rel = JSON.parse(readFileSync(relp, 'utf8'));
+  rel.orchestrator_adjustments.verification_overrides = [
+    { id: 'finding-ac-001', reason: 'the "enum" at auth.ts:9 is filled from req.body upstream (users.ts:30)', by: 'orchestrator', evidence: 'src/api/users.ts:30' },
+    { id: 'finding-inj-001', reason: 'not refuted at all', by: 'orchestrator' },
+  ];
+  writeFileSync(relp, JSON.stringify(rel));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--relations', 'plan/_relations.json', '--verified-min', 'high'], root);
+  const r = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  const by = Object.fromEntries(r.findings.map((f) => [f.id, f]));
+  assert.ok(by['finding-ac-001'], 'reinstated');
+  assert.equal(by['finding-ac-001'].revalidation.verdict, 'uncertain');
+  assert.match(by['finding-ac-001'].revalidation.overridden.reason, /req\.body upstream/);
+  assert.equal(r.refuted.length, 0);
+  assert.ok(r.contract_violations.some((v) => v.where === 'finding-inj-001' && /not refuted/.test(v.issue)));
+  // inj-001 ends at medium (class-owner override in the fixture) so it is below the high threshold; raise it to check the gap
+  const gap = r.coverage_gaps.filter((g) => g.kind === 'unverified');
+  assert.equal(gap.length, 0, 'nothing open at/above high is unverified in this fixture');
+  const rel2 = JSON.parse(readFileSync(relp, 'utf8')); rel2.orchestrator_adjustments.severity_overrides = []; rel2.orchestrator_adjustments.verification_overrides = [];
+  writeFileSync(relp, JSON.stringify(rel2));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--relations', 'plan/_relations.json', '--verified-min', 'high'], root);
+  const r2 = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  const gap2 = r2.coverage_gaps.filter((g) => g.kind === 'unverified');
+  assert.equal(gap2.length, 1);
+  assert.match(gap2[0].item, /^finding-inj-001/);
+  assert.equal(r2.aggregation_stats.unverified_at_or_above_min, 1);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('render: verification reaches the report, the CSV and SARIF', () => {
+  const root = fixture();
+  w(root, 'findings/finding-inj-001/verification.md', verification('confirmed'));
+  w(root, 'findings/finding-ac-001/verification.md', verification('refuted', { disposition: 'guard_present', cited: 'src/mw/auth.ts:9', reasoning: 'compared to the session principal at auth.ts:9.' }));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--relations', 'plan/_relations.json'], root);
+  py('render.py', [root], root);
+  const md = readFileSync(path.join(root, 'report.md'), 'utf8');
+  assert.ok(md.includes('## Refuted by Independent Verification'));
+  assert.ok(md.includes('`finding-ac-001` (access-control, filed low)'));
+  assert.ok(md.includes('- **Independent verification:** confirmed —'));
+  assert.ok(md.includes('Independent verification: 2 verdicts'));
+  const csv = readFileSync(path.join(root, 'findings.csv'), 'utf8').split('\n');
+  assert.ok(csv[0].includes(',verification,'));
+  assert.ok(csv[1].includes(',confirmed,'));
+  const sarif = JSON.parse(readFileSync(path.join(root, 'codeaudit.sarif'), 'utf8'));
+  assert.equal(sarif.runs[0].results.length, 1, 'the refuted finding is not a SARIF result');
+  assert.equal(sarif.runs[0].results[0].properties.codeaudit.verification, 'confirmed');
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('render: produces the five deliverables from the report and the narrative', () => {
   const root = fixture();
   py('aggregate.py', [root, '--write', '--relations', 'plan/_relations.json', '--meta', 'plan/_meta.json'], root);

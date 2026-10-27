@@ -108,6 +108,38 @@ def parse_finding(d):
     f["shard"] = "-".join(fid.split("-")[2:-1]) or None
     return f
 
+VERDICTS = {"confirmed", "refuted", "uncertain"}
+
+def parse_verification(d):
+    """`verification.md` written by the finding-verifier (Step 6.5c). Returns None when absent. A refutation
+    without a valid disposition AND a cited file:line is downgraded to `uncertain` with a violation — the
+    verifier's own rule ("no citation → uncertain"), enforced here so an uncited opinion never removes a
+    finding from the report."""
+    fid = os.path.basename(d); p = os.path.join(d, "verification.md")
+    if not os.path.exists(p): return None
+    try: body = open(p, errors="replace").read()
+    except OSError: viol(fid, "verification.md unreadable"); return None
+    v = {"verdict": (field(body, "Verdict") or "").strip().lower()}
+    if v["verdict"] not in VERDICTS:
+        viol(fid, f"verification.md verdict missing/invalid: {v['verdict']!r} -> treated as uncertain"); v["verdict"] = "uncertain"
+    disp = (field(body, "Disposition") or "none").strip().lower()
+    v["disposition"] = disp if disp in DISP else None
+    cited = field(body, "Cited") or ""; m = FL.search(cited)
+    v["cited"] = f"{m.group(1)}:{m.group(2)}" if m else None
+    adj_s = (field(body, "Adjusted severity") or "none").strip().lower()
+    v["adjusted_severity"] = adj_s if adj_s in SEV else None
+    if adj_s not in SEV and adj_s != "none": viol(fid, f"verification.md adjusted severity invalid: {adj_s!r} -> ignored")
+    adj_c = (field(body, "Adjusted confidence") or "none").strip().lower()
+    v["adjusted_confidence"] = adj_c if adj_c in ("high", "probable") else None
+    if adj_c not in ("high", "probable", "none"): viol(fid, f"verification.md adjusted confidence invalid: {adj_c!r} -> ignored")
+    v["by"] = (field(body, "Verifier") or "finding-verifier").strip()
+    v["reasoning"] = section(body, "Reasoning")[:1500] or None
+    rt = section(body, "Rebuilt trace"); v["rebuilt_trace"] = [x.strip() for x in re.split(r"→|->", rt.splitlines()[0])] if rt else None
+    if v["verdict"] == "refuted" and (not v["disposition"] or not v["cited"]):
+        viol(fid, "verification.md refutes without a valid [disposition] + cited file:line -> treated as uncertain")
+        v["verdict"] = "uncertain"; v["uncited_refutation"] = True
+    return v
+
 def dedup_key(f):
     s = FL.search(f["source"] or ""); loc = f.get("location") or {}
     return (f["vuln_class"], f"{loc.get('file')}:{loc.get('line')}", f"{s.group(1)}:{s.group(2)}" if s else None, f["slot_type"])
@@ -200,6 +232,8 @@ def parse_safe(p):
 
 # ------------------------------------------------------------------ run
 findings = [f for f in (parse_finding(d) for d in sorted(glob.glob(f"{OUT}/findings/finding-*"))) if f]
+verifications = {os.path.basename(d): parse_verification(d) for d in sorted(glob.glob(f"{OUT}/findings/finding-*"))}
+verifications = {k: v for k, v in verifications.items() if v}
 safe_all = {k: [] for k in ("tested_not_vulnerable", "design_properties", "unverified_assumptions", "coverage_gaps")}
 safe_files = sorted(glob.glob(f"{OUT}/findings/_safe-*.md"))
 for p in safe_files:
@@ -214,11 +248,45 @@ for f in findings:
     else:
         seen[k] = f; kept.append(f)
 
-# confidence gate
+# independent verification (Step 6.5c). The canonical finding's own verdict wins; a merged duplicate's
+# verdict is adopted when the canonical has none. A refutation removes the finding from findings[] and
+# records it under tested_not_vulnerable with the verifier's disposition and citation, and under
+# `refuted[]` so the removal is visible. `verification_overrides` (relations file) can reinstate one.
+rel = arg("--relations")
+rel_doc = json.load(open(rel)) if rel and os.path.exists(rel) else {}
+keep_override = {o["id"]: o for o in rel_doc.get("orchestrator_adjustments", {}).get("verification_overrides", []) if isinstance(o, dict) and o.get("id")}
+refuted = []; refuted_tnv = []
+for f in kept:
+    v = verifications.get(f["id"]) or next((verifications[m] for m in f.get("merged_ids", []) if m in verifications), None)
+    f["revalidation"] = None
+    if not v: continue
+    f["revalidation"] = {k: v.get(k) for k in ("verdict", "disposition", "cited", "reasoning", "by", "rebuilt_trace", "adjusted_severity", "adjusted_confidence")}
+    if v["verdict"] == "refuted" and f["id"] in keep_override:
+        o = keep_override.pop(f["id"])
+        if not o.get("reason"): viol(f["id"], "verification_overrides entry has no reason — override ignored")
+        else:
+            f["revalidation"]["verdict"] = "uncertain"; f["revalidation"]["overridden"] = {"by": o.get("by", "orchestrator"), "reason": o["reason"], "evidence": o.get("evidence")}
+            v = {**v, "verdict": "uncertain"}
+    if v["verdict"] == "uncertain" and f["confidence"] == "high":
+        f["confidence"] = "probable"; f["confidence_note"] = ((f.get("confidence_note") or "") + " verifier uncertain: " + (v.get("reasoning") or "")[:160]).strip()
+    if v["verdict"] == "confirmed":
+        if v.get("adjusted_confidence"): f["confidence"] = v["adjusted_confidence"]
+        if v.get("adjusted_severity") and v["adjusted_severity"] != f["severity_reported"]:
+            f["severity_reported_by_filer"] = f["severity_reported"]; f["severity_reported"] = v["adjusted_severity"]
+            f["severity_revision"] = {"from": f["severity_reported_by_filer"], "to": v["adjusted_severity"], "by": v["by"], "reason": (v.get("reasoning") or "")[:300], "evidence": f"findings/{f['id']}/verification.md"}
+for oid in keep_override: viol(oid, "verification_overrides targets a finding that was not refuted (or does not exist)")
+
+# confidence gate (+ refutation gate)
 gaps_from_unconfirmed = []
 final = []
 for f in kept:
-    if f["confidence"] == "unconfirmed" or f["confidence"] is None:
+    rv = f.get("revalidation")
+    if rv and rv["verdict"] == "refuted":
+        refuted.append({"id": f["id"], "title": f["title"], "vuln_class": f["vuln_class"], "severity_reported": f["severity_reported"],
+                        "disposition": rv["disposition"], "cited": rv["cited"], "reasoning": rv["reasoning"], "by": rv["by"], "evidence": f"findings/{f['id']}/verification.md"})
+        refuted_tnv.append({"vuln_class": f["vuln_class"], "disposition": rv["disposition"], "shard": "finding-verifier",
+                            "detail": f"{f['title']} — filed as {f['id']}, refuted by independent verification: {(rv['reasoning'] or '')[:300]} ({rv['cited']})", "refuted_finding": f["id"]})
+    elif f["confidence"] == "unconfirmed" or f["confidence"] is None:
         gaps_from_unconfirmed.append({"item": f"{f['id']}: {f['title']}", "reason": "confidence unconfirmed/missing — not a finding per contract", "recommended_action": "re-trace", "vuln_class": f["vuln_class"]})
     else:
         final.append(apply_caps(f))
@@ -312,7 +380,8 @@ report = {
     "findings": final,
     "summary": summary,
     "run_diff": run_diff,
-    "tested_not_vulnerable": safe_all["tested_not_vulnerable"],
+    "refuted": refuted,
+    "tested_not_vulnerable": safe_all["tested_not_vulnerable"] + refuted_tnv,
     "design_properties": safe_all["design_properties"],
     "unverified_assumptions": safe_all["unverified_assumptions"],
     "coverage_gaps": safe_all["coverage_gaps"] + gaps_from_unconfirmed,
@@ -323,11 +392,15 @@ report = {
                           "caps_applied": sum(1 for f in final if f.get("severity_cap_applied")),
                           "endpoints_resolved": sum(1 for f in final if f.get("endpoint")),
                           "accepted_risk": summary["accepted_risk"], "accepted_unmatched": accepted_unmatched,
-                          "skipped_paths": sum(1 for g in safe_all["coverage_gaps"] if g.get("kind") == "skipped")},
+                          "skipped_paths": sum(1 for g in safe_all["coverage_gaps"] if g.get("kind") == "skipped"),
+                          "verified": sum(1 for f in final if f.get("revalidation")) + len(refuted),
+                          "verified_confirmed": sum(1 for f in final if (f.get("revalidation") or {}).get("verdict") == "confirmed"),
+                          "verified_uncertain": sum(1 for f in final if (f.get("revalidation") or {}).get("verdict") == "uncertain"),
+                          "refuted": len(refuted)},
 }
-rel = arg("--relations")
+
 if rel and os.path.exists(rel):
-    r = json.load(open(rel));
+    r = rel_doc;
     for k in ("duplicates", "subsumed", "chains"): report["finding_relations"][k] += r.get(k, [])
     # orchestrator adjustments (Step 6.6 judgement, evidence-cited): severity revisions from a class owner's
     # addendum, and additional locations found by a follow-up for an existing finding. Caps still apply.
@@ -347,19 +420,37 @@ if rel and os.path.exists(rel):
         f["locations_note"] = o.get("note")
     if any(f.get("severity_revision") for f in final):
         summary.update(recompute_summary()); report["summary"] = summary
+# --verified-min <severity>: when the verification pass ran, every open finding at or above this band must
+# carry a verdict; one that does not is a coverage gap (an unverified claim), not a silent omission.
+vmin = arg("--verified-min")
+if vmin:
+    if vmin not in SEV: viol("verified-min", f"invalid severity {vmin!r} — check skipped")
+    else:
+        for f in final:
+            if f["status"] != "accepted-risk" and f["severity"] and SEV.index(f["severity"]) >= SEV.index(vmin) and not f.get("revalidation"):
+                report["coverage_gaps"].append({"item": f"{f['id']}: {f['title']}", "reason": f"{f['severity']} finding with no independent verification (finding-verifier pass ran with --verified-min {vmin})", "recommended_action": "dispatch finding-verifier on this directory", "vuln_class": f["vuln_class"], "kind": "unverified"})
+                viol(f["id"], f"{f['severity']} finding not independently verified")
+    report["aggregation_stats"]["unverified_at_or_above_min"] = sum(1 for g in report["coverage_gaps"] if g.get("kind") == "unverified")
+
 if meta_doc: report = {**meta_doc, **report}
 
 print(f"findings dirs {len(findings)} | after dedup {len(kept)} | final {len(final)} | vuln tally {summary['total']} | informational {summary['informational']} | accepted-risk {summary['accepted_risk']}")
 print("severity (after caps, open findings):", {s: summary[s] for s in SEV})
 print(f"caps applied: {report['aggregation_stats']['caps_applied']} | endpoints resolved: {report['aggregation_stats']['endpoints_resolved']} | safe files {len(safe_files)}")
 print("evidence arrays:", {k: len(v) for k, v in safe_all.items()}, "+ unconfirmed->gaps", len(gaps_from_unconfirmed), "| skipped paths", report["aggregation_stats"]["skipped_paths"])
+st = report["aggregation_stats"]
+print(f"verification: {st['verified']} verdicts — confirmed {st['verified_confirmed']} | uncertain {st['verified_uncertain']} | refuted {st['refuted']} (moved to tested_not_vulnerable)" + (f" | unverified ≥ {vmin}: {st.get('unverified_at_or_above_min', 0)}" if vmin else ""))
+if DRY:
+    unv = [f for f in final if not f.get("revalidation") and f["severity"] in ("high", "critical") and f["status"] != "accepted-risk"]
+    if unv: print("high/critical without independent verification: " + ", ".join(f["id"] for f in unv))
 if run_diff: print(f"run diff vs {run_diff['previous_engagement'] or prev_path}: new {len(run_diff['new'])} | persisting {len(run_diff['persisting'])} | not re-found {len(run_diff['not_refound'])} (verify, do not assume fixed)")
 if accepted_unmatched: print(f"accepted-risk fingerprints matching no finding: {len(accepted_unmatched)} — {', '.join(accepted_unmatched[:5])}")
 print(f"contract violations: {len(violations)}")
 for v in violations[:40]: print(f"  ! {v['where']}: {v['issue']}")
 if DRY:
-    print("\nper-finding (id | fingerprint | class | reported->final | conf | priv | change | endpoint):")
-    for f in final: print(f"  {f['id']:34} {f['fingerprint']:22} {f['vuln_class']:18} {f['severity_reported']}->{f['severity']:<13} {f['confidence']:<8} {f['privilege_required']:<13} {(f.get('change') or '-'):<10} {(f.get('endpoint') or {}).get('path','-')}{'  ACCEPTED-RISK' if f['status'] == 'accepted-risk' else ''}{'  note: ' + f['privilege_note'][:50] if f.get('privilege_note') else ''}")
+    print("\nper-finding (id | fingerprint | class | reported->final | conf | priv | verified | change | endpoint):")
+    for f in final: print(f"  {f['id']:34} {f['fingerprint']:22} {f['vuln_class']:18} {f['severity_reported']}->{f['severity']:<13} {f['confidence']:<8} {f['privilege_required']:<13} {((f.get('revalidation') or {}).get('verdict') or '-'):<10} {(f.get('change') or '-'):<10} {(f.get('endpoint') or {}).get('path','-')}{'  ACCEPTED-RISK' if f['status'] == 'accepted-risk' else ''}{'  note: ' + f['privilege_note'][:50] if f.get('privilege_note') else ''}")
+    for r_ in refuted: print(f"  {r_['id']:34} REFUTED [{r_['disposition']}] at {r_['cited']} — {r_['title'][:60]}")
 else:
     json.dump(report, open(f"{OUT}/codeaudit-report.json", "w"), indent=1, ensure_ascii=False)
     print(f"wrote {OUT}/codeaudit-report.json")

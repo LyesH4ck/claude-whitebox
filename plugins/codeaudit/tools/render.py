@@ -75,7 +75,10 @@ if s.get("accepted_risk"): w(f"| accepted risk (listed, excluded from the tally)
 w("")
 conf = collections.Counter(f["confidence"] for f in findings)
 revised = sum(1 for f in findings if f.get("severity_revision"))
-w(f"Confidence: {conf.get('high',0)} high · {conf.get('probable',0)} probable · 0 unconfirmed in `findings[]` (unconfirmed items are listed under Coverage Gaps). Severity caps from `privilege_required` applied at aggregation: {R['aggregation_stats']['caps_applied']}." + (f" {plural(revised, 'severity')} revised by a class owner after filing (see the finding's *Severity revision* line)." if revised else "") + "\n")
+w(f"Confidence: {conf.get('high',0)} high · {conf.get('probable',0)} probable · 0 unconfirmed in `findings[]` (unconfirmed items are listed under Coverage Gaps). Severity caps from `privilege_required` applied at aggregation: {R['aggregation_stats']['caps_applied']}." + (f" {plural(revised, 'severity')} revised after filing (see the finding's *Severity revision* line)." if revised else "") + "\n")
+AS = R.get("aggregation_stats", {})
+if AS.get("verified"):
+    w(f"Independent verification: {AS['verified']} verdicts from the finding-verifier — {AS.get('verified_confirmed', 0)} confirmed, {AS.get('verified_uncertain', 0)} uncertain (confidence held at `probable`), {AS.get('refuted', 0)} refuted and moved to *Vectors Tested — Not Vulnerable*." + (f" {AS['unverified_at_or_above_min']} finding(s) at or above the verification threshold carry no verdict and are listed under Coverage Gaps." if AS.get("unverified_at_or_above_min") else "") + "\n")
 
 RD = R.get("run_diff")
 if RD:
@@ -137,7 +140,14 @@ for f in findings:
     rem = section(body, "Remediation")
     if rem: w(f"- **Remediation:** {one_para(rem, 900)}")
     if f.get("prior_art"): w(f"- **Prior art:** {one_para(f['prior_art'], 400)}")
-    w(f"- **Depth layer:** `{os.path.dirname(f['evidence'])}/` (description.md, trace.md, snippet.txt)")
+    rv = f.get("revalidation")
+    if rv:
+        tail = f" (cited `{rv['cited']}`)" if rv.get("cited") else ""
+        ov = f" — refutation overridden by {rv['overridden'].get('by')}: {rv['overridden'].get('reason')}" if rv.get("overridden") else ""
+        w(f"- **Independent verification:** {rv['verdict']} — {one_para(rv.get('reasoning') or '', 420)}{tail}{ov}")
+    else:
+        w("- **Independent verification:** none")
+    w(f"- **Depth layer:** `{os.path.dirname(f['evidence'])}/` (description.md, trace.md, snippet.txt{', verification.md' if rv else ''})")
     w("")
 
 # evidence arrays grouped by class
@@ -145,6 +155,14 @@ def grouped(items, key="vuln_class"):
     g = collections.OrderedDict()
     for it in items: g.setdefault(it.get(key) or "unknown", []).append(it)
     return g
+
+RF = R.get("refuted") or []
+if RF:
+    w("## Refuted by Independent Verification\n")
+    w(f"{plural(len(RF), 'finding')} filed by an auditor and refuted by the finding-verifier, which rebuilt the path from the sink and cited the line that discharges it. Each is kept here and under *Vectors Tested — Not Vulnerable* so the removal is visible; the filed write-up stays in the finding's directory next to `verification.md`.\n")
+    for r_ in RF:
+        w(f"- `{r_['id']}` ({r_['vuln_class']}, filed {r_.get('severity_reported')}) — {r_['title']}  \n  [{r_.get('disposition')}] {one_para(r_.get('reasoning') or '', 360)} (cited `{r_.get('cited')}`)")
+    w("")
 
 w("## Vectors Tested — Not Vulnerable\n")
 tnv = R["tested_not_vulnerable"]
@@ -276,10 +294,10 @@ open(f"{OUT}/remediation-plan.md", "w").write("\n".join(P))
 # ------------------------------------------------------------------ findings.csv
 with open(f"{OUT}/findings.csv", "w", newline="") as fh:
     cw = csv.writer(fh)
-    cw.writerow(["id", "fingerprint", "status", "change", "first_seen", "vuln_class", "severity", "severity_reported", "confidence", "privilege_required", "file", "line", "endpoint", "cwe", "owasp", "title", "evidence"])
+    cw.writerow(["id", "fingerprint", "status", "change", "first_seen", "verification", "vuln_class", "severity", "severity_reported", "confidence", "privilege_required", "file", "line", "endpoint", "cwe", "owasp", "title", "evidence"])
     for f in findings:
         loc = f.get("location") or {}; e = f.get("endpoint") or {}
-        cw.writerow([f["id"], f.get("fingerprint") or "", f.get("status") or "open", f.get("change") or "", f.get("first_seen") or "", f["vuln_class"], f["severity"], f.get("severity_reported_by_filer") or f.get("severity_reported"), f["confidence"], f["privilege_required"],
+        cw.writerow([f["id"], f.get("fingerprint") or "", f.get("status") or "open", f.get("change") or "", f.get("first_seen") or "", (f.get("revalidation") or {}).get("verdict") or "", f["vuln_class"], f["severity"], f.get("severity_reported_by_filer") or f.get("severity_reported"), f["confidence"], f["privilege_required"],
                      loc.get("file"), loc.get("line"), f"{e.get('method','')} {e.get('path','')}".strip(), f.get("cwe") or "", f.get("owasp") or "", f["title"], f["evidence"]])
 
 # ------------------------------------------------------------------ codeaudit.sarif
@@ -297,7 +315,8 @@ for f in findings:
         "locations": [{"physicalLocation": {"artifactLocation": {"uri": loc.get("file"), "uriBaseId": "%SRCROOT%"}, "region": {"startLine": int(loc.get("line") or 1)}}}],
         # `codeaudit/fingerprint` is the cross-run identity (stable across line moves); the id is per-run.
         "partialFingerprints": {"codeaudit/id": f["id"], **({"codeaudit/fingerprint": f["fingerprint"]} if f.get("fingerprint") else {})},
-        "properties": {"codeaudit": {k: f.get(k) for k in ("id", "fingerprint", "status", "change", "first_seen", "vuln_class", "severity", "confidence", "privilege_required", "source", "sink", "slot_type", "endpoint", "severity_cap_applied")}},
+        "properties": {"codeaudit": {**{k: f.get(k) for k in ("id", "fingerprint", "status", "change", "first_seen", "vuln_class", "severity", "confidence", "privilege_required", "source", "sink", "slot_type", "endpoint", "severity_cap_applied")},
+                                     "verification": (f.get("revalidation") or {}).get("verdict")}},
     }
     # SARIF baselineState is the standard way to say "new vs unchanged since the baseline run".
     if f.get("change") in ("new", "persisting"): res["baselineState"] = {"new": "new", "persisting": "unchanged"}[f["change"]]

@@ -194,6 +194,25 @@ A run is **incomplete** if `report.md` does not exist.
   list of fixes**: a finding can vanish because the code was fixed, because the file was renamed, because
   an auditor skipped it, or because this run's recon never reached it. Confirm each with git history or a
   focused re-dispatch before anything is marked `remediated`.
+- **`revalidation`** (aggregator-written, every finding; `null` when the finding-verifier did not examine
+  it) — the independent second opinion from Step 6.5c: `{ verdict: confirmed | uncertain, disposition,
+  cited, reasoning, by, rebuilt_trace, adjusted_severity, adjusted_confidence, overridden? }`. A
+  `confirmed` with an adjusted severity shows up as a `severity_revision` by the verifier (caps still apply);
+  an `uncertain` holds the finding's confidence at `probable`. A `refuted` verdict never appears here — a
+  refuted finding is not in `findings[]` (next field). `overridden` records an orchestrator
+  `verification_overrides` entry that reinstated a refuted finding as `uncertain`, with who and why.
+- **`refuted[]`** (top level) — findings an auditor filed and the finding-verifier refuted **with a
+  disposition and a cited `file:line`**: `{ id, title, vuln_class, severity_reported, disposition, cited,
+  reasoning, by, evidence }`. Each is also appended to `tested_not_vulnerable` with that disposition, so a
+  refutation is a rule-out like any other — and the write-up stays on disk in the finding's directory next to
+  its `verification.md`. A refutation without a citation is downgraded to `uncertain` at aggregation with a
+  recorded violation: an uncited opinion never removes a finding. `--verified-min <severity>` adds a
+  `coverage_gaps` entry (`kind: "unverified"`) for every open finding at or above that band that carries no
+  verdict, so "the pass ran" cannot hide "the pass skipped this one".
+- **`orchestrator_adjustments.verification_overrides[]`** (input, in `plan/_relations.json`) — the third and
+  last post-filing edit the orchestrator may make: `{ id, reason, by, evidence }` reinstates a refuted
+  finding as `uncertain` when the cited line does not discharge it. The reason is required; an entry naming
+  a finding that was not refuted is a violation.
 - **`skipped_paths`** (top level) — the skipped registers of every auditor (`SKILL.md` → *The skipped
   register*): the `coverage_gaps` entries with `kind: "skipped"`, each a path an auditor declared it
   declined, refused or did not finish. They stay in `coverage_gaps` too; this array exists so the orchestrator

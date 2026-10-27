@@ -29,7 +29,8 @@ outputs/{engagement}/
 │       ├── snippet.txt             # the vulnerable code at the sink (with file:line header)
 │       ├── trace.md                # full source→sink hop list with file:line each hop
 │       ├── poc.md                  # OPTIONAL — witness payload / repro idea (no live exec required)
-│       └── corroboration.txt       # OPTIONAL — live witness result (hybrid mode only)
+│       ├── corroboration.txt       # OPTIONAL — live witness result (hybrid mode only)
+│       └── verification.md         # written by the finding-verifier (Step 6.5c) — cited verdict: confirmed | refuted | uncertain
 ├── codeaudit-report.json           # ALWAYS — fixed machine schema
 └── report.md                       # ALWAYS — consolidated human report
 ```
@@ -108,6 +109,34 @@ wrote `**source**` in lower case, one wrote the source as prose with no bullet, 
 `file:line`** is a recorded contract violation and the finding cannot be handed to the pentest plugin. One
 primary source per finding; secondary sources go in the prose or in `locations[]`.
 
+## `verification.md` (per finding, written by the finding-verifier only)
+
+The second opinion, additive and never edited by the filer. `tools/aggregate.py` reads the bold labels
+(leading enum token first) and the two sections:
+
+```markdown
+# Verification — finding-inj-001
+
+**Verdict**: refuted
+**Disposition**: guard_present
+**Cited**: src/db/repo.ts:88
+**Adjusted severity**: none
+**Adjusted confidence**: none
+**Verifier**: finding-verifier (batch v1)
+
+## Reasoning
+Five to ten sentences showing the rebuilt hop, the guard found or not found, the git history, the ecosystem
+or threat-model row relied on, and — for a bypass — the exact input.
+
+## Rebuilt trace
+src/api/users.ts:42 → src/service/list.ts:88 → src/db/repo.ts:130
+```
+
+`Verdict` ∈ `confirmed | refuted | uncertain`. A `refuted` needs a `Disposition` from the closed enum **and** a
+`Cited` `file:line`; without both the aggregator records a violation and treats it as `uncertain`.
+`Adjusted severity` ∈ `none` + the severity enum; `Adjusted confidence` ∈ `none | high | probable` (never
+`unconfirmed`). What each verdict does to the finding is in `REPORT_CONTRACT.md` → `revalidation` / `refuted`.
+
 ## `_safe-{class}.md` format (the four evidence categories)
 
 Each auditor writes exactly one of these (one per **shard** when a class is sharded:
@@ -170,7 +199,8 @@ These are written by the orchestrator, not by auditors, and are read by the ship
 | `plan/_handoffs-wave{N}.md`, `plan/_handoffs-residue-f{N}.md` | between waves / after reconciliation | the next wave's auditors |
 
 `_relations.json`: `{ "duplicates": [], "subsumed": [], "chains": [], "orchestrator_adjustments": {
-"severity_overrides": [], "additional_locations": [] } }` — shapes in `REPORT_CONTRACT.md`.
+"severity_overrides": [], "additional_locations": [], "verification_overrides": [] } }` — shapes in
+`REPORT_CONTRACT.md`.
 
 `_narrative.json` keys (every one optional; a missing key renders as a visible `TODO-ORCHESTRATOR` marker):
 `plugin_version` · `executive_summary[]` (2-5 paragraphs: nature of the engagement, posture, counts, the single
