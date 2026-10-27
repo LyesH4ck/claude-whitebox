@@ -34,6 +34,17 @@ fitted to an orchestrated audit.
 - Preflight tools check now reads every command file (7 tools); `tools.test.mjs` +3 (resume probe,
   diff-scope with a real git history, pr-comment with and without new findings).
 
+### Fixed — the coverage gate converges on a repository full of false marker hits
+
+First full run of 0.16 on a real repository (deepsec itself): 46 of its 50 route-shaped files are its own
+matcher corpus — example strings that look like Express routes and Next.js server actions — and two more
+are prompt templates quoting route syntax. The gate failed at 4 % covered and had no way to accept recon's
+answer that these are not entry points. `sink-inventory.json` gains `not_entry_points[]` (`{file|glob,
+what}`); `recon-coverage.py` removes an explained file from the denominator **only when a `what` is given**
+and lists it under `explained[]`; code-recon is told to use it on a residue and never to hide a real entry
+point in it. The command sends recon back via `SendMessage` (session intact) before falling back to a new
+`Task`. `tools.test.mjs` +1 (explained with a reason passes; a bare glob does not).
+
 ## [2.4.77] — 2026-10-27
 
 ### Added — `codeaudit` 0.16.0: the recon-coverage gate (the check on the check)

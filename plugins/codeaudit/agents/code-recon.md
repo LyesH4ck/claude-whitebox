@@ -268,9 +268,13 @@ Write three deliverables (create dirs with `mkdir -p` first):
    or more such files with none in your inventory fails the gate and sends you back with that directory as
    `focus`. So: write the handler `file:line` for **every** entry point and exported-surface item (a bare
    function name cannot be matched), and when you are re-dispatched on a residue, **extend** the arrays —
-   never rewrite them — and state, for each residue file that is genuinely not an entry point, what it is
-   (a test helper, a client-side route table, an example string) in `attack-surface.md`, so the orchestrator
-   can tell a false marker hit from a miss.
+   never rewrite them — and declare each residue file that is genuinely not an entry point under
+   **`not_entry_points[]`** in `sink-inventory.json`: `{ "file": "path", "what": "why it matched and what
+   it is" }`, or `{ "glob": "packages/scanner/src/matchers/*.ts", "what": "…" }` for a whole corpus. The
+   gate removes those from its denominator **only when a `what` is given** — a bare file name is not an
+   answer — so a repository whose matcher corpus or prompt templates quote route syntax converges instead of
+   failing forever. Never put a real entry point there to make the gate pass: the gate is the only thing
+   standing between a missed family and a report that says "all traced".
 
    **`ecosystems` is REQUIRED (not optional).** It tells every auditor which
    `skills/code-audit/reference/ecosystems/*` file to load and gives it the pinned versions those files'

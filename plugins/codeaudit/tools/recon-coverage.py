@@ -114,6 +114,16 @@ def main():
         for s in [ep.get("handler") or "", ep.get("handler_file") or "", ep.get("file") or ""] + [x.get("at") or "" for x in ep.get("sources") or []]:
             m = FL.search(s)
             if m: covered.add(rel_to_repo(m.group(1)))
+    # Files recon examined and declared NOT entry points, with a reason — a matcher corpus whose example
+    # strings look like routes, a prompt template quoting `app.get`, a client-side route table. They leave
+    # the denominator (listed under `explained`), so the gate converges on a repo full of false marker hits
+    # instead of failing forever; an entry without a reason is ignored (a bare file name is not an answer).
+    explained = {}
+    for n in inv.get("not_entry_points") or []:
+        if isinstance(n, dict) and n.get("file") and n.get("what"):
+            explained[rel_to_repo(n["file"])] = n["what"]
+        elif isinstance(n, dict) and n.get("glob") and n.get("what"):
+            explained[("glob", n["glob"])] = n["what"]
 
     src = [f for f in tracked_files() if in_scope(f) and lang_of(f)]
     by_lang = collections.Counter(lang_of(f) for f in src)
@@ -127,6 +137,14 @@ def main():
         m = rx.search(body)
         if m:
             route_files.append(f); hits[f] = body.count("\n", 0, m.start()) + 1
+    import fnmatch
+    def explained_as(f):
+        if f in explained: return explained[f]
+        for k, what in explained.items():
+            if isinstance(k, tuple) and fnmatch.fnmatch(f, k[1]): return what
+        return None
+    explained_files = {f: explained_as(f) for f in route_files if explained_as(f) and f not in covered}
+    route_files = [f for f in route_files if f not in explained_files]
     route_set = set(route_files)
     covered_routes = route_set & covered
     uncovered = sorted(route_set - covered)
@@ -155,12 +173,13 @@ def main():
     report = {"policy": POLICY, "repo": REPO, "source_files": len(src), "by_language": dict(by_lang),
               "route_shaped_files": len(route_set), "covered": len(covered_routes), "ratio": round(ratio, 3),
               "uncovered": [{"file": f, "first_marker_line": hits[f], "dir": dir_key(f)} for f in uncovered],
+              "explained": [{"file": f, "what": w} for f, w in sorted(explained_files.items())],
               "covered_not_route_shaped": covered_not_route, "families": families, "failures": failures, "warnings": warnings,
               "passed": not failures}
     os.makedirs(f"{OUT}/recon", exist_ok=True)
     json.dump(report, open(f"{OUT}/recon/_coverage.json", "w"), indent=1)
     if AS_JSON: print(json.dumps(report, indent=1)); return 0 if not failures else 1
-    print(f"recon coverage — {len(src)} source files, {len(route_set)} route-shaped, {len(covered_routes)} covered by recon ({ratio:.0%}), {len(uncovered)} uncovered")
+    print(f"recon coverage — {len(src)} source files, {len(route_set)} route-shaped, {len(covered_routes)} covered by recon ({ratio:.0%}), {len(uncovered)} uncovered" + (f", {len(explained_files)} explained as not entry points by recon" if explained_files else ""))
     if uncovered:
         print("uncovered route-shaped files (recon miss or false marker — the orchestrator decides which):")
         for d, v in sorted(families.items()):

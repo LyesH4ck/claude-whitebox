@@ -546,6 +546,16 @@ test('recon-coverage: a whole route family missed by recon fails the gate; cover
   assert.deepEqual(r.uncovered.map((u) => u.file), ['src/api/admin.js']);
   assert.equal(r.families['src/api'].covered, 3);
 
+  // recon explains a false-marker corpus with a reason → it leaves the denominator; without a reason it stays
+  ({ code, r } = run({ entry_points: [], exported_surface: [{ handler: 'src/workers/mailer.js:2', sources: [] }],
+    not_entry_points: [{ glob: 'src/api/*.js', what: 'route fixtures used as regex examples, never mounted' }] }));
+  assert.equal(code, 0, 'four explained files leave the denominator');
+  assert.equal(r.route_shaped_files, 1);
+  assert.equal(r.explained.length, 4);
+  ({ code, r } = run({ entry_points: [], exported_surface: [{ handler: 'src/workers/mailer.js:2', sources: [] }],
+    not_entry_points: [{ glob: 'src/api/*.js' }] }));
+  assert.equal(code, 1, 'a bare glob with no what is not an answer');
+
   // handler paths given absolute (under the repo) still match
   ({ code, r } = run({ entry_points: ['users', 'orders', 'billing', 'admin'].map((n) => ({ handler: `${path.join(repo, 'src/api', n + '.js')}:2`, sources: [] })),
     exported_surface: [{ handler: 'src/workers/mailer.js:2', sources: [] }] }));

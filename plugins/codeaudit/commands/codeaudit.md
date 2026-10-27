@@ -393,10 +393,13 @@ handler) and checks each against the handler files in `entry_points[]` / `export
 `recon/_coverage.json` and prints the uncovered files grouped by directory. Exit `1` is a failed gate: a
 directory of three or more route-shaped files with none in the inventory, or fewer than half of all
 route-shaped files covered.
-- On a failed gate, **re-dispatch code-recon once** with the residue — the uncovered directories, verbatim
-  from the tool's output — as `focus`, telling it to extend `entry_points[]`/`exported_surface[]` (never
-  rewrite) and to say explicitly, for any residue file that is **not** an entry point, what it is. Re-run the
-  tool after it lands.
+- On a failed gate, **send code-recon back once** on the residue — via `SendMessage` to the recon agent's
+  id when its session is still alive (it holds the whole baseline in context), else a fresh `Task` with the
+  uncovered directories, verbatim from the tool's output, as `focus`. Tell it to extend
+  `entry_points[]`/`exported_surface[]` (never rewrite) and to declare every residue file that is **not** an
+  entry point under `not_entry_points[]` with a `what` (a glob for a whole corpus is fine). Re-run the tool
+  after it lands: explained files leave the denominator, so a repository whose matcher corpus or prompt
+  templates quote route syntax converges.
 - A still-failing gate does not stop the audit, but it changes what the report may claim: log
   `phase":"recon","action":"coverage-gate","result":"failed","uncovered":<n>` and carry every remaining
   uncovered file into the final report's `coverage_gaps` ("route-shaped file never inventoried by recon").
