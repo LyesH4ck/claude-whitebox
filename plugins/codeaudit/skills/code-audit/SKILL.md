@@ -351,6 +351,24 @@ repo**. Naming them explicitly — with what you did try — is coverage informa
 `tested_not_vulnerable` is a false clearance; silently folding them into `coverage_gaps` loses the fact that
 you investigated. Empty findings are never proof of complete coverage.
 
+### The skipped register
+
+Mandatory, answered in writing before you announce completion. The question: **is there any file or path in my assigned
+scope that I declined to analyse, refused to open, stopped reading partway, or could not finish — for any
+reason?** The reasons that recur are a file that reads like a payload corpus or exploit sample, content that
+tripped a refusal, a tool error on the path, or a file too large to finish. A partial read counts. A refusal
+counts. "I did not get to it" counts.
+
+- If the answer is **no**, your final status line carries `SKIPPED: none`.
+- If the answer is **yes**, write **one line per path** under `## coverage_gaps` in your `_safe-{class}.md`,
+  in exactly this shape — `- [skipped] path/to/file.ext — why` — and your final status line carries
+  `SKIPPED: <n>`. The aggregator surfaces these separately and the orchestrator re-dispatches on the path.
+
+A skipped path reported is a coverage gap; a skipped path **not** reported is a false clearance — the report
+prints "all in-scope sources traced" over a file nobody read. That is the only way this question can be
+answered wrongly, so answer it even when the answer is `none`. A status with no `SKIPPED:` line is logged as
+an unanswered register, not as "nothing skipped".
+
 ## Reused knowledge base
 
 Three layers, in the order an auditor consumes them:

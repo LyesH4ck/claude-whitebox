@@ -144,6 +144,11 @@ or `finding-cli-{shard}-{NNN}` when sharded; scan existing first, never renumber
 
 ## Completion
 
+**Skipped register — answer it before you announce** (`SKILL.md` → *The skipped register*). State in your
+final status line `SKIPPED: none`, or `SKIPPED: <n>` with one `- [skipped] path — why` line per path under
+`## coverage_gaps` of your `_safe-` file, for every file in scope you declined, refused, or did not finish.
+A status with no `SKIPPED:` line is an unanswered register, not a clean one.
+
 When every candidate in your scope has a verdict — **including the `static/**/*.js` and inline `<script>`
 surface** — announce **CLIENT-SIDE AUDIT COMPLETE** with counts and stop. Report `complete` only when the JS
 surface was actually scanned (never mark it clean by omission); otherwise `incomplete` with the remainder.

@@ -134,6 +134,11 @@ scan existing `finding-http-*` first, never renumber). Safe vectors → `finding
 
 ## Completion
 
+**Skipped register — answer it before you announce** (`SKILL.md` → *The skipped register*). State in your
+final status line `SKIPPED: none`, or `SKIPPED: <n>` with one `- [skipped] path — why` line per path under
+`## coverage_gaps` of your `_safe-` file, for every file in scope you declined, refused, or did not finish.
+A status with no `SKIPPED:` line is an unanswered register, not a clean one.
+
 When every candidate in scope has a verdict, announce **HTTP PROTOCOL AUDIT COMPLETE** with counts and stop.
 If the target has no source-visible framing/cache surface, say so explicitly (not silently). Report
 `complete`/`incomplete` per the skill.

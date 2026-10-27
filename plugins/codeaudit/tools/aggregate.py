@@ -6,14 +6,22 @@ caps, resolves endpoints from recon, and emits codeaudit-report.json.
 Usage:
   python3 -I "$CA/tools/aggregate.py" <OUTPUT_ROOT> --dry-run            # parse + report violations, write nothing
   python3 -I "$CA/tools/aggregate.py" <OUTPUT_ROOT> --write [--relations plan/_relations.json] [--meta plan/_meta.json]
+                                      [--previous <older codeaudit-report.json>] [--accepted <.codeaudit-accepted.json>]
 
 The relations file may carry `orchestrator_adjustments` (severity_overrides from a class owner's addendum,
 additional_locations from a follow-up) — see REPORT_CONTRACT.md. Caps still apply after an override.
 
+Every finding gets a stable `fingerprint` (class, sink file, sink expression, slot, source expression, source
+file — never a line number, so a line move does not change it). `--previous` diffs this run against an older
+report by fingerprint: each finding becomes `new` or `persisting` (with `first_seen` carried over), and
+previous findings not re-found are listed under `run_diff.not_refound` — a list to verify, not a list of
+fixes. `--accepted` marks findings whose fingerprint appears in the accepted-risk file: they stay in
+`findings[]` with `status: accepted-risk` and are excluded from the severity tally.
+
 Everything it reads is model-authored and therefore untrusted: a malformed file is reported under
 `contract_violations`, never fatal, and never silently normalised into something that looks clean.
 """
-import collections, glob, json, os, re, sys
+import collections, glob, hashlib, json, os, re, sys
 
 OUT = sys.argv[1].rstrip("/")
 DRY = "--dry-run" in sys.argv
@@ -104,6 +112,36 @@ def dedup_key(f):
     s = FL.search(f["source"] or ""); loc = f.get("location") or {}
     return (f["vuln_class"], f"{loc.get('file')}:{loc.get('line')}", f"{s.group(1)}:{s.group(2)}" if s else None, f["slot_type"])
 
+def norm_expr(expr):
+    """The expression part of a `source`/`sink` string: the `(file:line)` parenthetical, backticks, quotes
+    and whitespace stripped, lower-cased. `req.query['sort']` and `req.query.sort` stay distinct on purpose —
+    the fingerprint is a stability key, not a semantic one; the dedup key handles the exact-collapse case."""
+    e = re.sub(r"\([^()]*\)", " ", expr or "")
+    e = re.sub(r"[`'\"]", "", e)
+    return re.sub(r"\s+", " ", e).strip().lower()
+
+def fingerprint_material(f):
+    """What the fingerprint hashes. Line numbers are deliberately absent so a finding survives an unrelated
+    edit above it; a renamed sink file does change it, and that is documented as the limit."""
+    s = FL.search(f.get("source") or ""); loc = f.get("location") or {}
+    return "|".join([
+        f.get("vuln_class") or "", loc.get("file") or "", norm_expr(f.get("sink")),
+        (f.get("slot_type") or "").lower(), norm_expr(f.get("source")), s.group(1) if s else "",
+    ])
+
+def fingerprint(f):
+    return "fp_" + hashlib.sha256(fingerprint_material(f).encode("utf-8")).hexdigest()[:16]
+
+def assign_fingerprints(fs):
+    """Deterministic and collision-aware: two surviving findings with identical material (same sink expression
+    at two lines of one file, fed by the same source) get `-2`, `-3` suffixes in ascending sink-line order."""
+    groups = collections.defaultdict(list)
+    for f in fs: groups[fingerprint(f)].append(f)
+    for fp, members in groups.items():
+        members.sort(key=lambda x: ((x.get("location") or {}).get("line") or 0, x["id"]))
+        for i, f in enumerate(members):
+            f["fingerprint"] = fp if i == 0 else f"{fp}-{i + 1}"
+
 def apply_caps(f):
     sev = f["severity_reported"]; cap = CAP.get(f["privilege_required"])
     f["severity"] = sev
@@ -140,6 +178,19 @@ def parse_safe(p):
                 out[k].append({"vuln_class": cls, "investigated": re.sub(r"^\s*investigated\s*:\s*", "", inv[0], flags=re.I).strip(" *:"), "evidence_needed": need, "detail": item})
                 if len(inv) < 2: viol(name, f"unverified_assumptions line has no recognisable 'evidence needed' half: {item[:60]!r}")
             elif k == "coverage_gaps":
+                # The skipped register: `[skipped] path — reason`. A file the auditor declined, refused or did
+                # not fully analyse is a coverage gap of a specific kind — the orchestrator re-dispatches on
+                # the path rather than treating the class as traced. Parsed before the generic seam split so
+                # the path survives verbatim.
+                sk = re.match(r"\[skipped\]\s*(.*)", item, re.I)
+                if sk:
+                    rest = sk.group(1).strip()
+                    parts = [x.strip(" *") for x in re.split(r"\s*—\s*|\s*(?:→|->)\s*|\s+-\s+", rest, maxsplit=1)]
+                    p = parts[0] if parts else rest
+                    if not p: viol(name, f"[skipped] line names no path: {item[:70]!r}")
+                    out[k].append({"kind": "skipped", "item": p, "reason": (parts[1] if len(parts) > 1 else ""),
+                                   "recommended_action": "re-dispatch the auditor on this path", "vuln_class": cls})
+                    continue
                 # "item — reason → recommended: action": the arrow and the label are ONE seam, not two.
                 parts = [x.strip(" *") for x in re.split(r"\s*(?:(?:→|->)\s*)?recommended(?:\s+action)?\s*:\s*|\s*—\s*|\s*(?:→|->)\s*", item) if x.strip(" *")]
                 out[k].append({"item": parts[0] if parts else item, "reason": (parts[1] if len(parts) > 1 else ""), "recommended_action": (parts[2] if len(parts) > 2 else ""), "vuln_class": cls})
@@ -189,25 +240,92 @@ try:
 except Exception as e:
     viol("recon", f"endpoint resolution skipped: {e}")
 
-vuln = [f for f in final if f["severity"] and f["severity"] != "informational"]
-summary = {s: sum(1 for f in final if f["severity"] == s) for s in SEV}
-summary["total"] = len(vuln)
-summary["informational"] = sum(1 for f in final if f["severity"] == "informational")
+meta = arg("--meta")
+meta_doc = json.load(open(meta)) if meta and os.path.exists(meta) else {}
+run_date = meta_doc.get("date")
+
+# stable identity, then the two optional cross-run inputs
+assign_fingerprints(final)
+
+accepted_path = arg("--accepted")
+accepted_by_fp = {}; accepted_unmatched = []
+if accepted_path:
+    try:
+        acc_doc = json.load(open(accepted_path))
+        for i, a in enumerate(acc_doc.get("accepted", []) if isinstance(acc_doc, dict) else acc_doc):
+            if not isinstance(a, dict) or not a.get("fingerprint") or not a.get("reason"):
+                viol("accepted", f"entry {i} lacks fingerprint or reason — ignored"); continue
+            accepted_by_fp[a["fingerprint"]] = a
+    except Exception as e:
+        viol("accepted", f"accepted-risk file unreadable: {e}")
+for f in final:
+    a = accepted_by_fp.pop(f["fingerprint"], None)
+    if a:
+        f["status"] = "accepted-risk"
+        f["accepted"] = {k: a.get(k) for k in ("reason", "by", "date", "expires") if a.get(k) is not None}
+accepted_unmatched = sorted(accepted_by_fp)
+
+def recompute_summary():
+    """Severity tally over open findings only. An accepted risk stays in findings[] (the reader must see it)
+    but a tally that counted it would make the headline depend on a decision taken outside the audit."""
+    live = [f for f in final if f["status"] != "accepted-risk"]
+    s = {sv: sum(1 for f in live if f["severity"] == sv) for sv in SEV}
+    s["total"] = sum(1 for f in live if f["severity"] and f["severity"] != "informational")
+    s["accepted_risk"] = len(final) - len(live)
+    return s
+summary = recompute_summary()
+
+run_diff = None
+prev_path = arg("--previous")
+if prev_path:
+    try:
+        prev = json.load(open(prev_path))
+        prev_findings = prev.get("findings", [])
+        # an older report written before fingerprints existed: recompute from its fields with the same function
+        if any("fingerprint" not in p for p in prev_findings):
+            for p in prev_findings:
+                if "fingerprint" not in p: p["fingerprint"] = fingerprint(p)
+        prev_by_fp = {p["fingerprint"]: p for p in prev_findings}
+        for f in final:
+            p = prev_by_fp.pop(f["fingerprint"], None)
+            if p:
+                f["change"] = "persisting"; f["first_seen"] = p.get("first_seen") or prev.get("date"); f["previous_id"] = p.get("id")
+                if p.get("status") == "accepted-risk" and f["status"] != "accepted-risk":
+                    viol(f["id"], f"was accepted-risk in the previous report ({p.get('id')}) but no --accepted entry covers it now")
+            else:
+                f["change"] = "new"; f["first_seen"] = run_date
+        run_diff = {
+            "previous_report": prev_path, "previous_engagement": prev.get("engagement"), "previous_date": prev.get("date"),
+            "new": [f["id"] for f in final if f["change"] == "new"],
+            "persisting": [f["id"] for f in final if f["change"] == "persisting"],
+            "not_refound": [{"id": p.get("id"), "fingerprint": fp, "title": p.get("title"), "severity": p.get("severity"),
+                             "location": p.get("location"), "status": p.get("status")} for fp, p in sorted(prev_by_fp.items())],
+            "note": "not_refound is a list to verify, never a list of fixes: confirm each with git history or a focused re-dispatch before marking it remediated",
+        }
+    except Exception as e:
+        viol("previous", f"previous report unreadable, no run diff: {e}")
+        for f in final: f["change"] = None
+else:
+    for f in final: f["change"] = None
 
 report = {
     "findings": final,
     "summary": summary,
+    "run_diff": run_diff,
     "tested_not_vulnerable": safe_all["tested_not_vulnerable"],
     "design_properties": safe_all["design_properties"],
     "unverified_assumptions": safe_all["unverified_assumptions"],
     "coverage_gaps": safe_all["coverage_gaps"] + gaps_from_unconfirmed,
+    "skipped_paths": [g for g in safe_all["coverage_gaps"] if g.get("kind") == "skipped"],
     "finding_relations": {"duplicates": [{"canonical_id": c, "duplicate_ids": [d], "reason": "identical dedup key (class, sink, source, slot)"} for d, c in merged], "subsumed": [], "chains": []},
     "contract_violations": violations,
     "aggregation_stats": {"finding_dirs": len(findings), "kept_after_dedup": len(kept), "final": len(final), "safe_files": len(safe_files),
                           "caps_applied": sum(1 for f in final if f.get("severity_cap_applied")),
-                          "endpoints_resolved": sum(1 for f in final if f.get("endpoint"))},
+                          "endpoints_resolved": sum(1 for f in final if f.get("endpoint")),
+                          "accepted_risk": summary["accepted_risk"], "accepted_unmatched": accepted_unmatched,
+                          "skipped_paths": sum(1 for g in safe_all["coverage_gaps"] if g.get("kind") == "skipped")},
 }
-rel = arg("--relations"); meta = arg("--meta")
+rel = arg("--relations")
 if rel and os.path.exists(rel):
     r = json.load(open(rel));
     for k in ("duplicates", "subsumed", "chains"): report["finding_relations"][k] += r.get(k, [])
@@ -227,23 +345,21 @@ if rel and os.path.exists(rel):
         if not f: viol(o["id"], "additional_locations targets unknown finding"); continue
         f["locations"] = f.get("locations", []) + o["locations"]
         f["locations_note"] = o.get("note")
-    for f in final:
-        if f.get("severity_revision"):
-            vuln = [x for x in final if x["severity"] and x["severity"] != "informational"]
-            for s in SEV: summary[s] = sum(1 for x in final if x["severity"] == s)
-            summary["total"] = len(vuln)
-            break
-if meta and os.path.exists(meta): report = {**json.load(open(meta)), **report}
+    if any(f.get("severity_revision") for f in final):
+        summary.update(recompute_summary()); report["summary"] = summary
+if meta_doc: report = {**meta_doc, **report}
 
-print(f"findings dirs {len(findings)} | after dedup {len(kept)} | final {len(final)} | vuln tally {summary['total']} | informational {summary['informational']}")
-print("severity (after caps):", {s: summary[s] for s in SEV})
+print(f"findings dirs {len(findings)} | after dedup {len(kept)} | final {len(final)} | vuln tally {summary['total']} | informational {summary['informational']} | accepted-risk {summary['accepted_risk']}")
+print("severity (after caps, open findings):", {s: summary[s] for s in SEV})
 print(f"caps applied: {report['aggregation_stats']['caps_applied']} | endpoints resolved: {report['aggregation_stats']['endpoints_resolved']} | safe files {len(safe_files)}")
-print("evidence arrays:", {k: len(v) for k, v in safe_all.items()}, "+ unconfirmed->gaps", len(gaps_from_unconfirmed))
+print("evidence arrays:", {k: len(v) for k, v in safe_all.items()}, "+ unconfirmed->gaps", len(gaps_from_unconfirmed), "| skipped paths", report["aggregation_stats"]["skipped_paths"])
+if run_diff: print(f"run diff vs {run_diff['previous_engagement'] or prev_path}: new {len(run_diff['new'])} | persisting {len(run_diff['persisting'])} | not re-found {len(run_diff['not_refound'])} (verify, do not assume fixed)")
+if accepted_unmatched: print(f"accepted-risk fingerprints matching no finding: {len(accepted_unmatched)} — {', '.join(accepted_unmatched[:5])}")
 print(f"contract violations: {len(violations)}")
 for v in violations[:40]: print(f"  ! {v['where']}: {v['issue']}")
 if DRY:
-    print("\nper-finding (id | class | reported->final | conf | priv | endpoint):")
-    for f in final: print(f"  {f['id']:34} {f['vuln_class']:18} {f['severity_reported']}->{f['severity']:<13} {f['confidence']:<8} {f['privilege_required']:<13} {(f.get('endpoint') or {}).get('path','-')}{'  note: ' + f['privilege_note'][:50] if f.get('privilege_note') else ''}")
+    print("\nper-finding (id | fingerprint | class | reported->final | conf | priv | change | endpoint):")
+    for f in final: print(f"  {f['id']:34} {f['fingerprint']:22} {f['vuln_class']:18} {f['severity_reported']}->{f['severity']:<13} {f['confidence']:<8} {f['privilege_required']:<13} {(f.get('change') or '-'):<10} {(f.get('endpoint') or {}).get('path','-')}{'  ACCEPTED-RISK' if f['status'] == 'accepted-risk' else ''}{'  note: ' + f['privilege_note'][:50] if f.get('privilege_note') else ''}")
 else:
     json.dump(report, open(f"{OUT}/codeaudit-report.json", "w"), indent=1, ensure_ascii=False)
     print(f"wrote {OUT}/codeaudit-report.json")

@@ -67,8 +67,10 @@ Session running with all plugins active. You can still use /codeaudit:codeaudit-
 Try to Read `.codeaudit-scope.json`.
 
 **If the file exists and is valid JSON**, extract `repo`, `engagement`, `out_of_scope`, `focus`,
-`target_url`, `depth` (default `"Thorough"`), `output_formats` (default `[]`), and `extra_roots` (default
-`[]` — sibling first-party repos/dirs to fold into scope, e.g. a separate front-end service). Output:
+`target_url`, `depth` (default `"Thorough"`), `output_formats` (default `[]`), `extra_roots` (default
+`[]` — sibling first-party repos/dirs to fold into scope, e.g. a separate front-end service), and
+`previous_report` (default `null` — an older `codeaudit-report.json` of the same repo to diff this run
+against). Output:
 
 ```
 ============================================================
@@ -143,12 +145,25 @@ After collecting, write `.codeaudit-scope.json` with status `"active"`:
   "depth": "{depth or "Thorough"}",
   "output_formats": {output_formats array},
   "extra_roots": {extra_roots array or []},
+  "previous_report": {previous_report or null},
   "status": "active"
 }
 ```
 
 Then verify the repo: `test -d "{repo}/.git" && echo git || echo no-git`. If `{repo}` does not exist,
 abort with an actionable message and stop. Note whether it is a git repo (auditors use git-awareness).
+
+**Resolve the two cross-run inputs now, so the scope echo states them.** Both are optional and both feed the
+Step 6.6 aggregator; neither changes what the auditors do.
+- **`previous_report`** — if the scope file names one, use it. Otherwise look for an older report of the same
+  repository: `ls outputs/*/codeaudit-report.json` from the launch directory, keep those whose `repo` field
+  equals `{repo}` and whose `engagement` is not this one, and take the most recent by `date`. If one is found
+  and the scope file did not name it, ask via AskUserQuestion: "Diff this run against `{path}` ({date})?" with
+  Yes / No. Store the result as `previous_report` (or `null`).
+- **`accepted_file`** — `{repo}/.codeaudit-accepted.json` when it exists (format in `REPORT_CONTRACT.md` →
+  *The accepted-risk file*), else `null`. Never create it yourself; it is operator-owned.
+Echo both as `Previous report: {path or "none — first run or not requested"}` and `Accepted risks:
+{path or "none"}` in the summaries below.
 
 **Always append `outputs/` to `out_of_scope`.** The deliverables are written to `outputs/{engagement}/`
 relative to the launch directory, and the supported way to run this is **from inside the repository being
@@ -241,6 +256,8 @@ Mode:         {hybrid if target_url else static-only}{ + Live URL: {target_url}}
 Depth:        {depth}  (runs to completeness — every source→sink path in scope, then stops)
 Classes:      {classes}
 Scanners:     {tools_available or "none — pattern/version fallback"}
+Previous report: {previous_report or "none — first run or not requested"}
+Accepted risks:  {accepted_file or "none"}
 Deliverables: report.md + codeaudit-report.json{, plus output_formats if any}
 ============================================================
 ```
@@ -451,7 +468,21 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
      an entire OWASP class silently drops out of a report that still prints "all in-scope sources traced".
    A `Task` still running is not terminated: keep polling with non-blocking `TaskOutput` and evaluate
    status only once it has actually finished. Log
-   `phase":"audit","action":"auditor-done","agent":"<name>","status":"<complete|incomplete|errored>","findings":<N>`.
+   `phase":"audit","action":"auditor-done","agent":"<name>","status":"<complete|incomplete|errored>","findings":<N>,"skipped":<n|"unanswered">`.
+
+   **Read the skipped register off the same status.** Every auditor must end with `SKIPPED: none` or
+   `SKIPPED: <n>` (`SKILL.md` → *The skipped register*), the `<n>` paths listed as `- [skipped] path — why`
+   lines under `## coverage_gaps` of its `_safe-` file. Three cases:
+   - `SKIPPED: none` — nothing more to do.
+   - `SKIPPED: <n>` — the auditor's `complete` does **not** cover those paths. Treat them exactly like the
+     uncited residue of point 5: dispatch one focused follow-up on the skipped paths (a different auditor of
+     the same class if the reason was a refusal — the same agent will refuse the same file again), and keep
+     the `[skipped]` lines in place until the follow-up has verdicted them; the aggregator lists whatever
+     remains under `skipped_paths`, and that is the correct report when a file genuinely cannot be analysed.
+   - **no `SKIPPED:` line at all** — the register was not answered. Log `"skipped":"unanswered"` and
+     message the agent once, tool-free, asking only for the register; if it still does not answer, record the
+     auditor's whole scope under `coverage_gaps` with the reason "skipped register unanswered" — an unanswered
+     register is indistinguishable from a silent refusal, and both read as "all traced" if you let them.
 2. **If an auditor reports `incomplete`** (untraced sources remain, a helper/branch it flagged needs
    deeper analysis, or it discovered new sources/second-order flows), re-dispatch it (or a focused
    follow-up) on the remaining items. Repeat until it reports `complete`. This is convergence on full
@@ -562,14 +593,23 @@ The mechanical half of this step is a shipped tool; run it, read its violations,
 ```bash
 python3 -I "$CA/tools/aggregate.py" "outputs/{engagement}" --dry-run          # parse everything, write nothing
 python3 -I "$CA/tools/aggregate.py" "outputs/{engagement}" --write \
-        --relations outputs/{engagement}/plan/_relations.json --meta outputs/{engagement}/plan/_meta.json
+        --relations outputs/{engagement}/plan/_relations.json --meta outputs/{engagement}/plan/_meta.json \
+        {--previous "{previous_report}" when set} {--accepted "{accepted_file}" when set}
 ```
 `--dry-run` prints every contract deviation it found (a `Severity` outside the enum, a `tested_not_vulnerable`
 line without a `[disposition]`, a `source` with no `file:line`) and the per-finding table
-(`reported -> final` severity, confidence, privilege, resolved endpoint). Fix what is yours to fix (a
-malformed file is re-dispatched to its auditor, never hand-edited), write `plan/_relations.json` (point 1,
-"Relate what you did not merge") and `plan/_meta.json` (engagement/repo/commit/scope/depth/ecosystems block
-of the contract), then `--write`. The tool is lenient where auditors are legitimately verbose — a
+(`reported -> final` severity, confidence, privilege, fingerprint, change, resolved endpoint). Fix what is
+yours to fix (a malformed file is re-dispatched to its auditor, never hand-edited), write
+`plan/_relations.json` (point 1, "Relate what you did not merge") and `plan/_meta.json`
+(engagement/repo/commit/scope/depth/ecosystems block of the contract), then `--write`.
+
+Pass the two cross-run inputs resolved in Step 2 whenever they exist. With `--previous` every finding gets
+`change: new | persisting` by **fingerprint** (a line-number-free identity, `REPORT_CONTRACT.md` →
+`fingerprint`) and the report gains `run_diff`, whose `not_refound[]` is **a list to verify, never a list of
+fixes** — a finding vanishes just as easily because recon missed its file this time. With `--accepted`,
+findings whose fingerprint the operator's `.codeaudit-accepted.json` names become `status: accepted-risk`,
+stay listed, and leave the tally. Never write that file yourself, and never carry an acceptance forward on
+your own authority: the aggregator flags a finding that was accepted last run and is not covered now. The tool is lenient where auditors are legitimately verbose — a
 `**Confidence**: probable (platform fact outside the repo)` keeps its leading token and stores the rest as
 `confidence_note`; same for `privilege_required` — and strict where leniency would hide a defect: an
 `unconfirmed` or missing confidence is a `coverage_gaps` entry, a missing `privilege_required` is `unknown`
@@ -635,6 +675,10 @@ The rules it implements are the ones below — read them so you know what you ar
      log so the drift is visible rather than silently normalised.
      An auditor that wrote **no** `_safe-*.md` at all has not proven coverage: log it and record its scope
      under `coverage_gaps`, exactly as for an auditor that terminated without a parseable status (Step 6.5).
+     The `[skipped]` lines (the skipped registers) come out as `coverage_gaps` entries with `kind: "skipped"`
+     **and** as the top-level `skipped_paths[]`; `render.py` prints them as their own section. Anything still
+     listed there after the Step 6.5 follow-ups is a path the audit did not analyse, and the executive summary
+     must say so in one sentence — never let "all in-scope sources traced" stand over a non-empty register.
    - **Resolve ids & evidence**: keep each finding's on-disk class-prefixed dir name as its `id`
      (`finding-{prefix}-{NNN}`) — never renumber to a flat `finding-001`; set `evidence` to that dir's
      `description.md` and confirm the path resolves before writing the report (drop or flag any finding
@@ -662,8 +706,9 @@ The rules it implements are the ones below — read them so you know what you ar
    back to param correlation. To make this resolvable, findings **must** record the source with its
    `file:line` (see REPORT_CONTRACT `source` rule).
 2. Present a findings summary to the operator via AskUserQuestion before writing the final report (total;
-   critical/high/medium/low/info counts; confidence breakdown; top 3; coverage gaps). Confirm: "Write the
-   final report now?"
+   critical/high/medium/low/info counts; confidence breakdown; top 3; coverage gaps; **skipped paths**, if
+   any; and, when `--previous` ran, the `run_diff` line — `new / persisting / not re-found` — plus the
+   `accepted_risk` count when `--accepted` ran). Confirm: "Write the final report now?"
 3. On confirmation, produce the deliverables **exactly per** `$CA/skills/code-audit/reference/REPORT_CONTRACT.md`:
    - `outputs/{engagement}/codeaudit-report.json` — fixed schema (engagement/repo/commit/target_url
      metadata, findings[] with file:line/source/sink/slot/confidence/owasp/**`privilege_required`** **and

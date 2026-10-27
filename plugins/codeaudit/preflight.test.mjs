@@ -109,6 +109,22 @@ test('BLOCKS an agent whose root resolver cannot fail loudly, or globs the cache
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('BLOCKS an auditor that no longer asks for the skipped register', () => {
+  // The failure is silent in the worst direction: an auditor never asked whether it skipped a file reports
+  // `complete`, and the report prints "all in-scope sources traced" over a file nobody read.
+  const dir = mkdtempSync(path.join(tmpdir(), 'pf-skip-'));
+  try {
+    cpSync(HERE, path.join(dir, 'plugins', 'codeaudit'), { recursive: true });
+    const agent = path.join(dir, 'plugins/codeaudit/agents/crypto-auditor.md');
+    writeFileSync(agent, readFileSync(agent, 'utf8').replaceAll('SKIPPED:', 'DONE:'));
+    let out, code = 0;
+    try { out = execFileSync('node', [path.join(dir, 'plugins/codeaudit/preflight.mjs'), '--json'], { cwd: dir, encoding: 'utf8' }); }
+    catch (e) { code = e.status; out = e.stdout; }
+    assert.equal(code, 2);
+    assert.ok(JSON.parse(out).problems.some((p) => p.check === 'skipped-register' && /crypto-auditor\.md never asks/.test(p.msg)));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('BLOCKS on a disposition that is not in the report contract', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'pf-'));
   try {

@@ -70,9 +70,32 @@ for p in N["executive_summary"]: w(p + "\n")
 s = R["summary"]
 w("| Severity | Count |\n|---|---|")
 for k in SEV_ORDER: w(f"| {k} | {s.get(k, 0)} |")
-w(f"| **vulnerabilities (excl. informational)** | **{s['total']}** |\n")
+w(f"| **vulnerabilities (excl. informational)** | **{s['total']}** |")
+if s.get("accepted_risk"): w(f"| accepted risk (listed, excluded from the tally) | {s['accepted_risk']} |")
+w("")
 conf = collections.Counter(f["confidence"] for f in findings)
-w(f"Confidence: {conf.get('high',0)} high · {conf.get('probable',0)} probable · 0 unconfirmed in `findings[]` (unconfirmed items are listed under Coverage Gaps). Severity caps from `privilege_required` applied at aggregation: {R['aggregation_stats']['caps_applied']}. One severity was revised by its class owner after filing (see the finding's *Severity revision* line).\n")
+revised = sum(1 for f in findings if f.get("severity_revision"))
+w(f"Confidence: {conf.get('high',0)} high · {conf.get('probable',0)} probable · 0 unconfirmed in `findings[]` (unconfirmed items are listed under Coverage Gaps). Severity caps from `privilege_required` applied at aggregation: {R['aggregation_stats']['caps_applied']}." + (f" {plural(revised, 'severity')} revised by a class owner after filing (see the finding's *Severity revision* line)." if revised else "") + "\n")
+
+RD = R.get("run_diff")
+if RD:
+    w("## Changes Since Previous Run\n")
+    w(f"Compared by stable fingerprint against `{RD.get('previous_engagement') or RD.get('previous_report')}` ({RD.get('previous_date') or 'date unknown'}): **{len(RD['new'])} new**, **{len(RD['persisting'])} persisting**, **{len(RD['not_refound'])} not re-found**. A fingerprint hashes class, sink file, sink and source expressions and slot — never a line number — so a finding survives unrelated edits; a renamed sink file reads as new.\n")
+    if RD["new"]: w("- **New:** " + ", ".join(f"[`{i}`](#{i})" for i in RD["new"]))
+    if RD["persisting"]: w("- **Persisting:** " + ", ".join(f"[`{i}`](#{i})" for i in RD["persisting"]))
+    if RD["not_refound"]:
+        w("- **Not re-found (verify before calling any of these fixed):**")
+        for p in RD["not_refound"]:
+            loc = p.get("location") or {}
+            w(f"  - `{p.get('id')}` ({p.get('severity')}{', was accepted-risk' if p.get('status') == 'accepted-risk' else ''}) — {p.get('title')} — `{loc.get('file')}:{loc.get('line')}`")
+    w("")
+
+SK = R.get("skipped_paths") or []
+if SK:
+    w("## Paths an Auditor Did Not Fully Analyse\n")
+    w("Each line is a path an auditor declared it declined, refused or could not finish — the skipped register from its evidence file. These are coverage gaps of a specific kind: the orchestrator re-dispatches on the path; a report that omitted them would read as if the class had been traced there.\n")
+    for g in SK: w(f"- `{g['item']}` ({g.get('vuln_class')}) — {g.get('reason') or 'no reason given'}")
+    w("")
 
 if N.get("model_corrections"):
     w("### Threat-model corrections established during the audit\n")
@@ -88,7 +111,12 @@ for f in findings:
     reach = {True: "yes (network)", False: "no", None: "see trace"}[f.get("externally_reachable")]
     pr = f["privilege_required"] + (f" — {f['privilege_note']}" if f.get("privilege_note") else "")
     cn = f" ({f['confidence_note']})" if f.get("confidence_note") else ""
-    w(f"- **Id:** `{f['id']}`   **Confidence:** {f['confidence']}{cn}   **Reachable:** {reach}   **Privilege required:** {pr}")
+    w(f"- **Id:** `{f['id']}`   **Fingerprint:** `{f.get('fingerprint', '—')}`   **Confidence:** {f['confidence']}{cn}   **Reachable:** {reach}   **Privilege required:** {pr}")
+    if f.get("status") == "accepted-risk":
+        a = f.get("accepted") or {}
+        w(f"- **Status:** accepted-risk — {a.get('reason', 'no reason recorded')}" + (f" (by {a['by']}" + (f", {a['date']}" if a.get("date") else "") + ")" if a.get("by") else "") + " — excluded from the severity tally")
+    if f.get("change") == "new": w(f"- **Change:** new since the previous run" + (f" (first seen {f['first_seen']})" if f.get("first_seen") else ""))
+    elif f.get("change") == "persisting": w(f"- **Change:** persisting" + (f" since {f['first_seen']}" if f.get("first_seen") else "") + (f" (was `{f['previous_id']}`)" if f.get("previous_id") else ""))
     if f.get("severity_revision"):
         rv = f["severity_revision"]
         w(f"- **Severity revision:** {rv['from']} → {rv['to']} by {rv['by']} — {rv['reason']} (evidence: `{rv['evidence']}`)")
@@ -248,10 +276,10 @@ open(f"{OUT}/remediation-plan.md", "w").write("\n".join(P))
 # ------------------------------------------------------------------ findings.csv
 with open(f"{OUT}/findings.csv", "w", newline="") as fh:
     cw = csv.writer(fh)
-    cw.writerow(["id", "vuln_class", "severity", "severity_reported", "confidence", "privilege_required", "file", "line", "endpoint", "cwe", "owasp", "title", "evidence"])
+    cw.writerow(["id", "fingerprint", "status", "change", "first_seen", "vuln_class", "severity", "severity_reported", "confidence", "privilege_required", "file", "line", "endpoint", "cwe", "owasp", "title", "evidence"])
     for f in findings:
         loc = f.get("location") or {}; e = f.get("endpoint") or {}
-        cw.writerow([f["id"], f["vuln_class"], f["severity"], f.get("severity_reported_by_filer") or f.get("severity_reported"), f["confidence"], f["privilege_required"],
+        cw.writerow([f["id"], f.get("fingerprint") or "", f.get("status") or "open", f.get("change") or "", f.get("first_seen") or "", f["vuln_class"], f["severity"], f.get("severity_reported_by_filer") or f.get("severity_reported"), f["confidence"], f["privilege_required"],
                      loc.get("file"), loc.get("line"), f"{e.get('method','')} {e.get('path','')}".strip(), f.get("cwe") or "", f.get("owasp") or "", f["title"], f["evidence"]])
 
 # ------------------------------------------------------------------ codeaudit.sarif
@@ -267,9 +295,16 @@ for f in findings:
         "ruleId": rid, "level": LEVEL[f["severity"]],
         "message": {"text": f"[{f['severity']}] {f['title']} (confidence {f['confidence']}, privilege_required {f['privilege_required']}). Evidence: {f['evidence']}"},
         "locations": [{"physicalLocation": {"artifactLocation": {"uri": loc.get("file"), "uriBaseId": "%SRCROOT%"}, "region": {"startLine": int(loc.get("line") or 1)}}}],
-        "partialFingerprints": {"codeaudit/id": f["id"]},
-        "properties": {"codeaudit": {k: f.get(k) for k in ("id", "vuln_class", "severity", "confidence", "privilege_required", "source", "sink", "slot_type", "endpoint", "severity_cap_applied")}},
+        # `codeaudit/fingerprint` is the cross-run identity (stable across line moves); the id is per-run.
+        "partialFingerprints": {"codeaudit/id": f["id"], **({"codeaudit/fingerprint": f["fingerprint"]} if f.get("fingerprint") else {})},
+        "properties": {"codeaudit": {k: f.get(k) for k in ("id", "fingerprint", "status", "change", "first_seen", "vuln_class", "severity", "confidence", "privilege_required", "source", "sink", "slot_type", "endpoint", "severity_cap_applied")}},
     }
+    # SARIF baselineState is the standard way to say "new vs unchanged since the baseline run".
+    if f.get("change") in ("new", "persisting"): res["baselineState"] = {"new": "new", "persisting": "unchanged"}[f["change"]]
+    # An accepted risk is a SARIF suppression, so code-scanning UIs hide it without losing it.
+    if f.get("status") == "accepted-risk":
+        a = f.get("accepted") or {}
+        res["suppressions"] = [{"kind": "external", "status": "accepted", "justification": a.get("reason") or "accepted risk"}]
     if f.get("locations"):
         res["relatedLocations"] = [{"id": i + 1, "physicalLocation": {"artifactLocation": {"uri": l["file"], "uriBaseId": "%SRCROOT%"}, "region": {"startLine": int(l["line"])}},
                                     "message": {"text": l.get("channel") or l.get("note") or "same root cause"}} for i, l in enumerate(f["locations"])]

@@ -113,4 +113,6 @@ Write your negatives to `outputs/{engagement}/findings/_safe-sweep-{mode}.md`, i
 
 Append to `outputs/{engagement}/activity/adversarial-sweep-{mode}.log` (NDJSON). Announce
 **SWEEP COMPLETE ({mode})** with the directory or exclusion examined, the finding count, and — in
-`challenge-exclusion` — whether the exclusion held.
+`challenge-exclusion` — whether the exclusion held. Your status line also carries the **skipped register**
+(`SKILL.md` → *The skipped register*): `SKIPPED: none`, or `SKIPPED: <n>` with one `- [skipped] path — why`
+line per path under `## coverage_gaps` of your `_safe-sweep-{mode}.md`.

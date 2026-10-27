@@ -93,6 +93,7 @@ Paths relative to \`src/\`; \`H/\` = \`src/handlers/\`.
 
 ## coverage_gaps
 - src/workers/*.ts — dynamic dispatch not traced → recommended: trace consumers
+- [skipped] src/legacy/exploit-samples.ts — declined: file is a payload corpus and the analysis was cut short
 `);
   w(root, 'plan/_relations.json', JSON.stringify({
     duplicates: [], subsumed: [],
@@ -164,7 +165,19 @@ test('aggregate: lenient enum tokens, caps, overrides, extra locations, dedup, u
   // unconfirmed never reaches findings[]; it lands in coverage_gaps
   assert.ok(!by['finding-xss-001']);
   assert.ok(r.coverage_gaps.some((g) => g.item.startsWith('finding-xss-001')));
-  assert.deepEqual(r.summary, { informational: 0, low: 1, medium: 1, high: 0, critical: 0, total: 2 });
+  assert.deepEqual(r.summary, { informational: 0, low: 1, medium: 1, high: 0, critical: 0, total: 2, accepted_risk: 0 });
+
+  // the skipped register: a `[skipped]` coverage_gaps line keeps its path verbatim and is surfaced separately
+  const sk = r.coverage_gaps.find((g) => g.kind === 'skipped');
+  assert.equal(sk.item, 'src/legacy/exploit-samples.ts');
+  assert.match(sk.reason, /payload corpus/);
+  assert.equal(r.skipped_paths.length, 1);
+  assert.equal(r.aggregation_stats.skipped_paths, 1);
+
+  // every finding carries a stable fingerprint; no --previous → change is null, run_diff is null
+  for (const f of r.findings) assert.match(f.fingerprint, /^fp_[0-9a-f]{16}$/);
+  assert.equal(r.run_diff, null);
+  assert.ok(r.findings.every((f) => f.change === null));
 
   // evidence arrays: disposition enum enforced (missing → model_gap + violation), both halves of an assumption
   const tnv = r.tested_not_vulnerable;
@@ -189,6 +202,169 @@ test('aggregate: an override naming an unknown finding is a recorded violation, 
   const r = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
   assert.ok(r.contract_violations.some((v) => v.where === 'finding-nope-999'));
   rmSync(root, { recursive: true, force: true });
+});
+
+test('fingerprint: survives a line move and an id renumbering, changes when the sink changes', () => {
+  const root = fixture();
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json'], root);
+  const r1 = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  const fp1 = Object.fromEntries(r1.findings.map((f) => [f.title, f.fingerprint]));
+
+  // second "run": same bugs, every line number shifted, ids renumbered, a finding's title reworded
+  // (inj-002 is the fixture's exact-key duplicate of inj-001; it goes too, or it would survive dedup at the old line)
+  const root2 = fixture();
+  rmSync(path.join(root2, 'findings/finding-inj-001'), { recursive: true });
+  rmSync(path.join(root2, 'findings/finding-inj-002'), { recursive: true });
+  w(root2, 'findings/finding-inj-007/description.md', finding('injection', 'SQLi in a (reworded)', {
+    severity: 'critical', confidence: 'high', privilege: 'authenticated',
+    src: '`req.query.q` (src/handlers/a.ts:14)', sink: '`db.raw` (src/db/repo.ts:103)', loc: 'src/db/repo.ts:103' }));
+  py('aggregate.py', [root2, '--write', '--meta', 'plan/_meta.json'], root2);
+  const r2 = JSON.parse(readFileSync(path.join(root2, 'codeaudit-report.json'), 'utf8'));
+  const inj = r2.findings.find((f) => f.id === 'finding-inj-007');
+  assert.equal(inj.fingerprint, fp1['SQLi in a'], 'line move + renumber + reworded title → same identity');
+  assert.equal(r2.findings.find((f) => f.id === 'finding-ac-001').fingerprint, fp1['IDOR on b']);
+
+  // a different sink expression at the same place is a different finding
+  const root3 = fixture();
+  rmSync(path.join(root3, 'findings/finding-inj-001'), { recursive: true });
+  w(root3, 'findings/finding-inj-001/description.md', finding('injection', 'SQLi in a', {
+    severity: 'critical', confidence: 'high', privilege: 'authenticated',
+    src: '`req.query.q` (src/handlers/a.ts:10)', sink: '`knex.whereRaw` (src/db/repo.ts:99)', loc: 'src/db/repo.ts:99' }));
+  py('aggregate.py', [root3, '--write', '--meta', 'plan/_meta.json'], root3);
+  const r3 = JSON.parse(readFileSync(path.join(root3, 'codeaudit-report.json'), 'utf8'));
+  assert.notEqual(r3.findings.find((f) => f.id === 'finding-inj-001').fingerprint, fp1['SQLi in a']);
+  for (const d of [root, root2, root3]) rmSync(d, { recursive: true, force: true });
+});
+
+test('fingerprint: two surviving findings with identical material get deterministic ordinal suffixes', () => {
+  const root = fixture();
+  // same sink expression, same source, one file, two lines — a real shape (the same raw query copy-pasted)
+  w(root, 'findings/finding-inj-003/description.md', finding('injection', 'SQLi in a, second copy', {
+    severity: 'high', confidence: 'high', privilege: 'authenticated',
+    src: '`req.query.q` (src/handlers/a.ts:10)', sink: '`db.raw` (src/db/repo.ts:150)', loc: 'src/db/repo.ts:150' }));
+  py('aggregate.py', [root, '--write'], root);
+  const r = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  const a = r.findings.find((f) => f.id === 'finding-inj-001').fingerprint;
+  const b = r.findings.find((f) => f.id === 'finding-inj-003').fingerprint;
+  assert.equal(b, `${a}-2`, 'the higher sink line takes the -2 suffix');
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('--previous: classifies new / persisting / not re-found by fingerprint and carries first_seen', () => {
+  const prevRoot = fixture();
+  py('aggregate.py', [prevRoot, '--write', '--meta', 'plan/_meta.json'], prevRoot);
+  const prevReport = path.join(prevRoot, 'codeaudit-report.json');
+
+  const root = fixture();
+  // the IDOR is gone, the SQLi moved lines (its exact-key duplicate with it), one brand-new finding appears
+  rmSync(path.join(root, 'findings/finding-ac-001'), { recursive: true });
+  rmSync(path.join(root, 'findings/finding-inj-001'), { recursive: true });
+  rmSync(path.join(root, 'findings/finding-inj-002'), { recursive: true });
+  w(root, 'findings/finding-inj-001/description.md', finding('injection', 'SQLi in a', {
+    severity: 'critical', confidence: 'high', privilege: 'authenticated',
+    src: '`req.query.q` (src/handlers/a.ts:12)', sink: '`db.raw` (src/db/repo.ts:101)', loc: 'src/db/repo.ts:101' }));
+  w(root, 'findings/finding-ssrf-001/description.md', finding('ssrf', 'SSRF in d', {
+    severity: 'high', confidence: 'high', privilege: 'none',
+    src: '`req.body.y` (src/web/d.ts:40)', sink: '`axios.get` (src/http/fetch.ts:12)', loc: 'src/http/fetch.ts:12', slot: 'URL-host', cwe: 'CWE-918' }));
+  w(root, 'plan/_meta.json', JSON.stringify({ engagement: 'fx-2', repo: '/tmp/fx', commit: 'def5678', date: '2026-02-01', metadata: {} }));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--previous', prevReport], root);
+  const r = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  const by = Object.fromEntries(r.findings.map((f) => [f.id, f]));
+  assert.equal(by['finding-inj-001'].change, 'persisting');
+  assert.equal(by['finding-inj-001'].first_seen, '2026-01-01', 'first_seen is inherited from the previous report date');
+  assert.equal(by['finding-inj-001'].previous_id, 'finding-inj-001');
+  assert.equal(by['finding-ssrf-001'].change, 'new');
+  assert.equal(by['finding-ssrf-001'].first_seen, '2026-02-01');
+  assert.deepEqual(r.run_diff.new, ['finding-ssrf-001']);
+  assert.deepEqual(r.run_diff.persisting, ['finding-inj-001']);
+  assert.equal(r.run_diff.not_refound.length, 1);
+  assert.equal(r.run_diff.not_refound[0].id, 'finding-ac-001');
+  assert.equal(r.run_diff.previous_engagement, 'fx');
+  assert.match(r.run_diff.note, /never a list of fixes/);
+
+  // a previous report written before fingerprints existed is recomputed, not rejected
+  const legacy = JSON.parse(readFileSync(prevReport, 'utf8'));
+  for (const f of legacy.findings) delete f.fingerprint;
+  writeFileSync(prevReport, JSON.stringify(legacy));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--previous', prevReport], root);
+  const r2 = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  assert.deepEqual(r2.run_diff.persisting, ['finding-inj-001']);
+  assert.ok(!r2.contract_violations.some((v) => v.where === 'previous'));
+  rmSync(prevRoot, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
+});
+
+test('--accepted: an accepted risk stays listed with its reason, leaves the tally, and an unmatched entry is reported', () => {
+  const root = fixture();
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json'], root);
+  const r0 = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  const fp = r0.findings.find((f) => f.id === 'finding-ac-001').fingerprint;
+  w(root, '.codeaudit-accepted.json', JSON.stringify({ accepted: [
+    { fingerprint: fp, reason: 'object ids are unguessable UUIDs; tracked in SEC-42', by: 'security lead', date: '2026-01-15' },
+    { fingerprint: 'fp_0000000000000000', reason: 'stale entry' },
+    { reason: 'no fingerprint at all' },
+  ] }));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--accepted', '.codeaudit-accepted.json'], root);
+  const r = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  const ac = r.findings.find((f) => f.id === 'finding-ac-001');
+  assert.equal(ac.status, 'accepted-risk');
+  assert.equal(ac.accepted.by, 'security lead');
+  assert.equal(ac.severity, 'low', 'the rating is kept — acceptance is a decision, not a re-assessment');
+  // without --relations there is no class-owner override: inj-001 is critical, capped to high by `authenticated`
+  assert.deepEqual(r.summary, { informational: 0, low: 0, medium: 0, high: 1, critical: 0, total: 1, accepted_risk: 1 });
+  assert.deepEqual(r.aggregation_stats.accepted_unmatched, ['fp_0000000000000000']);
+  assert.ok(r.contract_violations.some((v) => v.where === 'accepted' && /lacks fingerprint/.test(v.issue)));
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('--previous + --accepted: a risk accepted last run but not covered now is a recorded violation', () => {
+  const prevRoot = fixture();
+  py('aggregate.py', [prevRoot, '--write', '--meta', 'plan/_meta.json'], prevRoot);
+  const prev = JSON.parse(readFileSync(path.join(prevRoot, 'codeaudit-report.json'), 'utf8'));
+  prev.findings.find((f) => f.id === 'finding-ac-001').status = 'accepted-risk';
+  writeFileSync(path.join(prevRoot, 'codeaudit-report.json'), JSON.stringify(prev));
+  const root = fixture();
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--previous', path.join(prevRoot, 'codeaudit-report.json')], root);
+  const r = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  assert.ok(r.contract_violations.some((v) => v.where === 'finding-ac-001' && /accepted-risk in the previous report/.test(v.issue)));
+  assert.equal(r.findings.find((f) => f.id === 'finding-ac-001').status, 'open', 'acceptance is never inherited silently');
+  rmSync(prevRoot, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
+});
+
+test('render: run diff, skipped register, fingerprints and accepted risks reach every deliverable', () => {
+  const prevRoot = fixture();
+  py('aggregate.py', [prevRoot, '--write', '--meta', 'plan/_meta.json'], prevRoot);
+  const root = fixture();
+  rmSync(path.join(root, 'findings/finding-ac-001'), { recursive: true });
+  w(root, 'findings/finding-ssrf-001/description.md', finding('ssrf', 'SSRF in d', {
+    severity: 'high', confidence: 'high', privilege: 'none',
+    src: '`req.body.y` (src/web/d.ts:40)', sink: '`axios.get` (src/http/fetch.ts:12)', loc: 'src/http/fetch.ts:12', slot: 'URL-host', cwe: 'CWE-918' }));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json'], root);
+  const fpInj = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8')).findings.find((f) => f.id === 'finding-inj-001').fingerprint;
+  w(root, '.codeaudit-accepted.json', JSON.stringify({ accepted: [{ fingerprint: fpInj, reason: 'legacy admin tool, retired next quarter', by: 'CTO', date: '2026-01-20' }] }));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--relations', 'plan/_relations.json',
+    '--previous', path.join(prevRoot, 'codeaudit-report.json'), '--accepted', '.codeaudit-accepted.json'], root);
+  py('render.py', [root], root);
+  const md = readFileSync(path.join(root, 'report.md'), 'utf8');
+  assert.ok(md.includes('## Changes Since Previous Run'));
+  assert.ok(md.includes('**1 new**, **1 persisting**, **1 not re-found**'));
+  assert.ok(md.includes('Not re-found (verify before calling any of these fixed)'));
+  assert.ok(md.includes('## Paths an Auditor Did Not Fully Analyse'));
+  assert.ok(md.includes('`src/legacy/exploit-samples.ts`'));
+  assert.ok(md.includes('**Status:** accepted-risk — legacy admin tool, retired next quarter (by CTO, 2026-01-20)'));
+  assert.ok(md.includes('| accepted risk (listed, excluded from the tally) | 1 |'));
+  assert.ok(md.includes('**Change:** new since the previous run'));
+  assert.match(md, /\*\*Fingerprint:\*\* `fp_[0-9a-f]{16}`/);
+  const csv = readFileSync(path.join(root, 'findings.csv'), 'utf8').split('\n');
+  assert.ok(csv[0].startsWith('id,fingerprint,status,change,first_seen,'));
+  const sarif = JSON.parse(readFileSync(path.join(root, 'codeaudit.sarif'), 'utf8'));
+  const inj = sarif.runs[0].results.find((x) => x.partialFingerprints['codeaudit/id'] === 'finding-inj-001');
+  assert.equal(inj.partialFingerprints['codeaudit/fingerprint'], fpInj);
+  assert.equal(inj.baselineState, 'unchanged');
+  assert.equal(inj.suppressions[0].kind, 'external');
+  const ssrf = sarif.runs[0].results.find((x) => x.partialFingerprints['codeaudit/id'] === 'finding-ssrf-001');
+  assert.equal(ssrf.baselineState, 'new');
+  assert.ok(!ssrf.suppressions);
+  rmSync(prevRoot, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true });
 });
 
 test('render: produces the five deliverables from the report and the narrative', () => {

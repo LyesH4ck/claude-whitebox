@@ -133,5 +133,10 @@ the first pass's finding dirs.
 
 ## Completion
 
+**Skipped register — answer it before you announce** (`SKILL.md` → *The skipped register*). State in your
+final status line `SKIPPED: none`, or `SKIPPED: <n>` with one `- [skipped] path — why` line per path under
+`## coverage_gaps` of your `_safe-` file, for every file in scope you declined, refused, or did not finish.
+A status with no `SKIPPED:` line is an unanswered register, not a clean one.
+
 Announce **LOGGING AUDIT COMPLETE** with counts (and any coverage gap, e.g. log config not resolvable
 statically) and stop.

@@ -135,9 +135,15 @@ keep all four even when a section is empty (write `- none`).
 ## coverage_gaps
 - deserialization in the worker queue — payload schema not statically resolvable (dynamic dispatch)
   → recommended: trace src/workers/*.ts consumers
+- [skipped] src/legacy/exploit-samples.ts — declined: reads as a payload corpus; analysis stopped at line 40
 ```
 
 Rules for this file:
+- A `coverage_gaps` line opening with **`[skipped]`** is the **skipped register** (`SKILL.md` → *The skipped
+  register*): one line per path in your scope you declined, refused, or did not finish, as
+  `- [skipped] path — why`. The aggregator keeps the path verbatim, tags the entry `kind: skipped`, lists it
+  under `skipped_paths` in the report and prints it as its own section, and the orchestrator re-dispatches on
+  it. Write the path, not a description — the orchestrator dispatches on what you wrote.
 - A `tested_not_vulnerable` line **must** open with a `[disposition]` from the closed enum in
   `REPORT_CONTRACT.md` and carry the `file:line` that discharges it (`model_gap` carries the open question
   instead).

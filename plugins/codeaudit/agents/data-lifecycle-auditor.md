@@ -142,5 +142,10 @@ prefix; scan existing `finding-life-*` first, never renumber). Safe lineages →
 
 ## Completion
 
+**Skipped register — answer it before you announce** (`SKILL.md` → *The skipped register*). State in your
+final status line `SKIPPED: none`, or `SKIPPED: <n>` with one `- [skipped] path — why` line per path under
+`## coverage_gaps` of your `_safe-` file, for every file in scope you declined, refused, or did not finish.
+A status with no `SKIPPED:` line is an unanswered register, not a clean one.
+
 When every record lineage in scope has a verdict, announce **DATA LIFECYCLE AUDIT COMPLETE** with counts and
 stop. Report `complete` only when every lineage was traced; otherwise `incomplete` with the remainder.

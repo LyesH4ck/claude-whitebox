@@ -170,7 +170,53 @@ A run is **incomplete** if `report.md` does not exist.
   not fully inspected) for every entry in `findings[]`. `unconfirmed` (suspected, no complete path) is
   **not a finding**: record it under `coverage_gaps` only, never in `findings[]` — this keeps the headline
   count deterministic across runs. In hybrid mode a live corroboration may raise `probable`→`high`.
-- **`status`** — `open` | `remediated` | `accepted-risk` (default `open`).
+- **`status`** — `open` | `remediated` | `accepted-risk` (default `open`). `accepted-risk` is set **only** by the
+  aggregator from the operator's accepted-risk file (below) — never by an auditor, and never inherited from a
+  previous report: a risk accepted last run whose entry is absent now comes back `open` with a recorded
+  `contract_violations` entry, so an acceptance cannot outlive the file that records it.
+- **`fingerprint`** (aggregator-written, every finding) — the finding's **cross-run identity**: `fp_` + 16 hex
+  of a hash over `vuln_class`, the sink **file**, the sink **expression**, `slot_type`, the source
+  **expression** and the source **file**. **No line number goes in**, so an unrelated edit above the sink
+  does not change it; a renamed sink file does, and that reads as a new finding — the documented limit. Two
+  surviving findings with identical material (one raw query pasted twice in one file) get `-2`, `-3`
+  suffixes in ascending sink-line order. The per-run `id` stays the on-disk name; the fingerprint is what
+  `--previous`, the accepted-risk file, SARIF (`partialFingerprints["codeaudit/fingerprint"]`) and any
+  tracker should key on.
+- **`change`** / **`first_seen`** / **`previous_id`** — written when the aggregator ran with `--previous
+  <older codeaudit-report.json>`: `change` is `new` or `persisting` (`null` when no previous report was
+  given), `first_seen` is the date the fingerprint was first reported (inherited through successive
+  reports), `previous_id` the id it carried last time. An older report with no fingerprints is recomputed,
+  not rejected.
+- **`accepted`** — `{ reason, by, date, expires }` copied from the matching accepted-risk entry when
+  `status` is `accepted-risk`.
+- **`run_diff`** (top level; `null` without `--previous`) — `{ previous_report, previous_engagement,
+  previous_date, new[], persisting[], not_refound[], note }`. **`not_refound` is a list to verify, never a
+  list of fixes**: a finding can vanish because the code was fixed, because the file was renamed, because
+  an auditor skipped it, or because this run's recon never reached it. Confirm each with git history or a
+  focused re-dispatch before anything is marked `remediated`.
+- **`skipped_paths`** (top level) — the skipped registers of every auditor (`SKILL.md` → *The skipped
+  register*): the `coverage_gaps` entries with `kind: "skipped"`, each a path an auditor declared it
+  declined, refused or did not finish. They stay in `coverage_gaps` too; this array exists so the orchestrator
+  and the reader cannot miss them in a long gaps list.
+
+#### The accepted-risk file (`.codeaudit-accepted.json`, operator-owned)
+
+Lives at the root of the audited repository, is committed, and is the only input that turns a finding into
+`accepted-risk`:
+
+```json
+{ "accepted": [
+  { "fingerprint": "fp_3f9c2a1b7e8d4c05", "reason": "object ids are unguessable UUIDs; tracked in SEC-42",
+    "by": "security lead", "date": "2026-01-15", "expires": "2026-12-31" }
+] }
+```
+
+`fingerprint` and `reason` are required; an entry without either is a recorded violation and ignored. An
+accepted finding **stays in `findings[]`** with its rating untouched (acceptance is a decision, not a
+re-assessment) and is **excluded from `summary`**, which gains an `accepted_risk` count; in SARIF it becomes a
+`suppressions[]` entry so code-scanning UIs hide it without losing it. A fingerprint in the file that matches
+no finding is listed under `aggregation_stats.accepted_unmatched` — the usual cause is a sink rename that
+changed the fingerprint, which is the moment to re-read the acceptance rather than carry it forward blindly.
 - **`depth`** — `Quick` | `Standard` | `Thorough` (default). Records how far indirect/second-order flows
   were chased. It does NOT cap which sources were covered: a complete audit traces every in-scope source
   regardless of depth — depth only governs how deep each path is followed.
@@ -221,10 +267,12 @@ A run is **incomplete** if `report.md` does not exist.
 > them loses the difference between *we checked and it holds*, *this is deliberate*, *we could not tell from
 > source*, and *we did not get to it*. Empty `findings[]` is never proof of complete coverage — these arrays
 > are what makes coverage provable.
-- **`summary`** — severity counts computed over `findings[]` only. Because `findings[]` carries only
-  `high`/`probable` confidence (`unconfirmed` lives in `coverage_gaps`) and the headline vulnerability
-  tally excludes `informational` (see Exploitability bar), `summary.total` counts exactly the confirmed
-  findings (`confidence ∈ {high, probable}`, severity ≥ `low`) — the same input twice yields the same total.
+- **`summary`** — severity counts computed over the **open** entries of `findings[]` only. Because
+  `findings[]` carries only `high`/`probable` confidence (`unconfirmed` lives in `coverage_gaps`) and the
+  headline vulnerability tally excludes `informational` (see Exploitability bar), `summary.total` counts
+  exactly the confirmed, open findings (`confidence ∈ {high, probable}`, severity ≥ `low`, `status ≠
+  accepted-risk`) — the same input twice yields the same total. `summary.accepted_risk` counts the entries
+  excluded by acceptance, so the two numbers always add back up to the listed findings.
 
 ## Severity rubric (impact × reachability × confidence)
 

@@ -137,6 +137,11 @@ coverage gaps in the same file. Append traces/verdicts to `activity/business-log
 
 ## Completion
 
+**Skipped register — answer it before you announce** (`SKILL.md` → *The skipped register*). State in your
+final status line `SKIPPED: none`, or `SKIPPED: <n>` with one `- [skipped] path — why` line per path under
+`## coverage_gaps` of your `_safe-` file, for every file in scope you declined, refused, or did not finish.
+A status with no `SKIPPED:` line is an unanswered register, not a clean one.
+
 When every enumerated invariant in scope has a verdict, announce **BUSINESS LOGIC AUDIT COMPLETE** with
 counts (invariants checked, vulnerable, safe, unconfirmed) and stop. Report status `complete` only when
 every workflow in scope was reviewed; if any invariant is un-traced, report `incomplete` and list what

@@ -55,6 +55,8 @@ value as the default when present:
 3. "Focus paths — directories/files to prioritize, or 'all'" → `focus`
 4. "Out-of-scope — paths to exclude, or 'none'" → `out_of_scope`
 5. "Live correlation URL — a running instance to optionally corroborate against, or 'none'" → `target_url` (null if 'none')
+6. "Previous report to diff against — path to an older codeaudit-report.json of this repository, or 'none'
+   (the audit can also offer one it finds under outputs/ at launch)" → `previous_report` (null if 'none')
 
 A code audit runs to completeness (every source→sink path in scope), so there is **no time budget**.
 Depth is optional and defaults to `Thorough` (complete). Only if the operator wants a lighter pass, ask
@@ -77,6 +79,7 @@ Write `.codeaudit-scope.json` with `"status": "pending"` (this command saves sco
   "focus": "{focus}",
   "out_of_scope": "{out_of_scope}",
   "target_url": {target_url or null},
+  "previous_report": {previous_report or null},
   "depth": "{depth or "Thorough"}",
   "output_formats": {output_formats array},
   "status": "pending"

@@ -110,6 +110,30 @@ normalising it away. `render.py` renders the fixed report template plus the oper
 `codeaudit-report.json` and a `plan/_narrative.json` the orchestrator writes — so the five deliverables can
 never disagree. Tests: `node --test plugins/codeaudit/tools/tools.test.mjs`.
 
+Two inputs make successive audits of one repository comparable:
+
+```sh
+python3 -I tools/aggregate.py outputs/<engagement> --write --previous outputs/<older>/codeaudit-report.json \
+                                                           --accepted /path/to/repo/.codeaudit-accepted.json
+```
+
+Every finding carries a **fingerprint** — a hash of class, sink file, sink and source expressions and slot,
+with no line number in it — so it survives unrelated edits and id renumbering. `--previous` tags each finding
+`new` or `persisting` (with `first_seen`) and lists what was not re-found as a list to verify, never a list
+of fixes. `--accepted` reads the operator's `.codeaudit-accepted.json` (fingerprint + reason + who + when):
+an accepted risk stays listed, keeps its rating, leaves the tally, and becomes a SARIF suppression. An
+acceptance is never inherited from an older report — the file is the only authority.
+
+## The skipped register
+
+Before announcing, every auditor answers one question in writing: *did I decline, refuse, stop partway or not
+reach any file in my scope?* The answer is `SKIPPED: none` or `SKIPPED: <n>` with one `[skipped] path — why`
+line per path in its evidence file. The aggregator surfaces them as `skipped_paths`, the report prints them as
+their own section, the orchestrator re-dispatches on them, and the preflight blocks an auditor prompt that
+stopped asking. It exists because the failure it catches is silent in the worst direction: an auditor that
+refuses a file still says `complete`, and the report then prints "all in-scope sources traced" over code
+nobody read.
+
 ## Measuring it
 
 [`evals/`](evals/) holds fixtures with a **known planted bug and a known safe sibling next to it**, plus

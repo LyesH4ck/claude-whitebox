@@ -205,6 +205,29 @@ function checkSafeFileContract() {
   return H.length;
 }
 
+/**
+ * The skipped register. Every auditor must end its status with `SKIPPED: none|<n>` and write skipped paths
+ * as `[skipped]` lines the aggregator parses. An agent that lost the instruction does not fail — it reports
+ * `complete` over a file it never read, and the report prints "all in-scope sources traced" above it. The
+ * three pieces (agent prompt, methodology, parser) must agree, so each is checked.
+ */
+function checkSkippedRegister() {
+  let checked = 0;
+  const agents = agentFiles().filter((f) => /-auditor\.md$|adversarial-sweep\.md$/.test(f));
+  for (const f of agents) {
+    checked++;
+    if (!/SKIPPED:\s*none/.test(read(f))) {
+      blocking('skipped-register', `${path.basename(f)} never asks for the skipped register (SKIPPED: none|<n>)`,
+        'An auditor that is not asked whether it skipped a file answers nothing, and nothing reads as "all traced".');
+    }
+  }
+  const skill = read(path.join(PLUGIN, 'skills/code-audit/SKILL.md'));
+  if (!/###\s+The skipped register/.test(skill)) blocking('skipped-register', 'SKILL.md has no "The skipped register" section', 'Agents point at it by name.');
+  const agg = read(path.join(PLUGIN, 'tools/aggregate.py'));
+  if (!agg.includes('[skipped]')) blocking('skipped-register', 'tools/aggregate.py does not parse `[skipped]` lines', 'Registers would be written and never surfaced.');
+  return checked;
+}
+
 /** Cross-file pointers: reference/X.md and "→ *Section*" must resolve. */
 function checkPointers() {
   const refNames = new Set(mdFiles(REF).map((f) => path.basename(f)));
@@ -363,7 +386,8 @@ function main(argv) {
 
   const stats = {
     mounts: checkMounts(cwd), agents: checkAgents(), ecosystems: checkEnums(),
-    safe_headings: checkSafeFileContract(), pointers: checkPointers(), artifacts: checkArtifacts(), tools: checkTools(),
+    safe_headings: checkSafeFileContract(), skipped_register: checkSkippedRegister(), pointers: checkPointers(),
+    artifacts: checkArtifacts(), tools: checkTools(),
   };
   const target = repo ? checkTarget(path.resolve(repo)) : null;
 
@@ -375,7 +399,7 @@ function main(argv) {
   } else {
     console.log(`\ncodeaudit preflight — launch dir: ${cwd}`);
     console.log(`  plugin: ${stats.mounts} mount paths · ${stats.agents} agents · ${stats.ecosystems} ecosystem files · ` +
-      `${stats.pointers} pointers · ${stats.artifacts} artifacts · ${stats.tools} tools`);
+      `${stats.skipped_register} skipped registers · ${stats.pointers} pointers · ${stats.artifacts} artifacts · ${stats.tools} tools`);
     if (target) {
       console.log(`  target: ${path.resolve(repo)} — ${target.isGit ? 'git' : 'NOT git'} · ${target.files} files · ` +
         `ecosystems: ${(target.ecosystems || []).map((e) => e.key + (e.locked ? `(${e.lockfile})` : '(NO LOCKFILE)')).join(', ') || 'none'}`);
@@ -401,4 +425,4 @@ function isMainModule() {
 }
 if (isMainModule()) process.exit(main(process.argv.slice(2)));
 
-export { checkMounts, checkAgents, checkEnums, checkSafeFileContract, checkPointers, checkArtifacts, checkTools, checkTarget, problems };
+export { checkMounts, checkAgents, checkEnums, checkSafeFileContract, checkSkippedRegister, checkPointers, checkArtifacts, checkTools, checkTarget, problems };

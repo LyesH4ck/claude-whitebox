@@ -4,6 +4,46 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.73] — 2026-10-27
+
+### Added — `codeaudit` 0.12.0: the skipped register, and findings that keep their identity across runs
+
+Two things borrowed, in spirit, from how a scanner that runs every day has to behave — neither changes a
+verdict; both change what a report can honestly claim.
+
+- **The skipped register.** An auditor that refuses a file (a payload corpus, a content filter, a tool error, a
+  file too large to finish) does not fail — it says `complete`, and the report prints "all in-scope sources
+  traced" over code nobody read. Every auditor and the adversarial sweep now end their status with
+  `SKIPPED: none` or `SKIPPED: <n>`, the paths written as `- [skipped] path — why` under `coverage_gaps` of
+  the `_safe-` file (`SKILL.md` → *The skipped register*, `OUTPUT_STRUCTURE.md`). `aggregate.py` keeps the
+  path verbatim, tags the entry `kind: skipped`, exposes `skipped_paths[]`; `render.py` prints them as their
+  own section; Step 6.5 re-dispatches on them (a different agent of the same class when the reason was a
+  refusal) and treats a status with no `SKIPPED:` line as an unanswered register, not a clean one;
+  `preflight.mjs` blocks an auditor prompt that stopped asking (+ 1 test in the failing direction).
+- **Stable fingerprints.** Every finding carries `fingerprint`: `fp_` + 16 hex of (class, sink file, sink
+  expression, slot, source expression, source file). No line number goes in, so an unrelated edit above the
+  sink, an id renumbering or a reworded title keep the identity; a renamed sink file reads as new (documented).
+  Identical material at two lines of one file gets `-2`, `-3` suffixes in sink-line order. SARIF carries it as
+  `partialFingerprints["codeaudit/fingerprint"]`; the CSV gains `fingerprint, status, change, first_seen`.
+- **`--previous <older codeaudit-report.json>`** diffs by fingerprint: each finding becomes `new` or
+  `persisting` (`first_seen` inherited through successive reports, `previous_id` kept), the report gains
+  `run_diff` and a *Changes Since Previous Run* section, SARIF gets `baselineState`. `not_refound[]` is stated
+  everywhere as **a list to verify, never a list of fixes** — a finding vanishes just as easily because recon
+  missed its file. An older report with no fingerprints is recomputed, not rejected.
+- **`--accepted <.codeaudit-accepted.json>`** — operator-owned, committed at the repo root, `{ fingerprint,
+  reason, by, date, expires }`. A matching finding becomes `status: accepted-risk`: it stays in `findings[]`
+  with its rating untouched, leaves `summary` (which gains `accepted_risk`), and becomes a SARIF
+  `suppressions[]` entry. An acceptance is **never inherited** from an older report — a finding accepted
+  last run with no entry now comes back `open` with a recorded violation — and an entry matching nothing is
+  listed under `aggregation_stats.accepted_unmatched` (the usual cause is a sink rename, which is the moment
+  to re-read the acceptance).
+- Scope gains an optional `previous_report`; `/codeaudit:codeaudit` Step 2 resolves it (or offers the most
+  recent report of the same repo found under `outputs/`) and the accepted-risk file, echoes both, and Step
+  6.6 passes them to the aggregator. `REPORT_CONTRACT.md` documents `fingerprint`, `change`, `first_seen`,
+  `previous_id`, `accepted`, `run_diff`, `skipped_paths`, the accepted-risk file, and the new meaning of
+  `summary`. `tools.test.mjs` +6 tests (line move, ordinal suffixes, previous diff incl. a legacy report,
+  acceptance, non-inherited acceptance, render/CSV/SARIF end to end).
+
 ## [2.4.72] — 2026-10-27
 
 ### Fixed — `pentest` 2.6.0: the knowledge base is addressed through the plugin root, not the launch directory
