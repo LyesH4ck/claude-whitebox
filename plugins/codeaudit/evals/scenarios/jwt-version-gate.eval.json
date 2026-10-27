@@ -1,0 +1,46 @@
+{
+  "name": "jwt-version-gate",
+  "given": "jwt.verify() without an explicit algorithms option on jsonwebtoken pinned to 9.0.2, next to a jwt.decode() whose claims decide a role",
+  "fixture": "fixtures/jwt-version-gate",
+  "classes": [
+    "auth",
+    "access-control"
+  ],
+  "rationale": "Same pattern, opposite verdicts, and only the lockfile separates them. 9.x removed the implicit none fallback, so the missing algorithms option on currentUser() is NOT a bypass here — that is the false positive a pattern-matcher makes, and should_not_find keys on the safe function's own name in the finding's identity. decode()-without-verify feeding an authz decision is a finding at every version. must_not_contain lists only other ecosystems' JWT libraries: the CVE id itself is legitimately citable, because the version rule requires naming the cutoff that was compared against.",
+  "should_find": [
+    {
+      "path": "auth.js",
+      "min_severity": "high",
+      "evidence_contains": [
+        "decode",
+        "role"
+      ],
+      "required": true
+    }
+  ],
+  "should_not_find": [
+    {
+      "path": "auth.js",
+      "evidence_contains": [
+        "currentuser"
+      ]
+    },
+    {
+      "path": "auth.js",
+      "cwe": "CWE-347"
+    }
+  ],
+  "should_rule_out": [
+    {
+      "evidence_contains": [
+        "9.0.2"
+      ],
+      "required": false
+    }
+  ],
+  "must_not_contain": [
+    "pyjwt",
+    "golang-jwt",
+    "python-jose"
+  ]
+}

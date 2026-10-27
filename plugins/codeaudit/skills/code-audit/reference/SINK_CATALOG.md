@@ -27,6 +27,11 @@ position — `{$ne:null}`/`{$gt:''}`/`{$regex:…}` — or a user string in a JS
 - Also: Redis `EVAL` / Lua with concatenated user input; CouchDB/N1QL string-built queries
 
 ## OS command injection
+
+> **The argv form is a conditional sink, not a non-sink.** `execFile`/`spawn(shell:false)`/`subprocess.run([…])`/
+> `ProcessBuilder(prog, arg)`/`ArgumentList` bypass the shell but still feed the program's own option parser.
+> Inventory them whenever the program is flag-rich (`git`, `curl`, `wget`, `tar`, `find`, `rsync`, `ffmpeg`,
+> `zip`, `ssh`) and a user value can begin with `-`. Slot: `CMD-option` (CWE-88).
 - **JS/TS**: `child_process.exec(`, `execSync(`, `spawn(..., {shell:true})`
 - **Python**: `os.system`, `subprocess.*(shell=True)`, `os.popen`, `commands.*`
 - **PHP**: `system`, `exec`, `shell_exec`, `passthru`, `proc_open`, backticks

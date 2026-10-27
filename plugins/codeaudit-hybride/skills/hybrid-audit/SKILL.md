@@ -89,3 +89,16 @@ keeps working) plus these **additive** fields:
   calibration.json), codex_jobs: {collected, errored}, disputed_safe: [...] }`.
 - `report.md` gains a **Hybrid analysis** section: agreement table, the Codex-unique findings kept, the
   disputed items with both arguments, and the second-engine gaps.
+
+**`privilege_required` on Codex-only findings.** codeaudit's contract requires `privilege_required` on every
+finding and uses it to cap severity, so a `codex_only` finding cannot enter `codeaudit-report.json` without
+one. `codex-detect.schema.json` accepts it (optional, same closed enum) — when Codex supplies it, carry it
+across unchanged; when it does not, the **orchestrator derives it at adjudication** from the finding's own
+trace, exactly as it already adjudicates a disputed sanitizer citation. Do not default it to `none`: `none`
+is the least-constrained value and the one that permits `critical`, so guessing it inflates severity on
+precisely the findings that had the weakest provenance. If the trace does not establish the principal, keep
+the finding and record the unresolved privilege in `coverage_gaps`.
+
+Apply the severity caps **after** calibration, not before: calibration decides the confidence and the
+agreement class, the caps then bound the severity. A Codex-only finding is already capped at `probable`
+confidence; the privilege cap is independent of that and applies on top.

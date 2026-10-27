@@ -9,15 +9,21 @@ outputs/{engagement}/
 ├── activity/                       # NDJSON logs, one per agent
 │   ├── codeaudit-orchestrator.log
 │   ├── code-recon.log
+│   ├── threat-modeler.log
+│   ├── adversarial-sweep-{mode}.log
 │   └── {class}-auditor.log
-├── recon/                          # code-recon baseline (the foundation)
+├── recon/                          # baseline (the foundation)
 │   ├── attack-surface.md           # entry points, sources, sinks, trust boundaries
 │   ├── architecture.md             # stack, frameworks, data flows, security mechanisms
-│   └── sink-inventory.json         # machine-readable: sinks by class (file:line) + entry_points[] (route↔source map for endpoint resolution)
+│   ├── sink-inventory.json         # machine-readable: sinks by class (file:line) + entry_points[] (route↔source map) + ecosystems[] (reference routing + version pins)
+│   └── threat-model.json           # the security contract: entry-point trust table, adversaries, properties provided/disclaimed, controls + assumptions, dispositions
 ├── plan/
 │   ├── deployment-plan.json        # which auditors, against which components
 │   └── audit-plan.md               # human narrative of the plan
 ├── findings/
+│   ├── _safe-{class}.md            # REQUIRED per auditor — the four evidence categories (format below)
+│   ├── _safe-sweep-{mode}.md       # adversarial-sweep negatives (blind-dig | challenge-exclusion)
+│   ├── finding-sweep-{NNN}/        # adversarial-sweep findings — same shape as any auditor's
 │   └── finding-{NNN}/
 │       ├── description.md          # REQUIRED — details, trace, impact, remediation
 │       ├── snippet.txt             # the vulnerable code at the sink (with file:line header)
@@ -56,7 +62,7 @@ outputs/{engagement}/
 **Severity**: {critical|high|medium|low|informational}
 **Confidence**: {high|probable|unconfirmed}
 **OWASP**: {Axx:2021 ...}   **CWE**: {CWE-xx}   **CVSS**: {score, optional}
-**Reachable**: {externally_reachable}
+**Reachable**: {externally_reachable}   **Privilege required**: {none|authenticated|admin|maintainer|local-root}
 
 ## Location
 `{file}:{line}`
@@ -83,16 +89,100 @@ nullified by post-sanitization concat at file:line}.}
 ## Remediation
 {Specific, idiomatic fix for this stack — e.g. "use parameterized query / allowlist the column".}
 
+## Prior art & prevalence
+{What `git log -S` / `git log --grep` and the issue tracker say about this code, and the prevalence count as
+`<n> hits` with the literal command. Write "searched X and Y, nothing found" when that is the answer — a
+recorded negative search is worth more than silence. Copied into the report's `prior_art` field.}
+
 ## Witness payload (optional)
 `{payload}`  — structure-influence probe for the exploit/validation phase. Not executed during a
 static audit; in hybrid mode a single benign corroboration may be attempted.
 ```
 
+**Parsed labels — keep them verbatim.** `tools/aggregate.py` reads the first line (`# [{vuln_class}] {title}`),
+the bold `**Severity**` / `**Confidence**` / `**Privilege required**` fields (leading enum token; a
+parenthetical after it is kept as a note), and the `- **Source**:` / `- **Sink**:` / `- **Path**:` bullets
+under `## Source → Sink`. On a real engagement three findings lost their endpoint resolution because one
+wrote `**source**` in lower case, one wrote the source as prose with no bullet, and one wrote
+`**Source** (primary):` — the parser now tolerates the first and third, but a `Source` bullet with **no
+`file:line`** is a recorded contract violation and the finding cannot be handed to the pentest plugin. One
+primary source per finding; secondary sources go in the prose or in `locations[]`.
+
+## `_safe-{class}.md` format (the four evidence categories)
+
+Each auditor writes exactly one of these (one per **shard** when a class is sharded:
+`_safe-{class}-{shard}.md`). The Step 6.6 aggregator splits it on these four headings into the matching
+top-level arrays of `codeaudit-report.json`, so **the headings are the contract** — keep them verbatim, and
+keep all four even when a section is empty (write `- none`).
+
+```markdown
+# Evidence — {class}-auditor{ (shard {shard})}
+
+## tested_not_vulnerable
+- [guard_present] all outbound fetches go through a static host allowlist (src/http/client.ts:20)
+- [not_attacker_controlled] report template name comes from a server-side enum (src/report/kinds.ts:8)
+- [precondition_subsumes] "operator can edit the plugin dir" — already code execution
+- [model_gap] admin impersonation flow: could not resolve which principal the audit log binds to
+
+## design_properties
+- public share links are intentionally unauthenticated, scoped to one object id and revocable
+  (docs/sharing.md:14, src/share/resolve.ts:31)
+
+## unverified_assumptions
+- investigated: read nginx.conf + the Helm chart; both terminate TLS upstream, the app never sets HSTS
+  itself → still needs: the deployed edge/CDN TLS and HSTS configuration (not in this repository)
+
+## coverage_gaps
+- deserialization in the worker queue — payload schema not statically resolvable (dynamic dispatch)
+  → recommended: trace src/workers/*.ts consumers
+```
+
+Rules for this file:
+- A `tested_not_vulnerable` line **must** open with a `[disposition]` from the closed enum in
+  `REPORT_CONTRACT.md` and carry the `file:line` that discharges it (`model_gap` carries the open question
+  instead).
+- An `unverified_assumptions` line **must** contain both halves — what you investigated **and** what evidence
+  would settle it. A bare "TLS config unknown" is not an assumption entry, it is a shrug.
+- Do not promote an `unverified_assumptions` item into `tested_not_vulnerable` to tidy the report. Recording
+  an unknown as safe is a false clearance, and it is the one error in this file that actively misleads.
+- **Cite paths so a machine can match them.** The Step 6.5 reconciler matches your `file:line` citations
+  against recon's enumerated sources by path suffix. Full paths from the repo root always match. If you
+  condense (a long handler directory cited a hundred times), **declare the alias once in the file's first
+  lines** in exactly this shape — ``` `H/` = `src/server/routes/route-handlers/` ``` — and the reconciler
+  expands it. An undeclared abbreviation makes every source you verdicted look uncited, and the orchestrator
+  will dispatch a follow-up over work you already did.
+
+## Orchestrator-side plan files (Step 6.5 / 6.6 inputs)
+
+These are written by the orchestrator, not by auditors, and are read by the shipped tools:
+
+| File | Written at | Read by |
+|---|---|---|
+| `plan/_relations.json` | Step 6.6 point 1 ("Relate what you did not merge") | `tools/aggregate.py --relations` |
+| `plan/_meta.json` | Step 6.6 (engagement / repo / commit / scope / depth / ecosystems block) | `tools/aggregate.py --meta` |
+| `plan/_narrative.json` | Step 6.6 point 3, before rendering | `tools/render.py` |
+| `plan/_handoffs-wave{N}.md`, `plan/_handoffs-residue-f{N}.md` | between waves / after reconciliation | the next wave's auditors |
+
+`_relations.json`: `{ "duplicates": [], "subsumed": [], "chains": [], "orchestrator_adjustments": {
+"severity_overrides": [], "additional_locations": [] } }` — shapes in `REPORT_CONTRACT.md`.
+
+`_narrative.json` keys (every one optional; a missing key renders as a visible `TODO-ORCHESTRATOR` marker):
+`plugin_version` · `executive_summary[]` (2-5 paragraphs: nature of the engagement, posture, counts, the single
+most important risk with its precondition stated plainly, the chains, the design property that frames the
+authorization findings) · `model_corrections[]` (threat-model rows overturned during the waves, each with the
+shard that established it) · `cross_references[]` (pairs that are *not* relations, and why) ·
+`design_properties_lead[]` · `coverage_gaps_lead[]` · `coverage_statement` · `reconciliation_statement` ·
+`sweep_statement` · `exec_summary_page[]` · `exec_boundaries[]` · `exec_top_n` · `remediation_groups[]` of
+`{ title, priority (P0|P1|P2), area, finding_ids[], business_impact, fix, acceptance }`.
+
 ## Rules
 
 - **Always log**: every trace and verdict to the activity log.
 - **Always cite**: `file:line` for source, every hop, and the sink.
-- **Always record negatives**: safe vectors → `tested_not_vulnerable`.
+- **Always record negatives, in four separate buckets**: `tested_not_vulnerable` (with a `[disposition]`),
+  `design_properties`, `unverified_assumptions`, `coverage_gaps` — see the `_safe-{class}.md` format above.
+- **Always state the privilege**: every finding carries `privilege_required`; it caps severity
+  (`REPORT_CONTRACT.md` → severity rubric).
 - **No theoreticals as confirmed**: a finding without a complete code trace is `unconfirmed` and goes in
   coverage gaps.
 - **Git-tracked only**: flag tracked files; untracked secrets are informational.

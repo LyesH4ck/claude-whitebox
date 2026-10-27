@@ -4,6 +4,619 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.71] — 2026-10-11
+
+### Added — `codeaudit` 0.11.0: the mechanical half of Steps 6.5 and 6.6 ships as tools
+
+A full engagement (12 classes, 20 auditors over 3 waves, 2 follow-ups, 2 sweeps, 741 enumerated request
+sources, 40 findings) was run with the 0.10.0 prompts. The prompts held; what did not exist was the tooling the
+orchestrator needs to *prove* completeness and to aggregate without losing results. Three scripts written on
+the fly during that run are now part of the plugin, under `plugins/codeaudit/tools/`, each with the defect it
+was written against:
+
+- **`reconcile.py` (Step 6.5)** — enumerated sources (`recon/sink-inventory.json` → `entry_points[].sources[].at`)
+  vs every `finding-*/*.md` and `_safe-*.md`, classified `line-cited` / `file-cited` / `uncited`, written to
+  `recon/_reconciliation.json`. On the engagement it found **114 sources in 49 handler files that three waves
+  had never cited**; the residue follow-up it triggered filed the audit's highest server-side finding. It
+  expands path aliases an auditor **declares at the top of its evidence file** (``` `H/` = `routes/route-handlers/` ```):
+  one condensed evidence file had made 68 verdicted sources look uncited.
+- **`aggregate.py` (Step 6.6)** — parses every finding and evidence file, de-duplicates on
+  `(class, sink, source, slot)`, applies the confidence gate and the `privilege_required` caps, resolves
+  endpoints from recon, splits the four evidence arrays, merges `plan/_relations.json` and writes
+  `codeaudit-report.json`. Two parsing rules learned the hard way: an enum field with a parenthetical
+  (`**Confidence**: probable (platform fact outside the repo)`) keeps its **leading token** and stores the rest
+  as `confidence_note` / `privilege_note` — the strict parser had silently dropped a chain member; and the
+  `unverified_assumptions` / `coverage_gaps` seams (`→ still needs:`, `→ recommended:`) are one separator, not
+  two. New input, documented in `REPORT_CONTRACT.md`: **`orchestrator_adjustments`** — `severity_overrides[]`
+  (a class owner's reassessment of a finding another shard filed in its class, with the addendum as
+  evidence; caps still apply; recorded as `severity_revision`) and `additional_locations[]` (a follow-up's
+  extra sites of the same root cause → `locations[]` and SARIF `relatedLocations`). Nothing else is editable
+  after filing.
+- **`render.py` (Step 6.6)** — renders `report.md` from the fixed template plus `exec-summary.md`,
+  `remediation-plan.md` (tickets grouped by fix; uncovered findings listed, never dropped), `findings.csv` and
+  `codeaudit.sarif`, all from the same `codeaudit-report.json`. The orchestrator writes the judgement half
+  as `plan/_narrative.json` (contract in `OUTPUT_STRUCTURE.md`); a missing key renders as a visible
+  `TODO-ORCHESTRATOR` marker. A hand-written report had no chance of carrying 573 verdicted vectors.
+
+`commands/codeaudit.md` invokes the three by `$CA/tools/...` path; the preflight now blocks when one is
+missing and warns when `python3` is. `OUTPUT_STRUCTURE.md` documents the alias rule and the orchestrator-side
+plan files. 6 new tests (`tools/tools.test.mjs`, fixture engagement, each rule checked in the failing
+direction too) + 1 preflight test.
+
+### Changed — guidance fixes from auditing the engagement's artifacts against the 0.10.0 contract
+
+The run was checked mechanically against what 0.9.0/0.10.0 had introduced. What held: the three-tier root
+resolver (20/20 auditor logs show the installed-copy path, 0 `CODEAUDIT-ROOT-NOT-FOUND`); ecosystem routing
+(version facts cited from the lockfile, `fastify 5.12.1` ×9, `kysely 0.28.17` ×9, `jose 6.2.3` ×9 — never a
+remembered number); the threat model as a citable contract (45 `entry_points[...]` and 46 `controls[...]`
+citations in evidence files); `privilege_required` and `Reachable` on 40/40 findings, `Prior art` on 39/40;
+every `tested_not_vulnerable` line inside the closed disposition enum (573 lines, 9 `model_gap`); the
+`provenance: inferred` flag — the two threat-model rows auditors overturned (`POST /api/feedback`,
+`DELETE /api/linear`) were among the six rows the modeler had marked `inferred` with "must be verified".
+What did not, now fixed:
+
+- **Class name drift** — the contract, the command and recon say `ai-llm`; the agent is `ai-agent-auditor`
+  and an orchestrator wrote `ai-agent` into the class list. `aggregate.py` normalises `ai-agent` → `ai-llm`.
+- **Recon `ecosystems[]` carried keys outside the enum** (`rust`, `swift`) that route nowhere. `code-recon.md`
+  now sends uncovered languages to `uncovered_relevant_categories` with the lockfile named.
+- **The plan had no trust boundary for a client consuming a lower-trust peer's responses** — the desktop
+  file-sync client was modelled as the host-runtime's consumer and never assigned; the blind-dig sweep found
+  the audit's two code-execution findings there. `audit-planner.md` gains the rule and a required
+  `unplanned_components[]` list the sweep picks from.
+- **Finding template labels** — `**source**` in lower case, `**Source** (primary):`, or a source written as
+  prose cost three findings their endpoint resolution. The parser tolerates the first two;
+  `OUTPUT_STRUCTURE.md` now says which labels are parsed and why a source without `file:line` is a violation.
+- **Virtual-mount stall** — 17 agent `mkdir -p` calls hung in uninterruptible I/O on a macOS-into-Linux mount
+  with no status, which the completeness loop must never read as "complete". Step 6.1 names the symptom and
+  the rule (Write tool only, `timeout 20`, `git ls-files`).
+
+---
+
+## [2.4.70] — 2026-10-10
+
+### Fixed — `codeaudit` 0.10.0: the audit now runs from the directory holding the code being audited
+
+Installing 0.9.0 exposed the problem in its real form. The install registry puts the plugin at
+`~/.claude/plugins/cache/claude-whitebox/codeaudit/0.9.0` — an installed **copy** — while every agent mounted
+its methodology with a path relative to the *working directory*:
+
+```
+Read plugins/codeaudit/skills/code-audit/SKILL.md
+```
+
+That resolved only when the session happened to sit in the marketplace checkout. Anywhere else — including
+the obvious place to run an audit, the repository being audited — every mount failed, and **the agents did
+not fail with them**: no `SKILL.md`, no `REPORT_CONTRACT.md`, no ecosystem files, and still a confident,
+well-formatted report that nothing downstream could distinguish from a real one.
+
+All 88 mount lines across 20 agents now resolve a root first, using the three-tier pattern already proven in
+`codeaudit-hybride`: `$CLAUDE_PLUGIN_ROOT` → version-sorted cache glob → source-checkout fallback, with an
+explicit `CODEAUDIT-ROOT-NOT-FOUND` branch and a standing instruction to **stop rather than audit without the
+methodology**. `pentest` catalog mounts resolve separately as `$PT/` and stay optional — they are payload
+shapes, not the verdict bar, so degrading there is acceptable where degrading on `SKILL.md` is not.
+
+`sort -V | tail -1` is load-bearing and the preflight now enforces it **per glob**: this machine's cache
+holds 0.2.1 and 0.9.0 side by side, and an unsorted glob picks 0.2.1 — silently auditing with a methodology
+seven releases old. The first version of that check only required one sorted glob anywhere in the file; the
+resolver has two, so a test written to break it passed. Found by the test, fixed in the check.
+
+**Running from inside the target required one more fix.** Deliverables are written to
+`outputs/{engagement}/` relative to the launch directory, so in the supported shape they land *inside the
+audited repository*. Without an exclusion, recon inventories the audit's own findings, auditors trace the
+report's example payloads, and each re-run audits the previous run's output. `outputs/` is now appended to
+`out_of_scope` unconditionally, in both the orchestrator and `code-recon`.
+
+**Preflight rewritten around the new model.** Its mount check no longer asks "does this relative path resolve
+from here" — it now blocks on a repo-relative mount creeping back, on a `$CA/` target that does not exist in
+the plugin, on an agent that reads `$CA` without resolving it, on an unsorted cache glob, and on a resolver
+with no failure branch. It also **exercises the resolver for real** from the caller's directory, and warns
+when agents would resolve to a different installed version than the checkout — the signal that
+`/plugin marketplace update` is due.
+
+Verified clean from the checkout, from `/tmp`, from `$HOME` and from `/`. Ten preflight tests, each checked in
+both directions.
+
+---
+
+## [2.4.69] — 2026-10-10
+
+### Added — `codeaudit` 0.9.0: a preflight, because nothing verified the plugin before a run
+
+The plugin is markdown. The 235-test suite covers the JS tooling — judge, handoff, manifest — and asserted
+**nothing** about the prompts that are the actual product. So the honest answer to "how do I check this is
+sound before launching a scan?" was: you cannot. This is the instrument.
+
+```sh
+node plugins/codeaudit/preflight.mjs --repo /path/to/target
+```
+
+Zero model tokens, deterministic, and `/codeaudit:codeaudit` now runs it at **Step 6.0**, before the first
+agent is dispatched.
+
+**Plugin integrity** — every check here guards a failure that is invisible at run time:
+
+- **Mount paths resolve from the launch directory.** This is the one that matters. Every agent's
+  `Read plugins/codeaudit/...` is repo-relative, so an audit launched anywhere else gives each auditor **no**
+  methodology, **no** report contract and **no** ecosystem files — and the agent does not fail, it proceeds
+  and writes a confident, well-formatted, worthless report. Nothing downstream can tell the difference.
+  Exit 2.
+- Every agent the orchestrator dispatches exists, with frontmatter that parses and a declared tool set.
+- Enum agreement across files: dispositions used anywhere are in the contract's closed set, the
+  `privilege_required` values are defined, and **code-recon's ecosystem key enum equals the files on disk**
+  in both directions — a reference file recon cannot route to is dead weight, and a key with no file sends
+  an auditor nowhere.
+- The four `_safe-{class}.md` headings the aggregator splits on are identical in all three places that
+  declare them. A file missing one loses that whole evidence category silently: empty reads as "nothing to
+  report", not as "never written".
+- Every `outputs/{engagement}/…` artifact that is read has something that describes producing it.
+
+**Target auditability** — the two facts that change what an audit can conclude, surfaced *before* you spend
+on it: whether the target is git-tracked (the tracking rule otherwise demotes findings to `informational`,
+which is excluded from the headline count) and whether each detected ecosystem has a resolvable lockfile
+(without one, every version-gated row becomes a `coverage_gaps` entry instead of a verdict, because the
+binding rule forbids guessing).
+
+Exit codes are the contract: `0` clean · `1` warnings, proceed but carry them into `coverage_gaps` · `2`
+stop.
+
+**The baseline is silent, and that is the feature.** The first version emitted 35 warnings on a healthy
+plugin — almost all of them its own false positives from sloppy regexes (a section-pointer matcher that
+captured trailing prose, an artifact matcher that flagged files with obvious producers, a placeholder strip
+that turned `_safe-sweep-{mode}.md` into a string appearing nowhere). A preflight whose baseline is noisy
+trains the operator to ignore it, which is worse than not having one. Tightened until the real plugin
+reports zero, and a test now pins that: any warning on a future run is a real signal.
+
+`preflight.test.mjs` (8 tests) verifies each check in **both** directions — clean on the real plugin, and
+failing when the defect is reintroduced: wrong launch directory, an invented disposition, an unroutable
+ecosystem file, a missing lockfile, a non-existent target, and the exit-code contract. A preflight that
+cannot fail is decoration.
+
+Also fixed: `adversarial-sweep.md` said "Negatives go in …" rather than "Write your negatives to …" — the
+only genuine warning the tightened preflight found, and exactly the kind of wording gap that leaves an
+artifact without a producer.
+
+---
+
+## [2.4.68] — 2026-10-10
+
+### Fixed — `codeaudit` 0.8.0 / `pentest` 2.5.3: defects found by an adversarial review of yesterday's work
+
+A 130-agent adversarial review ran nine independent lenses over the plugin, then put every finding through
+three skeptics with different jobs (refute the claim / grant it but deny the impact / show it is already
+handled). 22 of 40 verified findings survived. The ones below were additionally reproduced by hand before
+being fixed; most were introduced by the same day's changes.
+
+**The evals were measuring nothing, and punishing correct audits.** Four compounding defects:
+
+- **Every fixture shipped its own answer key** into the tree the audit reads — a README naming the planted
+  bug plus `// VULNERABLE:` / `// SAFE:` comments — and the `threat-modeler` is explicitly instructed to read
+  `README*` first. Both halves were void: `should_find` passed because the README named the bug, and
+  `should_not_find` passed because a `// SAFE:` comment is exactly what the report contract accepts as a
+  `by_design` rule-out. Answer keys moved to `evals/answers/`, fixture READMEs rewritten as ordinary project
+  docs, giveaway comments stripped, and `judge.test.mjs` now greps the fixture and fails on a hit.
+- **Negative assertions searched the finding's narrative**, so the contrastive reasoning the plugin
+  *requires* (`prior_art` must say why the version-fixed pattern is not a finding) was scored as a false
+  positive. `should_not_find` now matches the finding's **identity** — title, class, CWE, slot, source, sink,
+  location — because it asks *what was reported*, not *what the write-up discusses*. Positive assertions keep
+  the wide text: over-matching there only makes them easier to satisfy, which is visible.
+- **Two committed terms silently inverted their scenarios.** `"alg"` matches the word *algorithms*; `"none"`
+  is the `privilege_required` value of every unauthenticated finding. And `must_not_contain:
+  ["CVE-2022-23540"]` banned the exact cutoff the version rule *orders* the auditor to cite. `loadScenario`
+  now lints negative terms (minimum length, and a reject-list of report-contract enum values), the two
+  scenarios are fixed, and a regression test pins both directions: a correct audit passes, the planted false
+  positive still fails.
+- **`judge.mjs` could exit 0 silently.** `import.meta.url === \`file://${process.argv[1]}\`` fails under a
+  path containing a space or a symlink, so `main()` never ran, nothing printed, and the process exited 0 —
+  which any CI wrapper reads as PASS for a run that found nothing. Now resolved through `realpathSync` +
+  `pathToFileURL`, verified under a path with a space.
+
+**False negatives — rules that would clear a real bug:**
+
+- **The argv exec form was declared flatly "safe" in 4 of 7 ecosystem files**, and `SKILL.md` listed
+  `execFile` with a literal program among the binding false positives — so a candidate was killed before the
+  trace was written. Bypassing the shell does not bypass the **program's own option parser**:
+  `execFile("git", [userArg])` with `--upload-pack=`, `curl -o`, `tar --checkpoint-action=exec=`,
+  `find -exec`. `go.md` already carried the caveat; it simply had not been propagated. Added to node, python,
+  java-jvm and dotnet, plus a new `CMD-option` slot in `SOURCE_TO_SINK.md` and a conditional-sink note in
+  `SINK_CATALOG.md`.
+- **socket.io was classified "reject-by-default" for WebSocket origin.** Its own docs say the opposite: CORS
+  applies only to HTTP long-polling and WebSocket connections are not subject to it, so origin restriction
+  requires `allowRequest`. A cookie-authenticated server with a tight `cors.origin` and no `allowRequest` is
+  CSWSH-vulnerable — the exact bug the section exists to catch — and the auditor was looking for a permissive
+  override that does not exist.
+
+**False positives — three factual errors in the ecosystem files:**
+
+- `render_template_string` **does** auto-escape: Flask's `select_jinja_autoescape` returns `True` when the
+  filename is `None`. The file claimed it does not, which reports XSS on every templated variable. Its real
+  risk is SSTI when the template *source* is user-controlled — a different slot.
+- **Safe strings are not sticky through concatenation** in either framework: Django's `SafeString.__add__`
+  returns a plain `str` unless the right operand is also `SafeData`, and Rails' `SafeBuffer#+` escapes an
+  unsafe operand. The file claimed the opposite for both, reporting XSS on `mark_safe(prefix) + user_value`.
+- **PyYAML `FullLoader` was ordered reported with no version cutoff** — its two escapes were fixed in 5.3.1
+  and 5.4, so it is not arbitrary code execution at >= 5.4.
+
+**Report integrity:**
+
+- **A confirmed finding was deleted over a missing metadata field.** Step 6.6 sent any finding without
+  `privilege_required` to `coverage_gaps` "for a re-dispatch" that no step performs — removing it from
+  `summary`, `report.md`, SARIF/CSV and the pentest handoff. It now stays in `findings[]` with
+  `privilege_required: "unknown"`, **no** cap applied (an unresolved privilege must not silently lower
+  severity), and a `coverage_gaps` entry naming it.
+- **The cap restatement omitted `authenticated` → `high`** — the most common value — so an authenticated
+  IDOR or SQLi kept a `critical` rating at the one place caps are applied. All five rows now restated inline.
+- **Internal-only reachability had two incompatible rules** four bands apart: `SKILL.md` said
+  `informational`, `REPORT_CONTRACT.md` said drop one band. Arbitrated to the one-band rule; `informational`
+  would have erased the finding from the headline count. Only a path with no reachable caller at all goes to
+  `tested_not_vulnerable[not_reachable]`.
+
+**Pipeline:**
+
+- **The pentest handoff dropped six request-reachable classes.** `REQUEST_REACHABLE` was written for the
+  original core ten and never updated: `client-side`, `http-protocol`, `data-lifecycle`, `feature-abuse`,
+  `resource-exhaustion` and `ai-agent` landed in `non_routable[]`, which the orchestrator is told to ignore
+  for allocation — so a code-confirmed DOM-XSS with a resolved endpoint never reached the live test. Fixed,
+  with an explicit `STATIC_ONLY` set and a **drift guard** asserting every `*-auditor.md` class is classified
+  one way or the other (verified to fail when a class is removed).
+- **Both adversarial-sweep modes shared one id namespace** and run in parallel: whichever wrote
+  `finding-sweep-001` second silently clobbered the first, in the one bucket holding what no auditor was
+  scoped to find. Namespaced per mode.
+- **The blind-dig sweep would never have run.** Its target set was "directories no auditor was scoped to",
+  which the planner's own broad scoping makes empty on an ordinary audit — and the skip was logged as
+  "full directory coverage", i.e. as evidence of a check that never happened. Added two fallbacks
+  (directories absent from both findings and safe files; then lowest verdict density), an executable
+  selection rule replacing the unimplementable "stable hash", and a note that a skip is never coverage.
+
+Three new regression guards, each verified to fail when the defect is reintroduced: the fixture answer-key
+grep, the negative-term lint, and the handoff routability drift guard.
+
+---
+
+## [2.4.67] — 2026-10-10
+
+### Added — `codeaudit` 0.7.0: evals, so rule changes stop being arguments
+
+Four releases in a day added a lot of rules — version cutoffs, a CSRF slot model, four discipline rules, a
+threat model, two sweep agents. Every one of them was a **bet** that recall goes up without precision going
+down, and nothing in the repo could settle a single one of those bets. That is the gap this closes.
+
+**The shape.** A fixture is a tiny repo with a known planted bug **and a known safe sibling next to it** —
+the same kind of code, correctly defended. A fixture with only a bug measures recall and rewards a run that
+reports everything; the safe sibling is what makes the measurement two-sided, and `judge.test.mjs` refuses a
+scenario that does not have one.
+
+Four fixtures, each chosen so the **naive read gets it wrong**:
+
+| Fixture | Plants | The error it catches |
+|---|---|---|
+| `csrf-state-changing-get` | state-changing GET under `SameSite=Lax`; sibling POST with Origin + session-bound token | finding a SameSite cookie and stopping — Lax still sends on a GET navigation |
+| `upload-svg-inline` | `.svg` served inline from the app origin past a filter that blocks `.html`/`.js`; sibling served `attachment` + `nosniff` | judging an upload at the filter instead of at the serving response |
+| `jwt-version-gate` | `jwt.decode()` claims deciding a role; sibling `verify()` with no `algorithms` on a lockfile-pinned 9.0.2 | reporting the version-fixed pattern while missing the one no upgrade fixes |
+| `circular-precondition` | `require()` from a request param; sibling from an operator-owned plugin dir | filing a circular finding whose precondition already grants the effect |
+
+Each one is the eval for a rule added earlier today, which is the point: they are regression tests for the
+methodology, not a generic benchmark.
+
+**Four assertion kinds**, of which one is new relative to the prior art:
+
+- `should_find` — miss = **false negative**.
+- `should_not_find` — match = **false positive**.
+- **`should_rule_out`** — a `tested_not_vulnerable` entry must match. This exists because of this plugin's own
+  evidence contract: *absent from the report* and *checked and ruled out* are different outcomes, and only
+  the second proves coverage. An eval that accepts silence cannot tell a careful audit from a lazy one.
+- `must_not_contain` — hallucination guard over the whole report (a framework that is not in the fixture).
+
+Assertions are a **minimum bar**: extra findings never fail a scenario unless they trip a negative. Evals
+stay stable as the plugin legitimately improves rather than breaking on every gain.
+
+**`judge.mjs`** is zero-dependency, deterministic, and **never runs an audit** — you run the audit, it judges
+the report. It treats the report as untrusted input (it is model-authored and may be truncated or malformed):
+a garbage element is counted in `warnings`, never fatal. Exit `0` pass / `1` assertion failed / `2` harness
+error.
+
+**`judge.test.mjs`** (15 tests, in CI, zero token cost) pins the semantics — what counts as a false negative,
+a false positive, a recorded rule-out — and adds two **contract guards**: every scenario must be well-formed,
+name a real fixture, carry a `README.md` documenting the planted bug and a `rationale`, and include at least
+one negative assertion; and every fixture must be referenced by a scenario, so an orphan fixture cannot sit
+unrun.
+
+The model-backed half stays **deliberately manual**. An audit run is expensive and non-deterministic;
+wiring it into CI would produce a flaky gate nobody trusts, and a gate nobody trusts is worse than none.
+
+**Scenarios are JSON, not YAML.** This repo's harness is zero-dependency `node --test` and Node has no
+built-in YAML parser — a hand-rolled one would be a bug farm sitting underneath the thing meant to catch
+bugs. JSON is uglier and unambiguous; the `rationale` field carries the prose YAML comments would have.
+
+---
+
+## [2.4.66] — 2026-10-10
+
+### Added — `codeaudit` 0.6.0: a security contract to rule sinks out against, and a check on the plan itself
+
+Everything up to now audited *inside* a plan. Recon decided what the surface is, the planner decided which
+auditors see which directories, and the auditors decided each sink. Two structural gaps followed, and neither
+is visible from inside the pipeline.
+
+**Gap 1 — rule-outs were unauditable.** P0.3 gave `tested_not_vulnerable` a closed `disposition` enum, which
+made rule-outs *typed*. It did not make them *checkable*: `not_attacker_controlled` still rested on whatever
+the auditor believed about who controls that parameter, and nothing recorded where that belief came from or
+let the next run disagree with it.
+
+New **`threat-modeler`** agent, running between recon and the planner, producing
+`recon/threat-model.json` — the audit's security contract:
+
+- **`entry_points[]`** — one row per *parameter*, not per route: `attacker_controllable: yes|no|conditional`,
+  the `condition` when conditional, and `caller_must_enforce`. This is the most-consumed field: auditors look
+  up exact `(entry_point, parameter)` pairs, and a `conditional` row's condition becomes the precondition
+  carried into severity and `privilege_required`.
+- **`provenance`** on every claim — `documented` (needs a `file:line`) or `inferred` (a hypothesis, which
+  gets a matching `open_questions` entry). `confidence: {documented, inferred}` counts both, so a model that
+  is 90% guesswork says so rather than reading like fact.
+- **`controls[]` with `assumptions`** — "requests reach this package only through the authenticated router"
+  is the sentence a reviewer attacks. A control with no stated assumption cannot be argued with, and an
+  aspiration ("the service should require auth") is an open question, not a control. When a trace violates a
+  control's assumption, naming *which assumption broke* points at a design decision rather than a line.
+- **`properties_not_provided`** with `false_friend` — the CRC that looks like a MAC, the quota counter that
+  looks like a rate limit. Plus `out_of_scope`, `adversaries` (in and out), `build_variants`,
+  `known_non_findings`, and the `dispositions` list itself, so downstream reads the vocabulary instead of
+  hardcoding it.
+
+Auditors now open each `[disposition]` with the model field backing it, which unlocks three further
+dispositions (`out_of_model_adversary`, `out_of_model_component`, `out_of_model_non_default_build`) — each
+requiring that citation. Two rules keep it honest: **a rule-out resting only on an `inferred` claim is
+`model_gap`, not a clearance**, and **a sink whose entry point is missing from the table is `model_gap` too**
+— the model is incomplete, which is a reason to revisit it, not to drop the sink. The model is a contract to
+argue with, never a filter that makes a sink safe. An audit whose model failed to build still runs, with the
+base six dispositions and a `coverage_gaps` note saying the claim is weaker.
+
+**Gap 2 — nothing checked the plan.** A class that was never allocated is not reported as missing; it is
+simply absent. Recon, the model and the planner can all be wrong in the same direction at once, and scope
+exhaustion in the completeness loop only proves that *everything the plan enumerated* got a verdict.
+
+New **`adversarial-sweep`** agent, dispatched in two modes after the loop:
+
+- **`blind-dig`** — one directory no auditor was scoped to, audited **without** the threat model, recon,
+  the plan or existing findings. The deprivation is the method, not an oversight: every one of those encodes
+  a prior decision about where the bugs are, so passing one reproduces the blind spot the sweep exists to
+  find. Because only the caller controls what reaches a prompt, **the orchestrator enforces the isolation**
+  — the command is explicitly told that summarising "recon found X here" into that prompt defeats the sweep
+  without breaking anything visible.
+- **`challenge-exclusion`** — one exclusion **the audit itself made** (a planner `skipped`, a model
+  `out_of_scope`), with its stated reason, and the job of refuting it from source. Preference goes to
+  `inferred` exclusions over `documented` ones: the audit's own guesses are the likelier mistake. A confirmed
+  exclusion is a success and lands in `design_properties` with its citation.
+  **The operator's `out_of_scope` is never eligible** — that is a boundary, not an exclusion to challenge.
+
+Both are selected deterministically (stable hash of the engagement name) so a re-run examines the same
+target, hold the **unchanged** verdict bar, and feed the normal aggregation. **Zero findings from a sweep is
+a normal, expected result** and explicitly not a reason to re-dispatch — a sweep that invents a finding to
+justify itself spends the reviewer trust the next real finding needs.
+
+**Also — findings can now be related, not just de-duplicated.** Exact-key de-duplication catches only the
+easy case. The aggregator now classifies surviving pairs into a top-level `finding_relations`:
+
+- **`duplicates`** — same root cause, keys differed (two auditors describing one bug at different hops).
+- **`subsumed`** — the child is reachable only through the parent, so the parent's fix closes it. Both stay
+  open; the relation says which to fix first.
+- **`chains`** — members compose into a higher-severity attack than any alone (a low traversal reading under
+  the app root + a medium secret written to a predictable path under that root = credential disclosure).
+  This is the one most worth the effort, because **no per-class auditor can see it**: each member lives in a
+  different auditor's scope and each is correctly rated low on its own.
+
+Relations never alter `summary` counts or member severities — a chain's composed severity lives in its
+`reason` — so the tally stays reproducible.
+
+---
+
+## [2.4.65] — 2026-10-10
+
+### Added — `codeaudit` 0.5.0: four discipline rules, and the report learns to say "I don't know"
+
+Two gaps, one in how candidates were judged and one in what the report could express.
+
+**The judging gaps (`SKILL.md`).** Four rules, each closing a specific recurring error:
+
+- **Fail-open is now a mandatory question, not a habit.** The existing "test the sad paths" move was general
+  advice. It is now a check you must run *and record* whenever you are already reading authentication,
+  authorization, session, CSRF, rate-limit or signature code: for every input whose **presence** controls
+  whether a check runs, inspect the absent/null/empty branch and answer in writing — *does the control fail
+  closed, or is the protected operation still reachable?* Plus the pairwise case: does omitting one of two
+  inputs cause the other to be accepted without its normal validation? An explicit deny branch is
+  fail-closed — rule it out and **cite the branch**.
+- **Precondition subsumes conclusion.** A finding whose attack path's first step already arrives at its last
+  step is circular, not low-severity: "an attacker with write access to the plugin directory can execute
+  code", "an attacker with the victim's session cookie can act as the victim". The test is whether the
+  finding **obtains** the capability or **assumes** it — a traversal that *yields* arbitrary write is a
+  finding, one that *requires* it is not. Explicitly distinguished from a legitimate precondition, which
+  lowers severity rather than voiding the finding.
+- **Prior art, before write-up.** `git log -S` / `--grep` for when the code appeared and whether it was ever
+  revisited, then the issue tracker for `wontfix` / `by design` / `not a bug` and annotated `# nosec`-style
+  suppressions **with a stated reason**. Three outcomes, and a rule that matters: a declined rationale only
+  rules a candidate out if it still holds **against the current code** — a stale reason whose guard has since
+  been removed is not inherited.
+- **Prevalence — slip or house style.** Count the call sites before calling a pattern unsafe. One site
+  against forty is a local slip. Forty is a **convention**, which is a claim about project intent the finding
+  has to answer: either the project holds a guarantee you have not found, or it is **one systemic finding**
+  located where you actually traced it, listing the siblings in `locations[]` — not forty findings.
+  Prevalence never rules a sink out on its own; a complete trace outranks any count. What it changes is
+  *which of two reports you write*.
+
+**The expressiveness gap (`REPORT_CONTRACT.md`).** The report had two buckets for everything that was not a
+finding: `tested_not_vulnerable` and `coverage_gaps`. That collapsed four genuinely different claims, and the
+one it lost is the one that matters most — *we investigated and the source cannot settle it*. A deployed TLS
+config, an IdP policy, a CDN behaviour or a runtime secret recorded as `tested_not_vulnerable` is a **false
+clearance**; recorded as a coverage gap, it loses the fact that anyone looked.
+
+- **`unverified_assumptions[]`** — new. Each entry must carry **both** the investigation performed and the
+  evidence that would settle it. "TLS config unknown" is not an entry, it is a shrug.
+- **`design_properties[]`** — new. Intentional behaviour *with the evidence that makes it intentional*. Stops
+  the next run re-reporting a deliberate choice. An "intentional" claim with no evidence is an assumption,
+  not a design property.
+- **`tested_not_vulnerable[].disposition`** — new closed enum (`guard_present` · `not_attacker_controlled` ·
+  `not_reachable` · `by_design` · `precondition_subsumes` · `model_gap`), each needing the `file:line` that
+  discharges it. `model_gap` is the honest escape hatch — a signal to revisit, never a clearance.
+- **`findings[].privilege_required`** — new, **required**, closed enum (`none` · `authenticated` · `admin` ·
+  `maintainer` · `local-root`). A discrete field so a reader can filter "what is exploitable with no account"
+  without re-reading every trace, and it **caps severity** at aggregation (`admin`+ cannot be `critical`;
+  `maintainer`/`local-root` cap at `medium`). Severity stops drifting between runs of the same audit.
+- **`findings[].prior_art`** — new, optional but expected on `high` findings: what the history and the issue
+  tracker said, plus the prevalence count as `<n> hits`. Not recoverable later if not captured now.
+
+Wiring: `_safe-{class}.md` becomes a **four-section file** (the headings are the contract), the Step 6.6
+aggregator splits on those headings instead of folding everything into one list, parses the `[disposition]`
+prefix, applies the privilege caps and recomputes `summary` after capping. All 17 auditors carry the evidence
+contract. An auditor that writes no `_safe-*.md` at all now counts as unproven coverage, like one that
+terminates without a parseable status.
+
+### Fixed — `codeaudit-hybride` 0.1.1: Codex-only findings could not satisfy the new contract
+
+Making `privilege_required` required on every finding broke an integration I own: `codeaudit-hybride` merges
+`codex_only` findings into `codeaudit-report.json`, and Codex does not emit that field — with
+`additionalProperties: false` on its detection schema it could not even supply it.
+
+- `schemas/codex-detect.schema.json` accepts `privilege_required` (optional, same closed enum).
+- `skills/hybrid-audit/SKILL.md` states the fallback: when Codex omits it, the orchestrator derives it at
+  adjudication from the finding's own trace. **Explicitly not defaulted to `none`** — `none` is the
+  least-constrained value and the one that permits `critical`, so defaulting would inflate severity on
+  exactly the findings with the weakest provenance. An underivable privilege goes to `coverage_gaps`.
+- Caps apply **after** calibration: calibration sets confidence and agreement class, the privilege cap then
+  bounds severity, independently of the `probable` ceiling a `codex_only` finding already carries.
+
+---
+
+## [2.4.64] — 2026-10-10
+
+### Fixed — `codeaudit` 0.4.0 — the browser-origin classes: CSRF was a one-line check, CORS was conflated with it, served uploads had no owner
+
+Three web classes shared one root problem: the plugin asked *"is a control present?"* where the real question
+is *"does the control cover the request shape a browser can actually emit?"*. Each produced a predictable
+error.
+
+**CSRF — a false negative built into the rule.** The old bullet cleared a handler on
+"`SameSite=Strict|Lax` with no cross-site exemption". But `Lax` still sends the cookie on a **top-level GET
+navigation**, so a state-changing `GET /api/email?email=…` is fully CSRF-able under `Lax` — and the standard
+Fetch-Metadata isolation policy has the **same** hole, since it deliberately allows cross-site GET
+navigations. An audit that found a SameSite cookie and stopped would clear the bug.
+
+`SOURCE_TO_SINK.md` gains a **CSRF slots** section replacing the bullet: the three conditions (ambient
+credentials → sensitive effect → browser-emittable shape), a table of what a browser can emit per cookie
+policy (navigation-GET / navigation-POST / subresource), and per-defense coverage — session-bound synchronizer
+token, **signed** double-submit (a naked one is defeated by any same-site attacker), exact-match `Origin` that
+fails closed on absence, **Fetch Metadata** (newly recognised as a control), and enforced `application/json`
+content type (verify the rejection, not the declaration). Plus method override (`_method`,
+`X-HTTP-Method-Override`) before concluding a verb is unreachable, login CSRF as a real lower-severity
+finding, and `SameSite` absent = `unverified_assumptions`, not a defense.
+
+**CORS — conflated with CSRF in both directions.** New rule, stated where both auditors read it: **CORS
+controls who may READ a cross-origin response, never whether the request can be SENT.** A permissive policy is
+not CSRF; a strict one is not a CSRF defense. A credentialed cross-origin read now requires naming **all four**
+conditions (allow-credentials, attacker-matching allow-origin, genuinely sensitive body, server honouring
+credentials), with `Access-Control-Allow-Origin: null` treated as attacker-reachable.
+
+**WebSocket — CORS does not apply.** The handshake is an HTTP GET upgrade sent cross-origin without preflight
+and is **not** subject to CORS or SOP, so a strict `cors()` config protects nothing. Finding a tight CORS
+config and concluding the socket is safe was a false negative. Library defaults now decide the shape of the
+finding, and several changed across major versions: `gorilla/websocket`, Spring WebSocket/SockJS (**since
+4.1.5** — before that it did not restrict) and `socket.io` **v3+** reject cross-origin by default, so the bug
+is a permissive **override**; Node `ws` performs no origin check at all, so the bug is the **absence**. The
+Spring 4.1.5 cutoff is recorded in `ecosystems/java-jvm.md` and the `ws`/`socket.io` split in
+`ecosystems/node.md`.
+
+**Uploaded content — no owner, and the verdict was being read off the wrong end.** New class in
+`CLIENT_SIDE.md`: follow one file through *accept → normalise → store → authorise → serve* and decide at the
+**serve** stage — serving origin, response `Content-Type` and where it is derived from, `Content-Disposition`,
+`nosniff`. The upload filter is input validation, never the verdict. Both directions are now explicit: a
+permissive filter with `attachment` + `nosniff` on an isolated origin is `tested_not_vulnerable`; a strict
+extension filter that still serves `image/svg+xml` **inline from the app origin** is stored XSS. SVG is called
+out as the recurring miss — it passes every "is it an image?" check, then executes. Ownership is split in
+writing (xss-auditor owns the execution verdict, client-side-auditor owns origin isolation, one root cause =
+one finding) and `code-recon` now records the upload→serving **pair**, because its two halves are rarely in
+the same file and no single auditor saw both.
+
+Also in this pass:
+
+- `config-auditor` said **"Missing = finding"** for security headers, contradicting `SKILL.md`'s
+  exploitability bar. A missing header is now `informational` hardening unless tied to a concrete primitive
+  (missing `frame-ancestors` **plus** a sensitive action that completes framed; missing `nosniff` **plus** an
+  attacker-influenced content type), and the auditor must say which primitive it looked for and did not find.
+- `WEB_AUTH.md` gains the `SameSite` semantics (it is a cross-site *request* control, not a scope control) and
+  **domain-scoped cookies**: a cookie on the registrable domain is writable by every subdomain, which breaks
+  naked double-submit tokens and converts "requires XSS on the app" into "requires XSS anywhere on the domain".
+
+### Fixed — marketplace manifest drift, with a guard so it stops happening
+
+`.claude-plugin/marketplace.json` duplicates each plugin's name/version/description from its own
+`plugin.json`, and had silently drifted: `codeaudit` listed **0.1.17** against an actual **0.3.0**, and three
+of four descriptions were stale (codeaudit advertised "10 vulnerability domains" against an actual 17).
+Nothing fails when that happens — the plugin still loads — which is why it needed a test.
+
+- All four marketplace entries resynced from their canonical `plugin.json`.
+- `plugins/codeaudit/README.md` corrected: **17** classes, **Extended 7** (resource exhaustion was missing
+  from the list).
+- New `plugins/manifest-sync.test.mjs` — a DRIFT GUARD asserting every marketplace entry mirrors its
+  `plugin.json` byte-for-byte, that every `source` resolves to a real plugin directory, and that no plugin on
+  disk is missing from the marketplace. Verified to fail on an injected stale version and pass once restored.
+
+---
+
+## [2.4.63] — 2026-10-10
+
+### Added — `codeaudit` 0.3.0: per-ecosystem reference files (framework defaults + version cutoffs)
+
+`SINK_CATALOG.md` says what a sink *is* in any language. It could not say what one *means* in this framework
+at this version — and that is where most XSS and authz verdicts are actually decided. Two failure shapes
+followed, both version-shaped and neither visible from the sink line:
+
+- **False positive** — `lodash.merge` reported as prototype pollution on a pinned 4.17.21; `jwt.verify`
+  reported as `alg:none` on `jsonwebtoken@9`; `FromSqlInterpolated` read as string concatenation. The pattern
+  matched; the vulnerability was fixed years ago or never existed in that form.
+- **False negative** — `spawn(bin, [arg])` cleared as "argv form, safe" on a Windows deployment below the
+  BatBadBut fix lines, where `.bat`/`.cmd` resolution reopens shell parsing.
+
+New `skills/code-audit/reference/ecosystems/`: `node`, `python`, `php`, `ruby`, `java-jvm`, `go`, `dotnet`,
+plus additive `graphql` and `jwt` (loaded alongside a language file, never instead of one). Each carries four
+sections — `## Version facts to check` (CVE + fixed line + **source URL** + **the precondition**),
+`## Framework defaults` (auto-escaping scope, middleware ordering, guard inheritance, ORM parameterization),
+`## Safe or non-reportable forms` (the explicit non-finding list), and `## Commands` (`rg` seeds).
+
+Every versioned claim in these files was verified against its upstream advisory on 2026-10-10 and carries the
+URL, because a fabricated cutoff in this directory is worse than no directory: it would *clear* real findings.
+One claim was checked and dropped as wrong (CVE-2024-34069 is a Werkzeug debugger issue requiring user
+interaction, not a `safe_join` path traversal).
+
+Two rules now bind every auditor, in `SKILL.md`:
+
+1. **Every version-sensitive claim must name the installed version and the cutoff it was compared against**,
+   read from the **lockfile** — never a manifest range, never memory. An unresolvable version is a
+   `coverage_gaps` entry, never a finding and never a clearance.
+2. **A version below a cutoff is not a finding; the precondition is.** Spring4Shell needs a WAR deployment,
+   CVE-2024-4577 needs Windows + PHP-CGI, CVE-2025-29927 needs authorization living *only* in Next.js
+   middleware. When the precondition does not hold the row goes to `tested_not_vulnerable` with that
+   evidence — not dropped silently, not reported.
+
+Wiring:
+
+- `code-recon` resolves the applicable ecosystems **once** and pins the security-relevant package versions
+  from the lockfile into a new **required** `sink-inventory.json` field, `ecosystems[]`
+  (`{key, manifest, lockfile, runtime, pins[]}`). `key` is constrained to the file names in the directory, so
+  routing is mechanical rather than inferred.
+- The orchestrator passes `ecosystems[]` verbatim into every auditor prompt (Step 6.4) and validates it is
+  non-empty after recon (Step 6.2). An auditor re-grepping the lockfile wastes turns and can disagree with
+  its siblings.
+- All 17 auditors + `code-recon` mount `reference/ecosystems/README.md` and carry a mandatory routing
+  paragraph; `auth`, `access-control`, `injection`, `xss`, `deps`, `client-side` and `config` get a
+  class-specific pointer on top.
+- `SKILL.md`'s false-positive list gains "the candidate matches a row in your ecosystem file's
+  `## Safe or non-reportable forms`", and the knowledge base is now stated as three lanes
+  (ecosystems → sink taxonomy → pentest payload catalog) so stack-specific facts stop leaking into
+  `SINK_CATALOG.md`.
+
+Source of the pattern: `alpha-omega-security/scrutineer`, whose `audit-injection`/`audit-authz` skills route
+to per-ecosystem references with version cutoffs and an explicit safe-forms list. Adapted, not copied — the
+slot model, the sharding and the report contract remain codeaudit's.
+
+---
+
 ## [2.4.62] — 2026-08-20
 
 ### Fixed — the coverage contract can only report classes it knows about

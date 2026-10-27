@@ -1,0 +1,37 @@
+{
+  "name": "circular-precondition",
+  "given": "two require() calls on computed paths — one driven by a request parameter, one by an operator-owned plugin directory",
+  "fixture": "fixtures/circular-precondition",
+  "classes": [
+    "injection"
+  ],
+  "rationale": "The plugin loader is circular: controlling what it loads requires write access to an operator-owned directory, which already IS code execution on the host. It must be ruled out as precondition_subsumes rather than filed as a low-severity RCE. The formatter loader next to it is a real finding, so a run that reports neither has not passed.",
+  "should_find": [
+    {
+      "path": "host.js",
+      "evidence_contains": [
+        "loadFormatter",
+        "format"
+      ],
+      "required": true
+    }
+  ],
+  "should_not_find": [
+    {
+      "path": "host.js",
+      "evidence_contains": [
+        "loadplugins"
+      ]
+    }
+  ],
+  "should_rule_out": [
+    {
+      "disposition": "precondition_subsumes",
+      "evidence_contains": [
+        "plugin"
+      ],
+      "required": false
+    }
+  ],
+  "must_not_contain": []
+}
