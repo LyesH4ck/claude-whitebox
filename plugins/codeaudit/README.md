@@ -124,6 +124,17 @@ of fixes. `--accepted` reads the operator's `.codeaudit-accepted.json` (fingerpr
 an accepted risk stays listed, keeps its rating, leaves the tally, and becomes a SARIF suppression. An
 acceptance is never inherited from an older report — the file is the only authority.
 
+## The project context file
+
+`{repo}/.codeaudit-context.md` is the operator's standing statement about a repository — what it does, its
+auth primitives by name, its trust boundaries, the wrappers a generic auditor would not know to look at, and
+the *Known non-findings* already decided. The threat-modeler seeds it on the first run; the operator edits it;
+every later run reads it (recon, threat model, every auditor, the verifier — never the blind-dig sweep) and,
+at the end, **proposes** what it established as new *Known non-findings* lines that the operator approves
+before `tools/context.py apply` merges them. A line there is a hypothesis with provenance: an auditor cites it
+only after confirming the current code still matches it. Format and rules in
+`skills/code-audit/reference/PROJECT_CONTEXT.md`; the preflight validates the file when `--repo` is given.
+
 ## The second opinion (finding-verifier)
 
 After the sweep and before aggregation, every `high`/`critical` finding (every finding, on a small set) goes

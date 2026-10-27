@@ -68,7 +68,8 @@ plan / CSV findings table / SARIF / PDF render) → `output_formats`.
 ## Step 4 — Validate & Save
 
 Verify the repo exists: `test -d "{repo}" && echo ok || echo missing`. If missing, warn and ask the user
-to re-enter the path (repeat Step 3.1). Note git status: `test -d "{repo}/.git" && echo git || echo no-git`.
+to re-enter the path (repeat Step 3.1). Note git status: `git -C "{repo}" rev-parse --is-inside-work-tree
+2>/dev/null | grep -q true && echo git || echo no-git` (a subdirectory of a larger checkout is tracked too).
 
 Write `.codeaudit-scope.json` with `"status": "pending"` (this command saves scope but does not launch):
 

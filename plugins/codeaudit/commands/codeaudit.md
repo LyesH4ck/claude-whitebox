@@ -150,11 +150,19 @@ After collecting, write `.codeaudit-scope.json` with status `"active"`:
 }
 ```
 
-Then verify the repo: `test -d "{repo}/.git" && echo git || echo no-git`. If `{repo}` does not exist,
-abort with an actionable message and stop. Note whether it is a git repo (auditors use git-awareness).
+Then verify the repo: `git -C "{repo}" rev-parse --is-inside-work-tree 2>/dev/null | grep -q true && echo git
+|| echo no-git` — not a test for a `.git` directory, which a subdirectory of a larger checkout does not have
+and is still fully tracked. If `{repo}` does not exist, abort with an actionable message and stop. Note
+whether it is tracked (auditors use git-awareness).
 
-**Resolve the two cross-run inputs now, so the scope echo states them.** Both are optional and both feed the
-Step 6.6 aggregator; neither changes what the auditors do.
+**Resolve the three cross-run inputs now, so the scope echo states them.** All are optional; the first two
+feed the Step 6.6 aggregator, the third reaches every agent's brief.
+- **`context_file`** — `{repo}/.codeaudit-context.md` when it exists (`reference/PROJECT_CONTEXT.md`): the
+  operator's standing statement of what the system is and what has already been decided. Validate it
+  mechanically — `python3 -I "$CA/tools/context.py" check "{repo}/.codeaudit-context.md"` — and show the
+  operator any problem it prints (a missing heading, an over-budget file, a leftover seed placeholder) before
+  continuing; a malformed context file is carried as-is, never silently dropped. When absent, note
+  `context_file: null` and tell the threat-modeler to **seed** it in Step 6.2b.
 - **`previous_report`** — if the scope file names one, use it. Otherwise look for an older report of the same
   repository: `ls outputs/*/codeaudit-report.json` from the launch directory, keep those whose `repo` field
   equals `{repo}` and whose `engagement` is not this one, and take the most recent by `date`. If one is found
@@ -162,8 +170,8 @@ Step 6.6 aggregator; neither changes what the auditors do.
   Yes / No. Store the result as `previous_report` (or `null`).
 - **`accepted_file`** — `{repo}/.codeaudit-accepted.json` when it exists (format in `REPORT_CONTRACT.md` →
   *The accepted-risk file*), else `null`. Never create it yourself; it is operator-owned.
-Echo both as `Previous report: {path or "none — first run or not requested"}` and `Accepted risks:
-{path or "none"}` in the summaries below.
+Echo all three as `Context file: {path or "none — will be seeded"}`, `Previous report: {path or "none — first
+run or not requested"}` and `Accepted risks: {path or "none"}` in the summaries below.
 
 **Always append `outputs/` to `out_of_scope`.** The deliverables are written to `outputs/{engagement}/`
 relative to the launch directory, and the supported way to run this is **from inside the repository being
@@ -256,6 +264,7 @@ Mode:         {hybrid if target_url else static-only}{ + Live URL: {target_url}}
 Depth:        {depth}  (runs to completeness — every source→sink path in scope, then stops)
 Classes:      {classes}
 Scanners:     {tools_available or "none — pattern/version fallback"}
+Context file:    {context_file or "none — will be seeded by the threat-modeler"}
 Previous report: {previous_report or "none — first run or not requested"}
 Accepted risks:  {accepted_file or "none"}
 Deliverables: report.md + codeaudit-report.json{, plus output_formats if any}
@@ -339,7 +348,7 @@ Log:
 ### Step 6.2 — Code-recon baseline
 
 Dispatch the **code-recon** agent via `Task`. Pass `repo`, `engagement`, `focus`, `out_of_scope`,
-`target_url`, `extra_roots`, and `classes`. Wait for completion. Confirm it wrote `recon/architecture.md`,
+`target_url`, `extra_roots`, `classes`, and `context_file` (or `null`). Wait for completion. Confirm it wrote `recon/architecture.md`,
 `recon/attack-surface.md`, and `recon/sink-inventory.json` — and that `sink-inventory.json` carries a
 non-empty **`ecosystems[]`** (the per-stack reference routing + version pins every auditor consumes in Step
 6.4). If `ecosystems` is missing or empty while the repo clearly has a manifest, re-dispatch recon once for
@@ -351,8 +360,11 @@ warn the operator (possibly wrong repo or unsupported stack) and ask whether to 
 ### Step 6.2b — Threat model (the audit's security contract)
 
 Dispatch the **threat-modeler** agent via `Task`, pointing it at the baseline. Pass `repo`, `engagement`,
-`focus`, `out_of_scope`, `target_url`, `classes`, and the `ecosystems[]` array from `sink-inventory.json`.
-Wait for completion.
+`focus`, `out_of_scope`, `target_url`, `classes`, the `ecosystems[]` array from `sink-inventory.json`, and
+`context_file` with one of two instructions: **"read it first; its statements are `documented` provenance"**
+when it exists, or **"seed it after writing the model, per `reference/PROJECT_CONTEXT.md`"** when it does not.
+Wait for completion. If it seeded the file, tell the operator in one line that `{repo}/.codeaudit-context.md`
+now exists, is agent-written, and should be reviewed and committed — it is theirs from here on.
 
 This runs **after** recon and **before** the planner because both the plan and every auditor consume it:
 recon says what exists, the threat model says what is supposed to be true, and a rule-out that cites the
@@ -419,6 +431,10 @@ class with surface gets an auditor. Follow your agent definition's schema."
    the completeness loop.** Each auditor prompt MUST include:
    - the **scope**: `repo`, assigned directories, `out_of_scope`, `mode`, `target_url`, `tools_available`,
      and the `shard` tag if the class was sharded;
+   - the **context file** (when it exists): the path `{repo}/.codeaudit-context.md`, with the instruction
+     "read it before tracing; its *Known non-findings* are hypotheses with provenance — cite one as
+     `by_design` only after confirming the current code still matches it" (`SKILL.md` → *The project context
+     file*);
    - the **threat model** (when Step 6.2b produced one): the path `outputs/{engagement}/recon/threat-model.json`,
      with the instruction "read it before tracing; look each sink's entry point and parameter up in
      `entry_points[]` and carry the row's `condition` into your severity and `privilege_required`; when you
@@ -559,8 +575,9 @@ Dispatch both **adversarial-sweep** agents in a single parallel `Task` message:
 
    > **Context isolation is this sweep's whole method — you enforce it, not the agent.** Its prompt gets the
    > repo path, the one directory, and the scope boundaries. It gets **no** threat model, **no** recon
-   > baseline or sink inventory, **no** plan, and **no** existing findings, and you must not summarise any of
-   > them into the prompt either. Every one of those encodes a prior decision about where the bugs are;
+   > baseline or sink inventory, **no** plan, **no** existing findings, and **no** `.codeaudit-context.md`
+   > path (its *Known non-findings* are prior decisions), and you must not summarise any of them into the
+   > prompt either. Every one of those encodes a prior decision about where the bugs are;
    > passing one reproduces the blind spot the sweep exists to find. If you catch yourself writing "recon
    > found X here" into this prompt, delete it.
 
@@ -609,6 +626,7 @@ batch, after all the tracing is done.
    batch, **all in a single parallel message**, `run_in_background=True`. Each brief carries: `repo`,
    `engagement`, the `batch` tag, the `finding_dirs[]` (full paths), `out_of_scope`, the `ecosystems[]`
    array verbatim from `recon/sink-inventory.json`, and the threat-model path when Step 6.2b produced one.
+   Pass `context_file` too when it exists — it is the operator's statement, not an auditor's reasoning.
    **Pass nothing else**: no `_safe-*.md`, no recon narrative, no plan, no previous report, and no summary
    of what the filing auditor concluded — the verifier's independence is the whole value of the step, and
    it is yours to protect, not the agent's. Log
@@ -817,5 +835,27 @@ The rules it implements are the ones below — read them so you know what you ar
      instead.`) — graceful degradation, never fail the run.
 5. Log `phase":"report","action":"report-written","path":"outputs/{engagement}/codeaudit-report.json","formats":<output_formats>,"result":"complete"` and tell the operator where the deliverables are.
 
+### Step 6.7 — Carry forward (what this run established, into the context file)
+
+The run just settled things the next run should not re-derive: the design properties the auditors confirmed
+as intended, the risks the operator accepted, the version-gated patterns ruled out at a named pin. Propose them
+for `{repo}/.codeaudit-context.md` — and only propose:
+
+```bash
+python3 -I "$CA/tools/context.py" propose "outputs/{engagement}" --context "{repo}/.codeaudit-context.md"
+```
+
+It writes `plan/_context-additions.md` (one *Known non-findings* line per item the file does not already
+carry) and prints them. If there are none, log `phase":"carry-forward","additions":0` and stop. Otherwise show
+the lines to the operator via AskUserQuestion — "Add these {n} lines to `.codeaudit-context.md`?" with
+**Apply all** / **Let me edit the list first** / **Skip** — and:
+- **Apply all** → `python3 -I "$CA/tools/context.py" apply "outputs/{engagement}" --context "{repo}/.codeaudit-context.md"`.
+- **Let me edit** → tell them to delete the lines they do not endorse from `plan/_context-additions.md`,
+  wait for their go-ahead (plain prompt), then run `apply`.
+- **Skip** → leave the additions file in place and move on.
+Never run `apply` without that answer: the file is the operator's statement, and an agent-written line in it
+without their approval is exactly the kind of inherited claim the *Known non-findings* rule exists to prevent.
+Remind them to commit the file. Log `phase":"carry-forward","additions":<n>,"applied":<true|false>`.
+
 Do not ask for additional confirmation before Step 6.1 — the audit summary is the launch confirmation.
-The operator gates remain at Step 6.4 (plan approval) and Step 6.6 (pre-report).
+The operator gates remain at Step 6.4 (plan approval), Step 6.6 (pre-report) and Step 6.7 (carry forward).

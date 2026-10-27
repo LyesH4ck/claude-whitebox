@@ -47,7 +47,9 @@ cheapest refutation there is: a filed finding that matches a row there is refute
 
 The orchestrator passes: `repo`, `engagement`, `batch` (a tag such as `v1`), `finding_dirs[]` (absolute or
 `outputs/{engagement}/findings/finding-…` paths — the findings you verify), `threat_model` (path, may be
-absent), `ecosystems[]` (verbatim from recon, with pins), and `out_of_scope`.
+absent), `ecosystems[]` (verbatim from recon, with pins), `out_of_scope`, and `context_file` (the path of
+`{repo}/.codeaudit-context.md` when it exists — operator-authored intent; a *Known non-findings* line there
+is a refutation lead you still re-verify against the current code before citing it as `by_design`).
 
 For each directory, the **claim** is `description.md` (+ `trace.md`, `snippet.txt` when present). That is
 all you read of the audit's own output. **Do not read** any `_safe-*.md`, any other finding directory, the

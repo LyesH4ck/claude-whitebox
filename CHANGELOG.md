@@ -4,6 +4,43 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.75] — 2026-10-27
+
+### Added — `codeaudit` 0.14.0: a project context file that outlives the engagement
+
+The threat model is the audit's contract and dies with `outputs/{engagement}/`; the next run re-derives
+"the admin router is intentionally unauthenticated behind the VPN" from scratch and may answer differently.
+`{repo}/.codeaudit-context.md` is the operator-owned, committed, 40–120-line answer that survives:
+
+- **Five fixed headings** — what the codebase does, auth shape (primitives by name, no line numbers), trust
+  boundaries and adversaries, project-specific patterns to flag, and *Known non-findings* as
+  `[by_design] | [accepted-risk] | [version-gated]` lines with their evidence. Spec in
+  `reference/PROJECT_CONTEXT.md`.
+- **Seeded by the threat-modeler** when absent (stamped as agent-written, built from `documented` claims
+  only), **read first** by it afterwards as the highest-authority written source after `SECURITY.md`
+  (`source: ".codeaudit-context.md:<line>"`), read by recon to orient, passed to every auditor and to the
+  finding-verifier — and **withheld from the blind-dig sweep**, whose isolation is the method.
+- **A *Known non-findings* line is a hypothesis with provenance, never a clearance** (`SKILL.md` → *The
+  project context file*): cited as `by_design` only after the current code is confirmed to still match it; a
+  stale rationale is reported, which is how the file gets corrected.
+- **Step 6.7 carry-forward** — `tools/context.py propose` turns the run's design properties, accepted risks
+  and version-gated rule-outs into candidate lines the file does not already carry; the operator approves
+  (Apply all / edit the list / Skip) before `tools/context.py apply` appends them, idempotently. Nothing
+  writes to the file without that answer.
+- `tools/context.py check` and `preflight.mjs --repo` validate headings, budget and leftover seed
+  placeholders. `tools.test.mjs` +1 (check / propose / apply), `preflight.test.mjs` +1.
+
+### Fixed — two things the live pass showed
+
+- **Nested checkouts are tracked.** Recon, the command's scope check, the scope command and the preflight all
+  tested for a `.git` directory at the repo path; a service inside a monorepo or a fixture inside this
+  repository has none and is fully tracked. On the live pass recon told every auditor prior-art was
+  unavailable over tracked files. All four now ask `git rev-parse --is-inside-work-tree`.
+- **A route-less module reconciles its exported surface.** `entry_points: []` is correct for a library,
+  CLI or queue-only module, but `reconcile.py` then had nothing to check and printed a clean result over an
+  untouched surface. Recon now records `exported_surface[]` (same `sources[]` shape) and the reconciler
+  reads both arrays. `tools.test.mjs` +1.
+
 ## [2.4.74] — 2026-10-27
 
 ### Added — `codeaudit` 0.13.0: independent verification of every serious finding (Step 6.5c)

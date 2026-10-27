@@ -140,6 +140,21 @@ never tells you a sink is safe — it is a **contract you cite**, and the differ
 No model (it failed, or an older engagement) changes nothing structural: use free-text rule-out reasons with
 the base six dispositions. An unmodelled audit is a weaker claim, and the report says so.
 
+### The project context file is the operator's standing statement
+
+`{repo}/.codeaudit-context.md` (`reference/PROJECT_CONTEXT.md`), when your brief names it, is what the
+operator — not a previous agent — says about the system: its auth primitives by name, its trust boundaries,
+the wrappers a generic auditor would not know to look at, and the *Known non-findings* already decided. Read
+it before tracing. Two rules keep it honest:
+
+- A *Known non-findings* line is a **hypothesis with provenance**, not a clearance. Cite it (`by_design`,
+  with the file's line) only after confirming the current code still matches it — the guard still exists,
+  the pin is still below the cutoff. When it no longer holds, say so in `unverified_assumptions` or file the
+  finding: a stale rationale is exactly what the next run needs corrected.
+- The file never widens scope on its own: an operator statement that a component is "internal only" is
+  `documented` provenance for a `not_reachable` rule-out when the code agrees, and an open question when it
+  does not.
+
 ## Hunting discipline (false-negative killers)
 
 The single-happy-path trace is where audits miss real bugs. Apply moves 1-3 on **every** class, and move 4

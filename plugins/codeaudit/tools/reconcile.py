@@ -43,6 +43,15 @@ elif os.path.exists(inv):
             at = s.get("at")
             if not at or ":" not in at: continue
             rows.append({"at": at, "in": s.get("in", ""), "name": s.get("name", ""), "service": svc, "route": route})
+    # A library / CLI / queue-only module exposes no HTTP routes (entry_points: []) but recon still records
+    # its entry surface — exported functions, commands, consumers — under exported_surface[] with the same
+    # sources[] shape. Reconcile those too, or a route-less repo reconciles to "nothing to check" (live run).
+    for ex in data.get("exported_surface", []) or []:
+        route = f"export {ex.get('name', '?')}" + (f" ({ex.get('handler')})" if ex.get("handler") else "")
+        for s in ex.get("sources", []) or []:
+            at = s.get("at")
+            if not at or ":" not in at: continue
+            rows.append({"at": at, "in": s.get("in", ""), "name": s.get("name", ""), "service": ex.get("component") or "exported", "route": route})
 else:
     print(f"no enumerated sources found ({tsv} or {inv}); nothing to reconcile", file=sys.stderr)
     sys.exit(0)

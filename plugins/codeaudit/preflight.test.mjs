@@ -169,12 +169,33 @@ test('target mode reports git and lockfile state, which change what the audit ca
     assert.ok(noLock.target.ecosystems.some((e) => e.key === 'node' && !e.locked));
     assert.ok(noLock.problems.some((p) => /no lockfile/.test(p.msg)),
       'a missing lockfile turns every version-gated row into a coverage gap — the operator must know before launching');
-    assert.ok(noLock.problems.some((p) => /not a git repository/.test(p.msg)));
+    assert.ok(noLock.problems.some((p) => /not inside a git work tree/.test(p.msg)));
 
     writeFileSync(path.join(dir, 'package-lock.json'), '{"lockfileVersion":3}');
     const locked = parse(run(['--repo', dir]));
     assert.ok(locked.target.ecosystems.some((e) => e.key === 'node' && e.locked));
     assert.ok(!locked.problems.some((p) => /no lockfile/.test(p.msg)));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('target mode: a nested directory of a git checkout counts as tracked; a malformed context file warns', () => {
+  // the fixture directory has no .git of its own — it is tracked by this repository's checkout
+  const nested = path.join(HERE, 'evals/fixtures/jwt-version-gate');
+  const ok = parse(run(['--repo', nested]));
+  assert.equal(ok.target.isGit, true, 'rev-parse, not a .git directory test');
+  assert.ok(!ok.problems.some((p) => /git work tree/.test(p.msg)));
+
+  const dir = mkdtempSync(path.join(tmpdir(), 'pf-ctx-'));
+  try {
+    writeFileSync(path.join(dir, 'package.json'), '{"name":"t"}');
+    writeFileSync(path.join(dir, 'package-lock.json'), '{}');
+    writeFileSync(path.join(dir, '.codeaudit-context.md'), '# Audit context — t\n\n## What this codebase does\nA thing.\n\n## Auth shape\n- requireUser\n\n## Known non-findings\n- [by_design] x — y (docs)\n');
+    const bad = parse(run(['--repo', dir]));
+    const w = bad.problems.find((p) => /\.codeaudit-context\.md/.test(p.msg));
+    assert.ok(w, 'a context file missing two headings must warn');
+    assert.match(w.msg, /Trust boundaries and adversaries/);
+    assert.match(w.msg, /Project-specific patterns to flag/);
+    assert.equal(bad.target.contextFile.problems.length, 2);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -203,9 +224,9 @@ test('exit codes are the contract: 0 clean, 1 warnings only, 2 blocking', () => 
   } finally { rmSync(bad, { recursive: true, force: true }); }
 });
 
-test('tools: the three Step 6.5/6.6 tools ship and are invoked by the command; a missing one blocks', () => {
+test('tools: the four Step 6.5–6.7 tools ship and are invoked by the command; a missing one blocks', () => {
   const clean = parse(run());
-  assert.equal(clean.stats.tools, 3);
+  assert.equal(clean.stats.tools, 4);
   assert.ok(!clean.problems.some((p) => p.check === 'tools'), 'clean plugin has no tools problem');
 
   const tmp = mkdtempSync(path.join(tmpdir(), 'codeaudit-pf-'));

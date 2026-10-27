@@ -490,6 +490,80 @@ test('render: verification reaches the report, the CSV and SARIF', () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test('reconcile: a route-less module reconciles its exported_surface sources, not "nothing to check"', () => {
+  const root = fixture();
+  w(root, 'recon/sink-inventory.json', JSON.stringify({
+    entry_points: [],
+    exported_surface: [
+      { name: 'currentUser', handler: 'auth.js:4', sources: [{ in: 'header', name: 'authorization', at: 'auth.js:5' }] },
+      { name: 'isAdmin', handler: 'auth.js:13', sources: [{ in: 'header', name: 'authorization', at: 'auth.js:14' }] },
+    ],
+  }));
+  w(root, 'findings/_safe-auth.md', '# Evidence — auth-auditor\n\n## tested_not_vulnerable\n- [guard_present] auth.js:5 verify path fails closed (auth.js:7)\n\n## design_properties\n- none\n\n## unverified_assumptions\n- none\n\n## coverage_gaps\n- none\n');
+  const out = JSON.parse(py('reconcile.py', [root, '--json'], root));
+  assert.equal(out.by_status['line-cited'], 1, 'auth.js:5');
+  assert.equal((out.by_status['file-cited'] ?? 0) + (out.by_status['uncited'] ?? 0), 1, 'auth.js:14 is enumerated too');
+  rmSync(root, { recursive: true, force: true });
+});
+
+const CONTEXT = `# Audit context — fx
+<!-- codeaudit-context v1 — operator-owned. -->
+
+## What this codebase does
+A small API that lists users and lets admins edit them.
+
+## Auth shape
+- requireUser middleware on every /api route
+- isAdmin() role check from the verified session
+
+## Trust boundaries and adversaries
+- anonymous network peers reach /api/users only
+- the ops team edits config; not an adversary here
+
+## Project-specific patterns to flag
+- raw() query builder in src/db — only safe with allowlisted identifiers
+
+## Known non-findings
+- [by_design] public read endpoints are intentionally unauthenticated (docs/api.md:3)
+`;
+
+test('context: check validates the contract; propose turns the run into Known non-findings; apply is idempotent', () => {
+  const root = fixture();
+  const ctx = path.join(root, '.codeaudit-context.md');
+  writeFileSync(ctx, CONTEXT);
+  assert.match(py('context.py', ['check', ctx], root), /^ok:/);
+
+  // a file with a leftover seed placeholder and a missing heading fails check
+  writeFileSync(path.join(root, 'bad.md'), CONTEXT.replace('## Auth shape', '## Auth').replace('A small API', 'One paragraph: {what}'));
+  let code = 0, out = '';
+  try { out = py('context.py', ['check', path.join(root, 'bad.md')], root); } catch (e) { code = e.status; out = e.stdout; }
+  assert.equal(code, 1);
+  assert.match(out, /missing heading: ## Auth shape/);
+  assert.match(out, /placeholder still present/);
+
+  // a report with a design property (already in the file), an accepted risk, and a version-gated rule-out
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json'], root);
+  const r0 = JSON.parse(readFileSync(path.join(root, 'codeaudit-report.json'), 'utf8'));
+  const fp = r0.findings.find((f) => f.id === 'finding-ac-001').fingerprint;
+  w(root, '.codeaudit-accepted.json', JSON.stringify({ accepted: [{ fingerprint: fp, reason: 'ids are UUIDs', by: 'lead', date: '2026-01-15' }] }));
+  w(root, 'findings/_safe-auth.md', '# Evidence — auth-auditor\n\n## tested_not_vulnerable\n- [guard_present] jwt.verify without algorithms is safe on jsonwebtoken 9.0.2 (package-lock.json:9) ≥ 9.0.0 cutoff (src/auth.ts:7)\n\n## design_properties\n- none\n\n## unverified_assumptions\n- none\n\n## coverage_gaps\n- none\n');
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--accepted', '.codeaudit-accepted.json'], root);
+  const prop = JSON.parse(py('context.py', ['propose', root, '--context', ctx, '--json'], root));
+  assert.equal(prop.additions.length, 2, 'the design property already in the file is skipped');
+  assert.ok(prop.additions.some((l) => l.startsWith('- [accepted-risk] IDOR on b at src/db/repo.ts — ids are UUIDs')));
+  assert.ok(prop.additions.some((l) => l.startsWith('- [version-gated] jwt.verify without algorithms')));
+  assert.ok(existsSync(path.join(root, 'plan/_context-additions.md')));
+
+  assert.match(py('context.py', ['apply', root, '--context', ctx], root), /appended 2 line/);
+  const after = readFileSync(ctx, 'utf8');
+  assert.ok(after.includes('- [accepted-risk] IDOR on b'));
+  assert.ok(after.indexOf('## Known non-findings') < after.indexOf('- [accepted-risk]'));
+  assert.ok(after.includes('- [by_design] public read endpoints'), 'existing lines untouched');
+  assert.match(py('context.py', ['apply', root, '--context', ctx], root), /appended 0 line/);
+  assert.match(py('context.py', ['check', ctx], root), /^ok:/);
+  rmSync(root, { recursive: true, force: true });
+});
+
 test('render: produces the five deliverables from the report and the narrative', () => {
   const root = fixture();
   py('aggregate.py', [root, '--write', '--relations', 'plan/_relations.json', '--meta', 'plan/_meta.json'], root);

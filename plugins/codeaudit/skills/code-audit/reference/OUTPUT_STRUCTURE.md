@@ -197,6 +197,7 @@ These are written by the orchestrator, not by auditors, and are read by the ship
 | `plan/_meta.json` | Step 6.6 (engagement / repo / commit / scope / depth / ecosystems block) | `tools/aggregate.py --meta` |
 | `plan/_narrative.json` | Step 6.6 point 3, before rendering | `tools/render.py` |
 | `plan/_handoffs-wave{N}.md`, `plan/_handoffs-residue-f{N}.md` | between waves / after reconciliation | the next wave's auditors |
+| `plan/_context-additions.md` | Step 6.7 (`tools/context.py propose`) | the operator, then `tools/context.py apply` into `{repo}/.codeaudit-context.md` |
 
 `_relations.json`: `{ "duplicates": [], "subsumed": [], "chains": [], "orchestrator_adjustments": {
 "severity_overrides": [], "additional_locations": [], "verification_overrides": [] } }` — shapes in

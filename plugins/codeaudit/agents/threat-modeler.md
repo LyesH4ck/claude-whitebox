@@ -49,12 +49,21 @@ allow-by-default" is a *trust boundary*, and a version below a cutoff is a *buil
 
 ## Inputs
 
-- Scope brief: `repo`, `engagement`, `focus`, `out_of_scope`, `target_url`, `classes`.
+- Scope brief: `repo`, `engagement`, `focus`, `out_of_scope`, `target_url`, `classes`, and `context_file` —
+  the path of `{repo}/.codeaudit-context.md` plus whether it **exists** or you are asked to **seed** it.
 - `outputs/{engagement}/recon/architecture.md`, `attack-surface.md`, `sink-inventory.json`.
 
 ## Orient (read, do not grep exhaustively)
 
-Read, in this order, and **cite what you use**: `README*`, `SECURITY*`, `THREAT*`, `CONTRIBUTING*`, anything
+**Start with `.codeaudit-context.md` when it exists** (`reference/PROJECT_CONTEXT.md`). It is the operator's
+own statement of what the system is, who it trusts and what has already been decided — the highest-authority
+written source after `SECURITY.md`. Every claim you lift from it is `documented` with
+`source: ".codeaudit-context.md:<line>"`. Its *Known non-findings* become `known_non_findings` rows carrying
+that citation — **after** you confirm the current code still matches each one; a line whose guard has since
+disappeared goes to `open_questions` as "context file says X, code no longer does", never silently into the
+model.
+
+Then read, in this order, and **cite what you use**: `README*`, `SECURITY*`, `THREAT*`, `CONTRIBUTING*`, anything
 under `docs/` with security in the name, `CHANGELOG` entries explaining *why* behaviour is the way it is, and
 code comments that state an intent ("this is safe because…", `# nosec` / `// nolint` / `# noqa` / `NOSONAR`
 **with a reason**). Search commit messages and issue references for `wontfix`, `by design`, `not a bug`,
@@ -222,9 +231,22 @@ you will bias them by pre-judging it.
 - `dispositions` is copied verbatim from the list above — downstream reads it instead of hardcoding.
 - The model is a strict superset of anything `SECURITY.md` asserts about scope.
 
+## Seeding `.codeaudit-context.md` (only when the brief says it is absent)
+
+When the orchestrator tells you the context file does not exist, write it **after** the model, at
+`{repo}/.codeaudit-context.md`, in the exact format of `reference/PROJECT_CONTEXT.md`: the five headings, 40–
+100 lines, names not line numbers, and this line directly under the title:
+`<!-- seeded by codeaudit threat-modeler on {date}; review before relying on it -->`. Fill it from the model
+you just wrote — *What this codebase does* from `components[]`, *Auth shape* from `controls[]`, *Trust
+boundaries and adversaries* from `trust_boundaries[]` / `adversaries`, *Project-specific patterns to flag*
+from the wrappers and helpers you met, *Known non-findings* from `known_non_findings` as `[by_design]` lines
+with their evidence (write `- none` if there are none). Only `documented` claims and the wrappers you actually
+saw go in; an `inferred` claim is an open question, not context. Never overwrite an existing file. Validate
+with `python3 -I "$CA/tools/context.py" check {repo}/.codeaudit-context.md` and fix what it reports.
+
 ## Completion
 
 Write the file, append `{"phase":"threat-model","result":"complete","documented":N,"inferred":M,"entry_point_rows":R}`
 to `outputs/{engagement}/activity/threat-modeler.log` (NDJSON), then announce **THREAT MODEL COMPLETE** with
-a one-line summary: components, entry-point rows, documented-vs-inferred counts, and the number of open
-questions. Do not recap the model — the file carries it.
+a one-line summary: components, entry-point rows, documented-vs-inferred counts, the number of open
+questions, and `context: read | seeded | absent`. Do not recap the model — the file carries it.

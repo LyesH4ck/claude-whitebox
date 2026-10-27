@@ -307,7 +307,7 @@ function checkArtifacts() {
  * back into prose — reconciliation by eye over hundreds of sources, hand-written reports that drop the
  * evidence sections. Blocking when a tool the command references is absent; warning when python3 is.
  */
-const TOOLS = ['reconcile.py', 'aggregate.py', 'render.py'];
+const TOOLS = ['reconcile.py', 'aggregate.py', 'render.py', 'context.py'];
 function checkTools() {
   const cmd = read(path.join(PLUGIN, 'commands/codeaudit.md'));
   let present = 0;
@@ -343,12 +343,39 @@ function checkTarget(repo) {
     blocking('target', `repo "${repo}" does not exist or is not a directory`, '');
     return {};
   }
-  const isGit = existsSync(path.join(repo, '.git'));
+  // A subdirectory of a larger checkout (a service in a monorepo, a fixture nested in this repo) has no
+  // .git of its own and is still fully tracked — ask git, and fall back to the directory test only when
+  // git itself is unavailable.
+  let isGit = existsSync(path.join(repo, '.git'));
+  try {
+    isGit = execFileSync('git', ['-C', repo, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'true';
+  } catch { /* git missing or not a work tree: keep the directory test's answer */ }
   if (!isGit) {
-    warn('target', 'target is not a git repository',
-      'SKILL.md gates findings on `git ls-files` tracking: with no .git, every finding risks being ' +
+    warn('target', 'target is not inside a git work tree',
+      'SKILL.md gates findings on `git ls-files` tracking: with no git history, every finding risks being ' +
       'demoted to informational, which is excluded from the headline count. Audit a checkout, or expect ' +
       'to override that rule.');
+  }
+
+  // The operator-owned project context, when present, must parse — a missing heading or a leftover seed
+  // placeholder is carried into every brief as-is. Same rules as tools/context.py check.
+  const ctx = path.join(repo, '.codeaudit-context.md');
+  let contextFile = null;
+  if (existsSync(ctx)) {
+    const body = read(ctx);
+    const lines = body.split('\n').length;
+    const problems = [];
+    for (const h of ['## What this codebase does', '## Auth shape', '## Trust boundaries and adversaries', '## Project-specific patterns to flag', '## Known non-findings']) {
+      if (!new RegExp(`^${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm').test(body)) problems.push(`missing heading "${h}"`);
+    }
+    if (lines > 120) problems.push(`${lines} lines (budget 120)`);
+    if (body.length > 10000) problems.push(`${body.length} chars (budget 10000)`);
+    for (const p of ['{project name}', '{what}', '3–5 bullets', '3-5 bullets', 'TODO']) if (body.includes(p)) problems.push(`placeholder "${p}" still present`);
+    if (problems.length) {
+      warn('target', `.codeaudit-context.md: ${problems.join('; ')}`,
+        'It is injected into every agent brief as the operator\'s statement; fix it before launching (reference/PROJECT_CONTEXT.md).');
+    }
+    contextFile = { path: ctx, lines, problems };
   }
 
   const found = [];
@@ -375,7 +402,7 @@ function checkTarget(repo) {
       { encoding: 'utf8' }).trim()) || 0;
   } catch { /* best effort */ }
 
-  return { isGit, ecosystems: found, files };
+  return { isGit, ecosystems: found, files, contextFile };
 }
 
 // ───────────────────────────────────────────────────────────── main
