@@ -4,6 +4,48 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.72] — 2026-10-27
+
+### Fixed — `pentest` 2.6.0: the knowledge base is addressed through the plugin root, not the launch directory
+
+An engagement runs where the target is, never where the plugin is. `pentest`'s bundled **tools** already knew
+that — each `.mjs` invocation tries the checkout, then the installed copy, because shell state does not
+survive between Bash calls. Its **knowledge base** did not: 65 `Read plugins/pentest/…` directives and 22
+prose pointers were repo-relative, and resolved only if the model obeyed a prose instruction above them
+("Resolve the plugin root ONCE, then prefix every path"). Verified from `/tmp`: unprefixed, every one of them
+is `No such file or directory`.
+
+This is the same defect codeaudit 0.10.0 removed, and it fails in the same silent direction — an agent that
+cannot read its payload file does not crash. It hand-rolls the test and reports a clean surface. It already
+cost a real miss once (`/pentest:sql`, 2026-07-10: a tool path that did not resolve sent the agent back to
+improvised curl probes, losing `sqli-detect`'s identifier-context breakouts and its `queryLeak` detector — a
+full query/schema disclosure downgraded to a bare "differential").
+
+- **Every knowledge-base mount is now written `$PR/…`** — the placeholder is *in* the path, so there is
+  nothing to remember. The 20 tool assignments keep their self-contained repo-then-cache resolution, which is
+  correct for them and must not be collapsed into `$PR`.
+- **The 16 resolution preambles** said the paths below were repo-relative. They now say the paths are relative
+  to the plugin root and that an unresolved `$PR` is a bug, never a literal path to try.
+- **`pentester-orchestrator`** described `$PR` inline with a stale two-tier rule and carried no resolver at
+  all; it now has the standard block. **`pentest-oast`** pointed at `$PR/skills/oast/SKILL.md` from inside a
+  banner printed *verbatim* to the operator — it names the `pentest:oast` skill instead.
+
+### Added — `pentest` 2.6.0: a preflight, so the regression cannot come back quietly
+
+`plugins/pentest/preflight.mjs` (+ 13 tests, each check verified in the failing direction too), invoked by
+`/pentest:pentest` at Step 6.1 with the usual 0/1/2 contract. It blocks on: a repo-relative knowledge-base
+mount, a tool path whose fallback only *tests* instead of assigning, an unsorted cache glob (`ls | head -1`
+picks the OLDEST installed version), a prompt that addresses `$PR` without resolving it, a resolver with no
+loud failure branch, a dead `$PR` pointer, dispatch drift (a command naming an agent that does not exist), and
+a bundled tool the plugin does not ship. It warns when the installed copy's version differs from the checkout.
+
+Writing it found two defects the manual pass had missed: `pentester-executor` still pointed at
+`plugins/playwright/stealth/README.md`, and the provenance block in `commands/pentest.md` resolved a root with
+no loud failure branch. Its own first draft also accepted `[ -f "$X" ] || echo "not found"` as a fallback — a
+line that reports the miss and leaves the tool unresolved. Requiring `|| X=` is the difference that matters.
+
+---
+
 ## [2.4.71] — 2026-10-11
 
 ### Added — `codeaudit` 0.11.0: the mechanical half of Steps 6.5 and 6.6 ships as tools
