@@ -38,6 +38,15 @@ core pipeline, between the adversarial sweep and aggregation.
   `refuted`, `verification_overrides`), `OUTPUT_STRUCTURE.md` (file format), `WORKFLOWS.md` (step 6b)
   updated; `preflight.mjs` includes the verifier in the skipped-register check. `tools.test.mjs` +4.
 
+### Fixed — `aggregate.py`: a wrapped evidence bullet is one entry
+
+Validated 0.12–0.13 on a live pass (recon → auth + access-control auditors → finding-verifier → tools →
+eval judge, on the `jwt-version-gate` fixture: judge PASS, both auditors answered the skipped register, both
+`verification.md` parsed, the version-gated safe sibling was ruled out citing 9.0.2). The one defect it
+surfaced: auditors wrap long `unverified_assumptions` bullets over indented continuation lines, and the parser
+read only the first line — the "still needs" half was lost and a well-formed assumption was logged as a
+shrug. Continuation lines are now joined to their bullet before parsing (+ 1 regression test).
+
 ## [2.4.73] — 2026-10-27
 
 ### Added — `codeaudit` 0.12.0: the skipped register, and findings that keep their identity across runs

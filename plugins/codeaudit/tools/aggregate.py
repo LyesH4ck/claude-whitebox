@@ -191,9 +191,14 @@ def parse_safe(p):
         if not ok: viol(name, f"missing section ## {k}")
     for k in out:
         sec = section(body, k)
+        # Auditors wrap long bullets over several indented lines ("investigated: … \n  → still needs: …").
+        # Join a bullet with its continuation lines before parsing, or the second half is lost and a
+        # well-formed assumption is logged as a shrug — seen on a live run.
+        items = []
         for line in sec.splitlines():
-            if not line.lstrip().startswith("- "): continue
-            item = line.lstrip()[2:].strip()
+            if line.lstrip().startswith("- "): items.append(line.lstrip()[2:].strip())
+            elif items and line.strip() and not line.lstrip().startswith("#"): items[-1] += " " + line.strip()
+        for item in items:
             if item.lower() in ("none", "- none", "n/a"): continue
             if k == "tested_not_vulnerable":
                 m = re.match(r"\[([a-z_]+)\]\s*(.*)", item)

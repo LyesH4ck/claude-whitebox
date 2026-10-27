@@ -90,6 +90,9 @@ Paths relative to \`src/\`; \`H/\` = \`src/handlers/\`.
 ## unverified_assumptions
 - investigated: the WAF config is referenced at infra/waf.md:1 but not in repo → still needs: the deployed WAF body-size rule
 - bare shrug with no evidence half
+- investigated: read the identity-service README and the verify call at src/mw/auth.ts:7 for issuer/audience
+  options — none are set
+  → still needs: the identity service's token format, to decide whether a cross-service replay is possible
 
 ## coverage_gaps
 - src/workers/*.ts — dynamic dispatch not traced → recommended: trace consumers
@@ -187,6 +190,10 @@ test('aggregate: lenient enum tokens, caps, overrides, extra locations, dedup, u
   assert.ok(r.contract_violations.some((v) => /without a valid \[disposition\]/.test(v.issue)));
   assert.ok(r.contract_violations.some((v) => /evidence needed/.test(v.issue)), 'the bare shrug is a violation');
   assert.equal(r.unverified_assumptions[0].evidence_needed, 'the deployed WAF body-size rule');
+  // a bullet wrapped over three lines is one entry, with its "still needs" half intact (live-run regression)
+  assert.equal(r.unverified_assumptions.length, 3);
+  assert.match(r.unverified_assumptions[2].evidence_needed, /^the identity service's token format/);
+  assert.equal(r.contract_violations.filter((v) => /evidence needed/.test(v.issue)).length, 1, 'only the bare shrug is a violation');
   assert.equal(r.coverage_gaps[0].recommended_action, 'trace consumers');
   assert.equal(r.engagement, 'fx', 'meta merged');
   rmSync(root, { recursive: true, force: true });
