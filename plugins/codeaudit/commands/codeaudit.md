@@ -8,6 +8,7 @@ allowed-tools:
   - Write
   - Task
   - TaskOutput
+  - SendMessage
   - Bash
   - Glob
   - Grep
@@ -328,6 +329,30 @@ Act on the exit code:
 
 Log `phase":"preflight","exit":<0|1|2>,"blocking":<N>,"warnings":<M>`.
 
+### Step 6.0b — Resume (when the engagement directory already exists)
+
+An interrupted session — a crash, a closed terminal, a context reset at wave 2 — leaves everything it had
+produced on disk: recon, the threat model, the plan, each finished auditor's evidence file and findings, the
+orchestrator log. Starting over throws that away and pays for it twice. Probe before initializing:
+
+```bash
+python3 -I "$CA/tools/resume.py" "outputs/{engagement}"
+```
+
+It classifies each phase as `done` / `partial` / `missing` from artifacts alone — an agent's own "complete" is
+never consulted — and names the first step to resume from and the auditors still owed (those whose
+four-heading `_safe-` file is absent). When it reports an existing engagement with anything `done`, ask via
+AskUserQuestion: **"`outputs/{engagement}` already holds a {recon|plan|N auditors…} — resume from step
+{X}, or start over?"** with **Resume** / **Start over (keeps nothing)** / **Cancel**.
+- **Resume** → skip every `done` phase. Re-read the artifacts you need (`recon/*`, `threat-model.json`,
+  `deployment-plan.json`) instead of re-dispatching their producers; in Step 6.4 dispatch **only** the
+  auditors the probe lists as owed (`partial` ones on their full scope — a half-written evidence file is not
+  a verdict); run the completeness loop, reconciliation, sweep and verification as usual, each skipping
+  what the probe already shows done. Log `phase":"resume","from":"<step>","auditors_owed":<n>`.
+- **Start over** → `mv outputs/{engagement} outputs/{engagement}.abandoned-<timestamp>` (never delete), then
+  proceed to 6.1.
+A probe with nothing `done` means a stray directory; proceed to 6.1 without asking.
+
 ### Step 6.1 — Initialize
 
 ```bash
@@ -481,7 +506,11 @@ class with surface gets an auditor. Follow your agent definition's schema."
      depth: <{depth} guidance>. Report back with a status of `complete` or `incomplete` + what remains.";
    - the reminder to write findings per `$CA/skills/code-audit/reference/REPORT_CONTRACT.md`
      and record safe vectors.
-4. Log `phase":"audit","action":"deploy-auditors","count":<N>,"wave":1`.
+4. Log `phase":"audit","action":"deploy-auditors","count":<N>,"wave":1`, and one line per dispatched
+   agent with the **agent id the `Task` call returned** —
+   `phase":"audit","action":"dispatched","agent":"<name>","shard":"<tag|null>","agent_id":"<id>"` — so a
+   later repair message (Step 6.6) or an unanswered skipped register (Step 6.5) can reach the same session,
+   with its context intact, instead of paying for a fresh one.
 
 Depth guidance to inject: **Quick** = high-confidence sinks and primary paths only, stop tracing a path
 once a clear verdict is reached; **Standard** = all enumerated sources, primary + obvious secondary
@@ -519,7 +548,8 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
      the `[skipped]` lines in place until the follow-up has verdicted them; the aggregator lists whatever
      remains under `skipped_paths`, and that is the correct report when a file genuinely cannot be analysed.
    - **no `SKIPPED:` line at all** — the register was not answered. Log `"skipped":"unanswered"` and
-     message the agent once, tool-free, asking only for the register; if it still does not answer, record the
+     message the agent once via `SendMessage` (its `agent_id` is in the `dispatched` log line), asking only
+     for the register and nothing else; if it still does not answer, record the
      auditor's whole scope under `coverage_gaps` with the reason "skipped register unanswered" — an unanswered
      register is indistinguishable from a silent refusal, and both read as "all traced" if you let them.
 2. **If an auditor reports `incomplete`** (untraced sources remain, a helper/branch it flagged needs
@@ -695,9 +725,20 @@ python3 -I "$CA/tools/aggregate.py" "outputs/{engagement}" --write \
 `--dry-run` prints every contract deviation it found (a `Severity` outside the enum, a `tested_not_vulnerable`
 line without a `[disposition]`, a `source` with no `file:line`) and the per-finding table
 (`reported -> final` severity, confidence, privilege, fingerprint, change, resolved endpoint). Fix what is
-yours to fix (a malformed file is re-dispatched to its auditor, never hand-edited), write
-`plan/_relations.json` (point 1, "Relate what you did not merge") and `plan/_meta.json`
+yours to fix, write `plan/_relations.json` (point 1, "Relate what you did not merge") and `plan/_meta.json`
 (engagement/repo/commit/scope/depth/ecosystems block of the contract), then `--write`.
+
+**A malformed file is repaired by its author, in session, never hand-edited and never re-audited.** For each
+`contract_violations` line that names a finding or evidence file (a `Severity` outside the enum, a `Source`
+with no `file:line`, a `tested_not_vulnerable` line without a `[disposition]`, an assumption with no
+"still needs" half), look up the author's `agent_id` in the `dispatched` log lines and **send it the exact
+violation text and the file path** via `SendMessage`, with the instruction: "repair only the field named,
+keep the substance, do not re-trace, do not touch anything else, reply `REPAIRED <path>`". The session still
+holds the trace that produced the file, so the fix costs one short turn. Then re-run `--dry-run`. Only when
+the agent is gone (no reply, or the message cannot be delivered) dispatch a **repair-only** `Task` of the
+same agent type with the finding directory and the violation — a brief that says "repair this field", not
+"audit this class" — and never a full re-audit over a formatting defect. Record each repair as
+`phase":"aggregate","action":"repair","file":"<path>","via":"<message|task>"`.
 
 Pass the two cross-run inputs resolved in Step 2 whenever they exist. With `--previous` every finding gets
 `change: new | persisting` by **fingerprint** (a line-number-free identity, `REPORT_CONTRACT.md` →

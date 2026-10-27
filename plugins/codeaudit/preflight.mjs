@@ -307,9 +307,10 @@ function checkArtifacts() {
  * back into prose — reconciliation by eye over hundreds of sources, hand-written reports that drop the
  * evidence sections. Blocking when a tool the command references is absent; warning when python3 is.
  */
-const TOOLS = ['reconcile.py', 'aggregate.py', 'render.py', 'context.py', 'recon-coverage.py'];
+const TOOLS = ['reconcile.py', 'aggregate.py', 'render.py', 'context.py', 'recon-coverage.py', 'resume.py', 'diff-scope.py'];
 function checkTools() {
-  const cmd = read(path.join(PLUGIN, 'commands/codeaudit.md'));
+  // every command may invoke a tool (codeaudit.md owns most; codeaudit-diff.md owns diff-scope.py)
+  const cmd = mdFiles(path.join(PLUGIN, 'commands')).map(read).join('\n');
   let present = 0;
   for (const t of TOOLS) {
     const p = path.join(PLUGIN, 'tools', t);
@@ -318,7 +319,7 @@ function checkTools() {
       continue;
     }
     present += 1;
-    if (!cmd.includes(`tools/${t}`)) warn('tools', `tools/${t} ships but commands/codeaudit.md never invokes it`, 'Wire it into Step 6.5/6.6 or delete it.');
+    if (!cmd.includes(`tools/${t}`)) warn('tools', `tools/${t} ships but no command file invokes it`, 'Wire it into a command step or delete it.');
   }
   try { execFileSync('python3', ['-c', 'import sys; assert sys.version_info >= (3, 8)'], { stdio: 'ignore' }); }
   catch { warn('tools', 'python3 (>= 3.8) not found on PATH', 'reconcile/aggregate/render will not run; the orchestrator must do those steps by hand.'); }

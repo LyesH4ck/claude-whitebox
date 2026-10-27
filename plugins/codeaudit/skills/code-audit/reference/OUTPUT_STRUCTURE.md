@@ -33,7 +33,16 @@ outputs/{engagement}/
 │       ├── corroboration.txt       # OPTIONAL — live witness result (hybrid mode only)
 │       └── verification.md         # written by the finding-verifier (Step 6.5c) — cited verdict: confirmed | refuted | uncertain
 ├── codeaudit-report.json           # ALWAYS — fixed machine schema
-└── report.md                       # ALWAYS — consolidated human report
+├── report.md                       # ALWAYS — consolidated human report
+└── pr-comment.md                   # diff mode (`render.py --pr-comment`): the net-new findings, review-sized; absent on a green run
+```
+
+Diff mode (`/codeaudit:codeaudit-diff`) adds `plan/_diff-scope.json` — the changed files plus one import hop
+each way, written by `tools/diff-scope.py` — and reuses the previous engagement's `recon/` and
+`threat-model.json` by path. An interrupted engagement is probed by `tools/resume.py`, which reads the tree
+above and never writes to it.
+
+```
 ```
 
 ## Activity Log (NDJSON)

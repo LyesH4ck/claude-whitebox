@@ -18,10 +18,16 @@ install `codeaudit`.
 
 ```
 /codeaudit:codeaudit          # launch an audit (guided scope → plan → audit → report)
+/codeaudit:codeaudit-diff     # audit a change: diff + one import hop, reuse the baseline, report net-new (PR mode)
 /codeaudit:codeaudit-scope    # pre-configure repo/scope without launching
 /codeaudit:codeaudit-classes  # pre-configure which vuln classes to cover
 /codeaudit:codeaudit-exit     # close the session, flush findings, lift isolation
 ```
+
+An interrupted engagement resumes: `/codeaudit:codeaudit` probes `outputs/{engagement}` first
+(`tools/resume.py`) and offers to pick up at the first phase without its artifact. A malformed finding or
+evidence file is repaired by the agent that wrote it, in its own session, from the exact violation line —
+never hand-edited, never re-audited.
 
 You provide a **repository path** (and optionally a running URL for hybrid corroboration) and which of
 the 17 vulnerability classes to cover. There is no time budget — the audit is bounded and runs until every
@@ -105,7 +111,9 @@ python3 -I tools/recon-coverage.py outputs/<engagement> --repo <repo>   # Step 6
 python3 -I tools/reconcile.py outputs/<engagement>                 # Step 6.5: enumerated vs verdicted sources → uncited residue
 python3 -I tools/aggregate.py outputs/<engagement> --dry-run       # Step 6.6: parse everything, print contract deviations
 python3 -I tools/aggregate.py outputs/<engagement> --write --relations plan/_relations.json --meta plan/_meta.json
-python3 -I tools/render.py    outputs/<engagement>                 # report.md + exec-summary / remediation-plan / csv / sarif
+python3 -I tools/render.py    outputs/<engagement> [--pr-comment]  # report.md + exec-summary / remediation-plan / csv / sarif (+ net-new pr-comment.md)
+python3 -I tools/resume.py    outputs/<engagement>                 # Step 6.0b: which phases are done, which auditors are owed
+python3 -I tools/diff-scope.py --repo <repo> --ref origin/main     # diff mode: changed files + one import hop each way
 ```
 
 `recon-coverage.py` is the check on the check: `reconcile.py` proves every source recon enumerated got a

@@ -83,6 +83,27 @@ Shannon's `pre-recon` agent delegates code reading to its own sub-Task agents. H
 constraint, `code-recon` reads the code **directly** (Grep/Glob/Read) — it is itself a subagent and
 cannot fan out. The orchestration fan-out happens one level up, in the command, across the auditors.
 
+## Diff mode (a change, not a repository)
+
+```
+/codeaudit:codeaudit-diff
+```
+
+Scope is the files a diff touched (`--ref origin/main`, `--working`, `--staged` or an explicit list) plus one
+import hop each way (`tools/diff-scope.py`): importers are where a changed helper becomes reachable, imports
+are what a changed handler now reaches. The standing baseline is reused by path — the repo's
+`.codeaudit-context.md`, the most recent full engagement's recon and threat model, its report as
+`--previous`, the accepted-risk file. The planner scopes auditors to the slice, every finding is verified,
+and `render.py --pr-comment` writes the **net-new** findings by fingerprint — nothing on a green run. It
+does not replace the full engagement, which is what builds the baseline a change is judged against.
+
+## Resuming an interrupted engagement
+
+Everything a run produces is on disk. `tools/resume.py outputs/<engagement>` classifies each phase from
+artifacts alone (never from an agent's "complete") and names the first step to resume from and the auditors
+still owed; `/codeaudit:codeaudit` Step 6.0b offers **Resume** / **Start over** / **Cancel** before
+initializing anything.
+
 ## Static vs hybrid mode
 
 - **Static** (no `target_url`): the audit reasons entirely from source. Findings cite `file:line` and a

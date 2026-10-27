@@ -574,6 +574,90 @@ test('recon-coverage: out_of_scope directories are excluded and a silent languag
   rmSync(repo, { recursive: true, force: true }); rmSync(out, { recursive: true, force: true });
 });
 
+test('resume: classifies phases from artifacts alone and names the step and the auditors still owed', () => {
+  const root = fixture();
+  // the fixture has recon (but no ecosystems) + findings + one _safe file, no plan yet
+  let r = JSON.parse(py('resume.py', [root, '--json'], root));
+  assert.equal(r.phases.recon, 'partial', 'sink-inventory lacks ecosystems');
+  assert.equal(r.phases.plan, 'missing');
+  assert.equal(r.resume_from, '6.2');
+  // a plan with two deployments: injection has its _safe file (done); xss has a finding dir but no _safe (partial)
+  w(root, 'recon/sink-inventory.json', JSON.stringify({ entry_points: [], ecosystems: [{ key: 'node' }] }));
+  w(root, 'recon/architecture.md', '# arch\n'); w(root, 'recon/attack-surface.md', '# surface\n');
+  w(root, 'recon/_coverage.json', JSON.stringify({ passed: true }));
+  w(root, 'recon/threat-model.json', JSON.stringify({ entry_points: [{}], dispositions: ['guard_present'] }));
+  w(root, 'plan/deployment-plan.json', JSON.stringify({ waves: [{ deployments: [{ agent: 'injection-auditor', class: 'injection' }, { agent: 'xss-auditor', class: 'xss' }] }] }));
+  w(root, 'activity/codeaudit-orchestrator.log', JSON.stringify({ phase: 'audit', action: 'auditor-done', agent: 'injection-auditor', status: 'complete' }) + '\n');
+  r = JSON.parse(py('resume.py', [root, '--json'], root));
+  assert.equal(r.phases.recon, 'done');
+  assert.equal(r.phases['threat-model'], 'done');
+  assert.equal(r.phases.plan, 'done');
+  assert.equal(r.phases.auditors, 'partial');
+  assert.deepEqual(r.auditors_owed.map((a) => a.class), ['xss']);
+  assert.equal(r.auditors[0].logged_status, 'complete');
+  assert.equal(r.resume_from, '6.4/6.5');
+  // nothing on disk → start at 6.1, exit 0
+  const out = py('resume.py', [path.join(root, 'nope')], root);
+  assert.match(out, /nothing to resume/);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test('diff-scope: resolves the changed set from git and expands one import hop both ways', () => {
+  const repo = mkdtempSync(path.join(tmpdir(), 'codeaudit-diff-'));
+  const g = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x' } });
+  w(repo, 'src/lib/sql.js', "module.exports = { raw: (q) => q };\n");
+  w(repo, 'src/api/users.js', "const { raw } = require('../lib/sql');\nconst { fmt } = require('../lib/fmt');\nmodule.exports = (req) => raw(fmt(req.query.q));\n");
+  w(repo, 'src/lib/fmt.js', "module.exports = { fmt: (s) => s };\n");
+  w(repo, 'src/api/orders.js', "const { raw } = require('../lib/sql');\nmodule.exports = () => raw('x');\n");
+  w(repo, 'src/lib/sql.test.js', "require('./sql');\n");
+  w(repo, 'README.md', '# x\n');
+  g('init', '-q'); g('add', '-A'); g('commit', '-q', '-m', 'base'); g('branch', '-M', 'main');
+  g('checkout', '-q', '-b', 'feature');
+  w(repo, 'src/lib/fmt.js', "module.exports = { fmt: (s) => s + \"'\" };\n");   // the change: a helper
+  w(repo, 'README.md', '# x\nchanged docs\n');
+  g('add', '-A'); g('commit', '-q', '-m', 'change');
+  const r = JSON.parse(py('diff-scope.py', ['--repo', repo, '--ref', 'main', '--json'], repo));
+  assert.deepEqual(r.changed, ['src/lib/fmt.js'], 'README is not source');
+  assert.deepEqual(r.related_importers, ['src/api/users.js'], 'the route that calls the changed helper (test file excluded)');
+  assert.deepEqual(r.related_imports, []);
+  assert.deepEqual(r.scope_files, ['src/api/users.js', 'src/lib/fmt.js']);
+  // working-tree mode picks up an uncommitted edit on a handler and its imports
+  w(repo, 'src/api/orders.js', "const { raw } = require('../lib/sql');\nmodule.exports = (req) => raw(req.body.q);\n");
+  const r2 = JSON.parse(py('diff-scope.py', ['--repo', repo, '--working', '--json', '--write', path.join(repo, 'outputs/_diff-scope.json')], repo));
+  assert.deepEqual(r2.changed, ['src/api/orders.js']);
+  assert.deepEqual(r2.related_imports, ['src/lib/sql.js']);
+  assert.ok(existsSync(path.join(repo, 'outputs/_diff-scope.json')));
+  // nothing changed → exit 1
+  g('checkout', '-q', '--', '.');
+  let code = 0;
+  try { py('diff-scope.py', ['--repo', repo, '--working'], repo); } catch (e) { code = e.status; }
+  assert.equal(code, 1);
+  rmSync(repo, { recursive: true, force: true });
+});
+
+test('render --pr-comment: only new findings with a run diff, nothing written on a green run', () => {
+  const prevRoot = fixture();
+  py('aggregate.py', [prevRoot, '--write', '--meta', 'plan/_meta.json'], prevRoot);
+  const root = fixture();
+  w(root, 'findings/finding-ssrf-001/description.md', finding('ssrf', 'SSRF in d', {
+    severity: 'high', confidence: 'high', privilege: 'none',
+    src: '`req.body.y` (src/web/d.ts:40)', sink: '`axios.get` (src/http/fetch.ts:12)', loc: 'src/http/fetch.ts:12', slot: 'URL-host', cwe: 'CWE-918' }));
+  py('aggregate.py', [root, '--write', '--meta', 'plan/_meta.json', '--previous', path.join(prevRoot, 'codeaudit-report.json')], root);
+  py('render.py', [root, '--pr-comment'], root);
+  const c = readFileSync(path.join(root, 'pr-comment.md'), 'utf8');
+  assert.ok(c.includes('found 1 finding (new since `fx`)'));
+  assert.ok(c.includes('SSRF in d'));
+  assert.ok(!c.includes('SQLi in a'), 'persisting findings are not in the comment');
+  assert.ok(c.includes('2 persisting from the previous run not shown'));
+  // green run: same findings as before → no new → file not written
+  const root2 = fixture();
+  py('aggregate.py', [root2, '--write', '--meta', 'plan/_meta.json', '--previous', path.join(prevRoot, 'codeaudit-report.json')], root2);
+  const out = py('render.py', [root2, '--pr-comment'], root2);
+  assert.ok(!existsSync(path.join(root2, 'pr-comment.md')));
+  assert.match(out, /nothing new, not written/);
+  for (const d of [prevRoot, root, root2]) rmSync(d, { recursive: true, force: true });
+});
+
 const CONTEXT = `# Audit context — fx
 <!-- codeaudit-context v1 — operator-owned. -->
 

@@ -4,6 +4,36 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.78] — 2026-10-27
+
+### Added — `codeaudit` 0.17.0: diff mode, resume, and in-session repair
+
+The last three items of the deepsec comparison — the operational habits of a scanner that runs every day,
+fitted to an orchestrated audit.
+
+- **`/codeaudit:codeaudit-diff`** — an incremental audit of a change. `tools/diff-scope.py` resolves the
+  changed set (`--ref` merge-base diff, `--working`, `--staged`, `--files`), drops vendored/test/out-of-scope
+  files, and expands by one import hop each way (importers: where a changed helper becomes reachable;
+  imports: what a changed handler now reaches — regex-resolved for JS/TS, Python, Ruby, PHP, Go). The command
+  reuses the repository's standing baseline by path (`.codeaudit-context.md`, the latest full engagement's
+  recon and threat model, its report as `--previous`, the accepted-risk file), runs recon on the slice only
+  when no baseline exists, plans one wave scoped to the slice, verifies every finding, skips the sweep, and
+  reports **net-new** findings by fingerprint. `render.py --pr-comment` writes a review-sized
+  `pr-comment.md` of the new findings only — nothing on a green run — for a workflow to post from a job that
+  runs no PR code. Carry-forward (Step 6.7) runs at the end.
+- **Resume (Step 6.0b).** `tools/resume.py` classifies each phase of an existing `outputs/{engagement}` as
+  done / partial / missing from artifacts alone — recon files and parse, coverage gate, threat model, plan,
+  per-deployment four-heading `_safe-` files, reconciliation, sweep log line, verification files, report —
+  and names the first step to resume from and the auditors still owed. The command asks **Resume / Start
+  over (renames, never deletes) / Cancel** before initializing, and dispatches only the owed auditors.
+- **In-session repair (Step 6.6).** Every dispatched agent's id is logged; a `contract_violations` line
+  naming a finding or evidence file is sent to its author via `SendMessage` with the exact violation and
+  the instruction to repair only that field — the session still holds the trace, so it costs one short turn.
+  A repair-only `Task` is the fallback when the agent is gone; a full re-audit over a formatting defect is
+  never the answer. The unanswered skipped register uses the same channel.
+- Preflight tools check now reads every command file (7 tools); `tools.test.mjs` +3 (resume probe,
+  diff-scope with a real git history, pr-comment with and without new findings).
+
 ## [2.4.77] — 2026-10-27
 
 ### Added — `codeaudit` 0.16.0: the recon-coverage gate (the check on the check)
