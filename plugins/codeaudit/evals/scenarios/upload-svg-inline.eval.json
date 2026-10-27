@@ -1,0 +1,22 @@
+{
+  "name": "upload-svg-inline",
+  "given": "uploaded files are served inline from the app origin with a Content-Type derived from the client-supplied extension",
+  "fixture": "fixtures/upload-svg-inline",
+  "classes": ["xss", "client-side"],
+  "rationale": "The verdict is made at the serving response, not at the upload filter. The filter blocks .html/.js, so reading only the filter says 'safe' — but .svg passes it and executes inline on the app origin. The sibling download route is the same bytes served attachment+nosniff and must not be reported.",
+  "should_find": [
+    {
+      "path": "server.js",
+      "min_severity": "medium",
+      "evidence_contains": ["/files/", "svg"],
+      "required": true
+    }
+  ],
+  "should_not_find": [
+    { "path": "server.js", "evidence_contains": ["/downloads/"] }
+  ],
+  "should_rule_out": [
+    { "disposition": "guard_present", "evidence_contains": ["nosniff"], "required": false }
+  ],
+  "must_not_contain": ["multer", "sharp", "imagemagick"]
+}

@@ -31,27 +31,44 @@ Optional pre-configuration:
         │
         ▼
 1. code-recon  (Task)        → recon/architecture.md, attack-surface.md, sink-inventory.json
-        │   the ONLY baseline pass: maps stack, sources, sinks, security mechanisms
+        │   the ONLY baseline pass: maps stack, sources, sinks, mechanisms, ecosystems + version pins
+        │   WHAT EXISTS
         ▼
-2. audit-planner (Task)      → plan/deployment-plan.json, plan/audit-plan.md
-        │   reads baseline, decides which auditors against which dirs  → OPERATOR APPROVES
+2. threat-modeler (Task)     → recon/threat-model.json
+        │   entry-point trust table, adversaries, properties provided/disclaimed,
+        │   controls + their assumptions, known non-findings, dispositions
+        │   WHAT IS SUPPOSED TO BE TRUE — every rule-out downstream cites it
         ▼
-3. auditors (parallel Task)  → findings/finding-*/  (+ _safe-*.md negatives)
-        │   injection · xss · auth · access-control · ssrf · secrets · crypto · deps · config
-        │   each: Recon → Trace (source→sink) → Verdict (slot↔defense) → Emit
+3. audit-planner (Task)      → plan/deployment-plan.json, plan/audit-plan.md
+        │   reads baseline + model, decides which auditors against which dirs → OPERATOR APPROVES
         ▼
-4. completeness loop         → re-dispatch/escalation until every source→sink path is analyzed
+4. auditors (parallel Task)  → findings/finding-*/  (+ _safe-*.md: the four evidence categories)
+        │   17 classes · each: Recon → Trace (source→sink) → Verdict (slot↔defense) → Emit
         ▼
-5. aggregate + report        → de-dup, confidence gate  → OPERATOR CONFIRMS
+5. completeness loop         → re-dispatch/escalation until every source→sink path is analyzed
+        ▼
+6. adversarial sweep (×2)    → findings/finding-sweep-*/
+        │   blind-dig: a directory the plan never covered, run WITHOUT model/recon/findings
+        │              (context isolation is the method — it prevents anchoring)
+        │   challenge-exclusion: take one exclusion the AUDIT made and try to refute it
+        ▼
+7. aggregate + report        → de-dup → relations (duplicates/subsumed/chains) → confidence gate
+                             → privilege_required severity caps → OPERATOR CONFIRMS
                              → codeaudit-report.json + report.md (+ optional formats)
 ```
 
 ### Why the command orchestrates (not an agent)
 
 This harness allows **one level of subagent nesting**. The command runs in the main session and can
-spawn agents via `Task`; any agent it spawns cannot spawn further agents. So `code-recon`, the planner,
-and the auditors are all spawned by the command. The planner only *plans* — it never deploys. This is
-the same constraint that shapes the `pentest` plugin.
+spawn agents via `Task`; any agent it spawns cannot spawn further agents. So `code-recon`, the
+`threat-modeler`, the planner, the auditors and the `adversarial-sweep` agents are **all** spawned by the
+command. The planner only *plans* — it never deploys. This is the same constraint that shapes the `pentest`
+plugin.
+
+It is also why the `blind-dig` sweep's context isolation is the **command's** responsibility rather than the
+agent's: the agent is told not to go looking for the threat model, recon or findings, but only the caller
+controls what actually reaches its prompt. An orchestrator that helpfully summarises "recon found X here"
+into that prompt has defeated the sweep without breaking anything visible.
 
 ### Difference from Shannon's pre-recon
 

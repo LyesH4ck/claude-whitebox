@@ -1,6 +1,6 @@
 {
   "name": "codeaudit-hybride",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Dual-engine white-box audit: the unchanged codeaudit pipeline (Claude) plus Codex (via OpenAI's codex-plugin-cc, read-only) as a blind second detector, cross-verifier and false-negative hunter — deterministic reconciliation and agreement-based confidence calibration. Requires the codeaudit plugin.",
   "author": {
     "name": "Christophe Bailleux",

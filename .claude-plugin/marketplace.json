@@ -10,7 +10,7 @@
     {
       "name": "playwright",
       "source": "./plugins/playwright",
-      "description": "Playwright MCP server with stealth-friendly defaults (real Chrome channel, headed, realistic UA/viewport, anti-automation flags) for browser-driven security testing. Dependency of the pentest plugin's client-side agents.",
+      "description": "Playwright MCP server with a stealth-friendly default config (real Chrome channel, headed, realistic UA/viewport/locale, anti-automation flags) for browser-driven security testing. Provides the mcp__plugin_playwright_playwright__* tools the pentest plugin's client-side agents depend on.",
       "version": "0.2.20",
       "author": {
         "name": "Christophe Bailleux",
@@ -23,7 +23,7 @@
       "name": "pentest",
       "source": "./plugins/pentest",
       "description": "Full penetration testing framework - 64 attack categories across 11 domains covering OWASP, injection, authentication, cloud, and more",
-      "version": "2.5.2",
+      "version": "2.5.3",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"
@@ -34,8 +34,8 @@
     {
       "name": "codeaudit",
       "source": "./plugins/codeaudit",
-      "description": "White-box source code security audit - static source-to-sink analysis across 10 vulnerability domains with optional live correlation",
-      "version": "0.1.17",
+      "description": "White-box source code security audit framework - static source-to-sink analysis across 17 vulnerability domains: core 10 (injection, XSS, auth, access control, SSRF, secrets, crypto, dependencies, configuration, logging) plus extended 7 (business logic, feature abuse, data lifecycle/isolation, client-side, HTTP protocol, AI/LLM, resource exhaustion) with optional live correlation",
+      "version": "0.11.0",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"
@@ -46,8 +46,8 @@
     {
       "name": "codeaudit-hybride",
       "source": "./plugins/codeaudit-hybride",
-      "description": "Dual-engine white-box audit - the codeaudit pipeline (Claude) plus Codex (read-only, via codex-plugin-cc) as blind second detector, cross-verifier and false-negative hunter, with deterministic reconciliation. Requires codeaudit.",
-      "version": "0.1.0",
+      "description": "Dual-engine white-box audit: the unchanged codeaudit pipeline (Claude) plus Codex (via OpenAI's codex-plugin-cc, read-only) as a blind second detector, cross-verifier and false-negative hunter \u2014 deterministic reconciliation and agreement-based confidence calibration. Requires the codeaudit plugin.",
+      "version": "0.1.1",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"

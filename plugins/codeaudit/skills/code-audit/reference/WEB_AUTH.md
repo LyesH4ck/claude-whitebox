@@ -29,6 +29,22 @@ transport, or conflicts with a sibling cookie another component selects differen
 hardening unless a realistic less-trusted origin/network position/browser path can gain or replace the
 credential. (Config-auditor owns flag presence; here own the **scope/collision** angle.)
 
+**`SameSite` is a cross-site *request* control, not a scope control** — and it is the attribute most often
+over-credited. `Strict` blocks the cookie on every cross-site request; **`Lax` still sends it on a top-level
+GET navigation**; `None` blocks nothing (and requires `Secure`); **absent** means a browser default, which is
+an `unverified_assumptions` entry, not a source-confirmed control. Reading an attribute off a `set_cookie`
+call therefore does **not** settle whether a handler is CSRF-able — the method and the effect do. The full
+model, the browser-emittable request shapes, and what each defense (token, `Origin`, **Fetch Metadata**,
+content-type enforcement) actually covers live in `SOURCE_TO_SINK.md` → **CSRF slots**. Own the cookie
+*attribute* question here; take the CSRF *verdict* from there.
+
+**Domain-scoped cookies and same-site attackers.** A cookie scoped to the registrable domain is readable and
+**writable** by every subdomain. That breaks naked double-submit CSRF tokens, session-fixation defenses, and
+any "the cookie proves it came from us" assumption: an XSS or a takeover on `blog.example.com` is inside the
+boundary for `app.example.com`. Where a subdomain is third-party-controlled (a CMS, a status page, a customer
+vanity host), say so explicitly — it converts several "requires XSS on the app" preconditions into
+"requires XSS anywhere on the domain".
+
 ## Federated-identity classes
 
 **JWT verification & claim binding** (beyond `alg:none`)

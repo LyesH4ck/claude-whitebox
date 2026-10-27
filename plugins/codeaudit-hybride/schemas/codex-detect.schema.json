@@ -3,44 +3,180 @@
   "title": "codeaudit-hybride Codex detection result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "vuln_class", "findings", "safe", "coverage_gaps", "remaining"],
+  "required": [
+    "status",
+    "vuln_class",
+    "findings",
+    "safe",
+    "coverage_gaps",
+    "remaining"
+  ],
   "properties": {
-    "status": { "type": "string", "enum": ["complete", "incomplete"] },
-    "vuln_class": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "incomplete"
+      ]
+    },
+    "vuln_class": {
+      "type": "string",
+      "minLength": 1
+    },
     "findings": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "title", "vuln_class", "severity", "confidence", "cwe",
-          "sink_file", "sink_line", "sink_expr", "slot_type",
-          "source_expr", "source_file", "source_line", "source_in",
-          "trace", "defense_analysis", "why_vulnerable", "externally_reachable",
-          "impact", "remediation", "witness_payload", "safe_ref"
+          "title",
+          "vuln_class",
+          "severity",
+          "confidence",
+          "cwe",
+          "sink_file",
+          "sink_line",
+          "sink_expr",
+          "slot_type",
+          "source_expr",
+          "source_file",
+          "source_line",
+          "source_in",
+          "trace",
+          "defense_analysis",
+          "why_vulnerable",
+          "externally_reachable",
+          "impact",
+          "remediation",
+          "witness_payload",
+          "safe_ref"
         ],
         "properties": {
-          "title": { "type": "string", "minLength": 1 },
-          "vuln_class": { "type": "string", "minLength": 1 },
-          "severity": { "type": "string", "enum": ["critical", "high", "medium", "low", "informational"] },
-          "confidence": { "type": "string", "enum": ["high", "probable"] },
-          "cwe": { "type": ["string", "null"] },
-          "sink_file": { "type": "string", "minLength": 1 },
-          "sink_line": { "type": "integer", "minimum": 1 },
-          "sink_expr": { "type": "string", "minLength": 1 },
-          "slot_type": { "type": "string", "minLength": 1 },
-          "source_expr": { "type": "string", "minLength": 1 },
-          "source_file": { "type": ["string", "null"] },
-          "source_line": { "type": ["integer", "null"] },
-          "source_in": { "type": ["string", "null"], "enum": ["query", "path", "header", "cookie", "json", "form", "stored", "other", null] },
-          "trace": { "type": "array", "items": { "type": "string" } },
-          "defense_analysis": { "type": "string" },
-          "why_vulnerable": { "type": "string", "minLength": 1 },
-          "externally_reachable": { "type": "boolean" },
-          "impact": { "type": "string" },
-          "remediation": { "type": "string" },
-          "witness_payload": { "type": ["string", "null"] },
-          "safe_ref": { "type": ["string", "null"] }
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "vuln_class": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "informational"
+            ]
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "probable"
+            ]
+          },
+          "cwe": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sink_file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sink_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sink_expr": {
+            "type": "string",
+            "minLength": 1
+          },
+          "slot_type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_expr": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source_file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_in": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "query",
+              "path",
+              "header",
+              "cookie",
+              "json",
+              "form",
+              "stored",
+              "other",
+              null
+            ]
+          },
+          "trace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "defense_analysis": {
+            "type": "string"
+          },
+          "why_vulnerable": {
+            "type": "string",
+            "minLength": 1
+          },
+          "externally_reachable": {
+            "type": "boolean"
+          },
+          "impact": {
+            "type": "string"
+          },
+          "remediation": {
+            "type": "string"
+          },
+          "witness_payload": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "safe_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "privilege_required": {
+            "type": "string",
+            "enum": [
+              "none",
+              "authenticated",
+              "admin",
+              "maintainer",
+              "local-root"
+            ],
+            "description": "Minimum attacker position the trace requires. Optional here (older Codex runs omit it); the orchestrator derives it at adjudication when absent, because codeaudit's report contract requires it on every finding and it caps severity."
+          }
         }
       }
     },
@@ -49,12 +185,28 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["sink_file", "sink_line", "source_expr", "reason"],
+        "required": [
+          "sink_file",
+          "sink_line",
+          "source_expr",
+          "reason"
+        ],
         "properties": {
-          "sink_file": { "type": "string" },
-          "sink_line": { "type": ["integer", "null"] },
-          "source_expr": { "type": "string" },
-          "reason": { "type": "string" }
+          "sink_file": {
+            "type": "string"
+          },
+          "sink_line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source_expr": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
         }
       }
     },
@@ -63,13 +215,25 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["item", "reason"],
+        "required": [
+          "item",
+          "reason"
+        ],
         "properties": {
-          "item": { "type": "string" },
-          "reason": { "type": "string" }
+          "item": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
         }
       }
     },
-    "remaining": { "type": "array", "items": { "type": "string" } }
+    "remaining": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
   }
 }

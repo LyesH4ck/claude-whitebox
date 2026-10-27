@@ -1,0 +1,23 @@
+{
+  "name": "csrf-state-changing-get",
+  "given": "a cookie-authenticated account API changes the contact email on a GET, with a SameSite=Lax session cookie",
+  "fixture": "fixtures/csrf-state-changing-get",
+  "classes": ["access-control"],
+  "rationale": "SameSite=Lax still sends the cookie on a top-level GET navigation, so a state-changing GET is CSRF-able. An audit that finds a SameSite cookie and stops produces the false negative this scenario catches.",
+  "should_find": [
+    {
+      "cwe": "CWE-352",
+      "path": "server.js",
+      "min_severity": "medium",
+      "evidence_contains": ["/api/email", "samesite"],
+      "required": true
+    }
+  ],
+  "should_not_find": [
+    { "cwe": "CWE-352", "path": "server.js", "evidence_contains": ["display-name"] }
+  ],
+  "should_rule_out": [
+    { "vuln_class": "access-control", "evidence_contains": ["display-name"], "required": false }
+  ],
+  "must_not_contain": ["django", "flask", "spring"]
+}

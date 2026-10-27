@@ -56,6 +56,8 @@ A run is **incomplete** if `report.md` does not exist.
       "trace": ["userController.ts:42", "listService.ts:88", "userRepo.ts:130"],
       "slot_type": "SQL-keyword",
       "externally_reachable": true,
+      "privilege_required": "authenticated",
+      "prior_art": "git log -S listUsers: introduced 2024-03 (8b12f4a), never revisited. No issue or PR mentions ORDER BY. Prevalence: 1 hit of template-literal SQL vs 37 parameterized call sites — a local slip, not a convention.",
       "endpoint": { "method": "GET", "path": "/api/users", "param": "sort", "in": "query" },
       "evidence": "findings/finding-inj-001/description.md",
       "witness_payload": "?sort=id--"
@@ -63,8 +65,26 @@ A run is **incomplete** if `report.md` does not exist.
   ],
   "summary": { "critical": 1, "high": 4, "medium": 6, "low": 3, "informational": 2, "total": 16 },
   "tested_not_vulnerable": [
-    { "vuln_class": "ssrf", "detail": "all outbound fetches use a static host allowlist (src/http/client.ts:20)" }
+    { "vuln_class": "ssrf", "disposition": "guard_present",
+      "detail": "all outbound fetches use a static host allowlist (src/http/client.ts:20)" },
+    { "vuln_class": "injection", "disposition": "not_attacker_controlled",
+      "detail": "report template name comes from a server-side enum, never the request (src/report/kinds.ts:8)" }
   ],
+  "design_properties": [
+    { "vuln_class": "access-control", "detail": "public share links are intentionally unauthenticated; scope is bound to a single object id and revocable (docs/sharing.md:14, src/share/resolve.ts:31)" }
+  ],
+  "unverified_assumptions": [
+    { "vuln_class": "config", "investigated": "read nginx.conf and the Helm chart in-repo; both terminate TLS upstream and the app never sets HSTS itself",
+      "evidence_needed": "the deployed edge/CDN TLS and HSTS configuration, which is not in this repository" }
+  ],
+  "finding_relations": {
+    "duplicates": [ { "canonical_id": "finding-inj-001", "duplicate_ids": ["finding-xss-007"],
+                      "reason": "same template-literal SQL at userRepo.ts:130 reached from the same request param; the xss auditor filed it from the render side of one stored-taint path" } ],
+    "subsumed":   [ { "parent_id": "finding-ac-002", "subsumed_ids": ["finding-inj-004"],
+                      "reason": "finding-inj-004 is reachable only through the unauthenticated admin router in finding-ac-002; gating that router closes its only untrusted path" } ],
+    "chains":     [ { "finding_ids": ["finding-ac-009", "finding-log-003"], "composed_severity": "high",
+                      "reason": "ac-009 reads arbitrary files under the app root; log-003 writes a session token to a predictable path under that root. Together: unauthenticated session takeover." } ]
+  },
   "coverage_gaps": [
     { "item": "deserialization in worker queue", "reason": "queue payload schema not fully traced (dynamic dispatch)", "recommended_action": "trace src/workers/*.ts consumers" },
     { "item": "full SCA of transitive dependencies", "reason": "no scanner installed; only direct deps reviewed", "recommended_action": "run osv-scanner / composer audit in CI" }
@@ -75,12 +95,36 @@ A run is **incomplete** if `report.md` does not exist.
 ### Field rules
 
 - **`findings[]`** — required keys: `id`, `title`, `severity`, `confidence`, `status`, `vuln_class`,
-  `owasp`, `location` (file + line), `source`, `sink`. Optional: `cwe`, `cvss`, `trace`, `slot_type`,
-  `externally_reachable`, `endpoint`, `witness_payload`, `write_site`, `evidence`.
+  `owasp`, `location` (file + line), `source`, `sink`, `privilege_required`. Optional: `cwe`, `cvss`,
+  `trace`, `slot_type`, `externally_reachable`, `endpoint`, `witness_payload`, `write_site`, `prior_art`,
+  `locations`, `evidence`, and the aggregator-written `severity_reported` (as filed), `severity_cap_applied`,
+  `severity_revision`, `confidence_note`, `privilege_note`, `merged_ids`.
+- **Enum fields with a note** — `**Confidence**: probable (platform fact outside the repo)` and
+  `**Privilege required**: none (precondition: a Slack workspace membership)` are valid: the aggregator reads
+  the **leading token** against the enum and stores the remainder as `confidence_note` / `privilege_note`.
+  Write the token first; a token the enum does not contain is a violation (`unknown` for privilege, a
+  `coverage_gaps` entry for confidence), never a silently dropped finding.
+- **`orchestrator_adjustments`** (input, in `plan/_relations.json`; output visible per finding) — the only two
+  post-filing edits the orchestrator may make, each with evidence:
+  ```json
+  "orchestrator_adjustments": {
+    "severity_overrides": [ { "id": "finding-auth-auth-s1-002", "severity": "medium",
+        "by": "resource-exhaustion-auditor (class owner)", "reason": "pre-auth work-imbalance rule applied …",
+        "evidence": "findings/finding-auth-auth-s1-002/resource-exhaustion-addendum.md" } ],
+    "additional_locations": [ { "id": "finding-life-001", "note": "same root cause found by follow-up life-f1",
+        "evidence": "findings/_safe-data-lifecycle-f1.md",
+        "locations": [ { "file": "src/routes/stream.ts", "line": 95, "channel": "GET /v0/sessions/:id/events/stream" } ] } ]
+  }
+  ```
+  An override is applied **before** the privilege cap (the cap still wins) and recorded on the finding as
+  `severity_revision {from, to, by, reason, evidence}` with `severity_reported_by_filer` kept; additional
+  locations append to `locations[]` and surface as SARIF `relatedLocations`. An adjustment naming an unknown
+  finding or an invalid severity is a `contract_violations` entry, not a crash.
 - **`id` / `evidence`** — auditors write per-class on-disk dirs `findings/finding-{prefix}-{NNN}/`
   (core: `inj`/`xss`/`ac`/`ssrf`/`auth`/`sec`/`crypto`/`deps`/`cfg`/`log`; extended: `biz` business-logic /
   `feat` feature-abuse / `life` data-lifecycle / `cli` client-side / `http` http-protocol / `ai` ai-llm /
-  `dos` resource-exhaustion) to
+  `dos` resource-exhaustion; plus `sweep` for the adversarial-sweep agent, whose findings share the
+  same shape and the same bar) to
   stay collision-free across parallel runs. **Keep that class-prefixed id as the finding `id`** — do NOT renumber to a flat `finding-001` —
   and set `evidence` to the matching path `findings/finding-{prefix}-{NNN}/description.md`. The Step 6.6
   aggregator MUST confirm each `evidence` path resolves on disk before writing the report; a dangling
@@ -103,6 +147,25 @@ A run is **incomplete** if `report.md` does not exist.
   never guess a path. This is what the pentest hybrid handoff consumes to route a code-confirmed finding
   straight to a live target (`HYBRID_HANDOFF_SPEC.md`); when absent, the handoff falls back to correlating
   the param against the black-box surface map.
+- **`privilege_required`** (required on every finding) — the **minimum** attacker position needed to reach
+  the sink, as the trace actually describes it. Closed enum: **`none`** (unauthenticated network peer, or
+  attacker-supplied file/message input) · **`authenticated`** (any logged-in user) · **`admin`** (an elevated
+  role in the application) · **`maintainer`** (repository or package-publish rights) · **`local-root`**
+  (already root on the host), plus **`unknown`** — reserved for the aggregator when a finding arrives without
+  the field and the trace does not settle the principal. `unknown` applies **no** cap (an unresolved
+  privilege must not silently lower severity) and requires a `coverage_gaps` entry naming the finding; an
+  auditor must never emit it. It is a discrete field, not prose folded into the severity rationale, so a
+  reader can filter "what is exploitable with no account" without re-reading every trace. It also constrains
+  severity: `admin` and above cannot be `critical`, and `maintainer`/`local-root` cap at `medium` — if your
+  severity and your `privilege_required` disagree, one of them is wrong. A precondition **at or above** the
+  effect is not a low-privilege finding at all, it is circular — see `SKILL.md` → *Precondition subsumes
+  conclusion*.
+- **`prior_art`** (optional, strongly expected on `high` findings) — one or two sentences recording the two
+  checks from `SKILL.md` → *Prior art and prevalence*: what the git history and issue tracker say about this
+  code, and the prevalence count as `<n> hits` with the literal command. "Never reported" and "the maintainer
+  declined this in #412 but the guard they cited was removed in 9af2c1" are both high-value sentences, and
+  neither is recoverable later. A **systemic** finding (the pattern is the project's convention) must carry
+  the count here and list the sibling sites in `locations[]` rather than being filed N times.
 - **`confidence`** — `high` (complete, unambiguous code trace) or `probable` (likely flaw, a branch/helper
   not fully inspected) for every entry in `findings[]`. `unconfirmed` (suspected, no complete path) is
   **not a finding**: record it under `coverage_gaps` only, never in `findings[]` — this keeps the headline
@@ -114,7 +177,50 @@ A run is **incomplete** if `report.md` does not exist.
 - **`coverage_gaps`** — unconfirmed flaws and any class/area not fully traced (e.g. dynamic dispatch that
   could not be resolved statically, or a class with no scanner installed). First-class section. There is
   no time-based de-scoping — a code audit runs to completion.
-- **`tested_not_vulnerable`** — vectors analyzed and confirmed safe, so coverage is provable.
+- **`tested_not_vulnerable`** — vectors analyzed where the invariant **holds**. Each entry carries a
+  `disposition` from a closed enum, so a rule-out is auditable instead of free text:
+  **`guard_present`** (a correct, context-matched defense is on every path — cite it) ·
+  **`not_attacker_controlled`** (the value is a constant, a server-side enum, or derived only from trusted
+  state) · **`not_reachable`** (no network entry point reaches it — see Reachability) ·
+  **`by_design`** (intended behaviour backed by a maintainer statement or documentation **re-verified against
+  current code**) · **`precondition_subsumes`** (circular — the attacker already holds the effect) ·
+  **`model_gap`** (cannot be routed to any of the above; the audit's own understanding is incomplete — this
+  is the honest escape hatch, and an entry here is a signal to revisit, not a clearance).
+  When a **threat model** was produced (Step 6.2b), three more become available, and each one **must** cite
+  the model field that backs it — that citation is what makes the rule-out auditable and inheritable:
+  **`out_of_model_adversary`** (requires a capability `adversaries.out_of_scope` excludes) ·
+  **`out_of_model_component`** (lands in code the model places outside it — cite `out_of_scope[i]` or
+  `components[i]`) · **`out_of_model_non_default_build`** (only manifests under a discouraged or non-default
+  `build_variants[i]`). Two rules keep these honest: a rule-out resting **only** on a `provenance: "inferred"`
+  model claim is `model_gap`, not a clearance; and a sink whose entry point is absent from `entry_points[]`
+  is `model_gap` too — the model is incomplete, which is a reason to revisit it, not to drop the sink.
+  Every entry needs the `file:line` of whatever discharges it. `model_gap` is the exception: it needs the
+  open question instead.
+- **`design_properties`** — behaviour that is **intentional and confirmed as such**, with the evidence that
+  makes it intentional (documentation, a code comment stating the reason, a maintainer decision). This is
+  what stops the next run from re-reporting a deliberate choice, and it is distinct from
+  `tested_not_vulnerable`: that one says *we checked and it holds*, this one says *it is meant to be this
+  way*. An "intentional" claim with no evidence is not a design property — it is an assumption.
+- **`unverified_assumptions`** — facts the source cannot settle: deployed TLS and reverse-proxy
+  configuration, CDN/edge behaviour, IdP policy, production secrets and runtime config, browser specifics,
+  hardware. **Each entry must name both the investigation performed and the evidence that would settle it**
+  — an assumption without the work behind it is indistinguishable from not having looked. Keep these out of
+  `tested_not_vulnerable` (recording an unknown as safe is a false clearance) and out of `coverage_gaps`
+  (which would lose the fact that you investigated).
+
+- **`finding_relations`** — how the surviving findings relate to each other, in three arrays:
+  `duplicates` (same root cause, keys differed), `subsumed` (the parent's fix closes the child, and the child
+  has no independent path), `chains` (members compose into a higher-severity attack than any alone; carries
+  `composed_severity` and states the exploit order in `reason`). Written by the Step 6.6 aggregator, never by
+  an auditor — only the aggregator sees every class at once, which is exactly why `chains` exists: each
+  member is correctly rated low in its own auditor's scope. **Relations never alter `summary` counts or
+  member severities**; a chain's composed severity lives in its `reason`, so the tally stays reproducible.
+  Emit all three arrays even when empty.
+
+> The four evidence arrays are **separate on purpose and all four are expected, even when empty**. Collapsing
+> them loses the difference between *we checked and it holds*, *this is deliberate*, *we could not tell from
+> source*, and *we did not get to it*. Empty `findings[]` is never proof of complete coverage — these arrays
+> are what makes coverage provable.
 - **`summary`** — severity counts computed over `findings[]` only. Because `findings[]` carries only
   `high`/`probable` confidence (`unconfirmed` lives in `coverage_gaps`) and the headline vulnerability
   tally excludes `informational` (see Exploitability bar), `summary.total` counts exactly the confirmed
@@ -133,6 +239,23 @@ A run is **incomplete** if `report.md` does not exist.
 Internal-only reachability drops severity by one band. (`unconfirmed` items are not findings — they live
 in `coverage_gaps` and carry no severity; see the `confidence` rule. A `probable` finding whose flaw
 hinges on an uninspected branch should not be rated above `high`.)
+
+**`privilege_required` caps severity — apply these after the band above, not instead of it.** They make the
+rating reproducible across runs instead of leaving it to narrative emphasis:
+
+| `privilege_required` | Maximum severity | Why |
+|---|---|---|
+| `none` | `critical` | no precondition to discount |
+| `authenticated` | `high` | an account is a real barrier; `critical` is reserved for unauthenticated reach |
+| `admin` | `high` | an elevated role already holds broad authority — it cannot be `critical` |
+| `maintainer` | `medium` | publish/commit rights already imply code execution downstream |
+| `local-root` | `medium` | already root on the host |
+| `unknown` | *(no cap)* | aggregator-only; an unresolved privilege must not lower severity by default |
+
+If the cap and your band disagree, the cap wins and you say why in the finding. If applying the cap makes the
+finding look trivial, check it is not actually **circular** (`SKILL.md` → *Precondition subsumes
+conclusion*) — a `maintainer`-privilege finding whose effect *is* maintainer-level authority is not a low
+finding, it is a non-finding.
 
 **Exploitability bar.** A finding rated `low` or higher MUST carry a source→sink path or a concrete
 exploitation primitive. A bare missing-control observation (absent header, cookie flag, debug mode,
@@ -197,18 +320,32 @@ refined to the specific sub-class where one applies:
 ## Findings by Severity
 {For each finding, in severity order:}
 ### [{SEVERITY}] {title}  ({vuln_class}, {owasp}{, cwe})
-- **Confidence:** {confidence}   **Reachable:** {externally_reachable}
+- **Confidence:** {confidence}   **Reachable:** {externally_reachable}   **Privilege required:** {privilege_required}
 - **Location:** `{file}:{line}`
 - **Source → Sink:** `{source}` → `{sink}`  (slot: {slot_type})
 - **Trace:** {trace hops}
 - **Why vulnerable:** {1-2 lines: missing/mismatched defense}
 - **Code:** {short fenced snippet at the sink}
 - **Remediation:** {specific fix}
+{ - **Prior art:** {prior_art}  (git history / issue tracker / prevalence count)}
 { - **Witness payload:** {payload}  (optional)}
 { - **Live corroboration:** {result}  (hybrid only)}
 
 ## Vectors Tested — Not Vulnerable
-{bullet list from tested_not_vulnerable}
+{bullet list from tested_not_vulnerable, each prefixed with its [disposition]}
+
+## Related & Chained Findings
+{From `finding_relations`. Lead with `chains` — a chain is the part of the report a per-class reader cannot
+reconstruct: state the composed effect, the exploit order, and each member's own severity. Then `subsumed`
+(fix the parent first — name which fix closes which child), then `duplicates` (one line, canonical id).
+Omit the section only when all three arrays are empty.}
+
+## Design Properties — Intentional Behaviour
+{bullet list from design_properties, each with the evidence that it is intended. Omit the section only if the array is empty.}
+
+## Unverified Assumptions — Not Decidable From Source
+{bullet list from unverified_assumptions, each as "{investigated} → still needs: {evidence_needed}".
+This section is the honest boundary of a static audit; do not drop it to make the report look cleaner.}
 
 ## Coverage Gaps & Recommendations
 {bullet list from coverage_gaps}

@@ -60,6 +60,10 @@ you and will silently do nothing.
     }
   ],
   "skipped": [{ "agent": "xss-auditor", "reason": "API-only service, no HTML rendering surface" }],
+  "unplanned_components": [
+    { "path": "tools/release/**", "reason": "build tooling, no request-reaching code" },
+    { "path": "crates/sync_client/**", "reason": "REVIEW: parses sync-server responses into git argv — should this not be an injection shard?" }
+  ],
   "escalation_plan": [
     "re-trace any 'probable' findings whose helper functions were not fully inspected",
     "if target_url provided, corroborate top injection/ssrf findings with a single benign witness request",
@@ -154,4 +158,17 @@ what was skipped and why, and the escalation plan (deepening probable findings, 
 - **Scope each auditor** to the directories where its sinks live (from `sink-inventory.json`) — don't
   send every auditor at the whole tree unless small. For a **dense class on a large codebase**, shard it
   into several same-agent instances scoped to disjoint directories (see "Sharding" above).
+- **A client that consumes another component's responses is a trust boundary, not a consumer.** Desktop,
+  CLI and mobile code that parses what a server, sandbox, agent runtime or sync peer *returns* — response
+  headers into `git`/shell argv, paths into a local mirror, JSON into native file operations — gets an
+  **injection** (and, for browser-rendered content, **client-side**) shard of its own whenever the
+  threat model rates that peer below the client's own trust level. Recon lists these under `components`;
+  the planner's job is to notice that the arrow points *toward* the client. On a real engagement the only
+  two code-execution findings sat in exactly such a directory (`crates/file_sync_client`), which the plan
+  had treated as the host-runtime's consumer; the blind-dig sweep found them, the plan did not.
+- **Name what you did not plan.** After assigning waves, list every recon `components[]` entry (and every
+  top-level source directory with request-reaching code) that no auditor's scope covers under
+  `unplanned_components[]` in `deployment-plan.json`, each with a one-line reason (`"no sinks of a selected
+  class"`, `"out of scope per operator"`, `"build tooling"`). The adversarial sweep's blind-dig picks its
+  target from that list; an empty list is a claim the sweep will test.
 - Return a concise summary after writing both files. Follow this schema exactly.
