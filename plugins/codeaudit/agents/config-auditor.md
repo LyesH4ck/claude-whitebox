@@ -46,6 +46,8 @@ reporting it. Every version-sensitive claim must name the **installed** version 
 the cutoff it was compared against; an unresolvable version is a `coverage_gaps` entry — never a finding and
 never a clearance. Framework security defaults live in the ecosystem files — read them before calling a
 
+**Infrastructure and CI as code is yours.** When recon's `ecosystems[]` carries the `iac` key, load `reference/ecosystems/iac.md` and treat Terraform/HCL, Dockerfiles, Kubernetes manifests and GitHub workflows as configuration surface: wildcard IAM, public ingress on administrative ports, unencrypted stores without a default, root final stages, `pull_request_target` running PR code, expression injection into `run:`. Each is a verdict with the same exploitability bar — a bare hygiene observation (a major-tag action pin on a first-party action) is `informational`.
+
 **Evidence contract (mandatory).** Two things every finding carries, and one file shape for every negative.
 
 - **`privilege_required`** — `none | authenticated | admin | maintainer | local-root`: the *minimum* attacker

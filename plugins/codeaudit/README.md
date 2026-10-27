@@ -68,8 +68,13 @@ See [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) for the full pipeline, and
 - `reference/SINK_CATALOG.md` — grep-able dangerous sinks by language
 - `reference/ecosystems/` — **per-stack framework defaults, versioned CVE cutoffs with their preconditions,
   explicit non-finding lists, and `rg` seeds** (`node` · `python` · `php` · `ruby` · `java-jvm` · `go` ·
-  `dotnet`, plus additive `graphql` and `jwt`). `SINK_CATALOG.md` says what a sink *is*; these say what it
+  `dotnet`, plus additive `graphql`, `jwt` and `iac` for Terraform/Docker/Kubernetes/GitHub workflows, and
+  `other` — threat highlights without version cutoffs — for Rust, Elixir, Swift, Dart, Lua, Clojure, Erlang,
+  Crystal, Apex, mobile and serverless). `SINK_CATALOG.md` says what a sink *is*; these say what it
   *means* in this framework at this version — which is what most XSS and authz verdicts actually turn on.
+  `node.md` and the catalog also carry the **fail-open and bypass shapes** — decisions, not sinks, that a
+  trace-reader skims past (a flag read as a truthy string, a cron secret that disables itself when unset,
+  spread order on a write) — ported from deepsec's matcher catalogue (see `NOTICE`).
   `code-recon` resolves the applicable files and pins the versions once, into `sink-inventory.json`'s
   `ecosystems[]`; every auditor loads from there.
 - `reference/REPORT_CONTRACT.md` — fixed deliverable schema & severity rubric

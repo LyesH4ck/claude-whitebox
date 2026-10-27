@@ -1,0 +1,1 @@
+{ "name": "team-directory", "private": true, "dependencies": { "fastify": "^4.28.1", "@prisma/client": "^5.16.1" } }

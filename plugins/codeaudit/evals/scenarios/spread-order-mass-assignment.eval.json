@@ -1,0 +1,18 @@
+{
+  "name": "spread-order-mass-assignment",
+  "given": "a create handler that spreads req.body after server-set role/workspaceId fields, next to an update handler that allowlists profile fields before persisting",
+  "fixture": "fixtures/spread-order-mass-assignment",
+  "classes": ["access-control"],
+  "rationale": "Mass assignment decided by spread order: `{ role: 'member', ...req.body }` lets the body overwrite role and workspaceId because later keys win, while `pick(req.body, PROFILE_FIELDS)` next to it is the correct allowlist and must not be reported. A reader who sees 'role is set server-side' on the first line of the object literal and stops has missed the finding; a matcher that fires on 'req.body reaches update' files the safe sibling.",
+  "should_find": [
+    { "path": "routes.js", "min_severity": "high", "evidence_contains": ["role", "req.body"], "required": true }
+  ],
+  "should_not_find": [
+    { "path": "routes.js", "evidence_contains": ["updateprofile"] },
+    { "path": "routes.js", "evidence_contains": ["members/me"] }
+  ],
+  "should_rule_out": [
+    { "disposition": "guard_present", "evidence_contains": ["profile_fields"], "required": false }
+  ],
+  "must_not_contain": ["sequelize", "mongoose", "typeorm"]
+}

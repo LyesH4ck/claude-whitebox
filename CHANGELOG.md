@@ -4,6 +4,42 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.76] — 2026-10-27
+
+### Added — `codeaudit` 0.15.0: fail-open shapes, infrastructure-as-code, and the stacks with no reference file
+
+Knowledge ported from deepsec's matcher catalogue (Apache-2.0, attributed in `plugins/codeaudit/NOTICE`) and
+re-expressed in this plugin's verdict discipline — rules and `rg` seeds, never a scanner.
+
+- **Fail-open and bypass shapes.** A new section in `ecosystems/node.md` (with seeds under *Commands*) and a
+  language-agnostic list in `SINK_CATALOG.md`: a security flag read as a truthy string (`DISABLE_AUTH=false`
+  disables nothing), security gated behind a feature flag, test/debug/bypass headers honoured in production,
+  dev-mode auth shortcuts, a cron secret that disables itself when unset, spread order on a write and
+  `passthrough()`/`.values(body)`, missing `await` on a lock or transaction, read-then-delete TOCTOU, cache
+  keys without a principal, redirect-following after a one-time allowlist, host validation by wildcard
+  regex, git-provider URLs built from input, JSON in a script slot, filesystem writes with no symlink
+  boundary, the Next.js family (server actions, catch-all routes, internal headers, image-optimiser
+  allowlist, page-level fetch by param), tRPC `publicProcedure` reaching the session, LLM loops with no step
+  cap, secrets interpolated into system prompts. Each is a *decision* to read, not a sink — the fail-open
+  question from `SKILL.md`, applied where pattern-matchers look and trace-readers skim.
+- **`ecosystems/iac.md`** — Terraform/HCL, Dockerfiles, Kubernetes manifests and GitHub workflows, additive
+  like `graphql.md`, owned by the config (misconfiguration, public exposure, workflow injection), secrets
+  (plaintext in manifests, image layers, workflow logs) and deps (unpinned modules, actions, base images)
+  auditors — each got a paragraph saying so. Carries the defaults that decide verdicts: S3 encrypted by
+  default since 2023-01, `pull_request_target` runs with base secrets, expression injection into `run:`,
+  Secrets are base64 not encryption, containers run as root unless told otherwise, tags float and digests
+  do not.
+- **`ecosystems/other.md`** — threat highlights for Rust (Actix/Axum/Rocket/Warp/Tide/Poem/Tonic/Lambda),
+  Elixir, Swift, Dart, Lua/OpenResty, Clojure, Erlang, Crystal, Apex, Android/iOS and serverless handlers.
+  Honest about what it is: **no version cutoffs** — recon routes to it *and* still records the stack under
+  `uncovered_relevant_categories`, so the report says version facts were not compared.
+- Recon's ecosystem key enum gains `iac` and `other` (the preflight's enum check routes mechanically);
+  `ecosystems/README.md` routing table updated; Bun/Deno/Workers get their "no framework gate" paragraph in
+  `node.md`.
+- **Two eval fixtures** for the traps, each with a safe sibling: `env-flag-truthy` (truthy `DISABLE_AUTH`
+  with `deploy/env.production` as the witness; sibling `=== 'true'`) and `spread-order-mass-assignment`
+  (`{ role, ...req.body }`; sibling `pick(body, PROFILE_FIELDS)`).
+
 ## [2.4.75] — 2026-10-27
 
 ### Added — `codeaudit` 0.14.0: a project context file that outlives the engagement

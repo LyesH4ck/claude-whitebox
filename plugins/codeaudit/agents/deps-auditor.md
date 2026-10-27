@@ -46,6 +46,8 @@ reporting it. Every version-sensitive claim must name the **installed** version 
 the cutoff it was compared against; an unresolvable version is a `coverage_gaps` entry — never a finding and
 never a clearance. For this class the version facts **are** the work: each ecosystem file's
 
+**Supply chain in infrastructure and CI as code is yours.** When recon's `ecosystems[]` carries the `iac` key, load `reference/ecosystems/iac.md`: unpinned Terraform module sources (no `?ref=<sha>`, no `version`), an absent `.terraform.lock.hcl`, `FROM image:tag` without a digest, `curl | sh` installs without a checksum, and third-party GitHub actions pinned by tag with secrets in scope are the SCA-shaped findings here. Rate by who controls the floating reference and what the job can reach.
+
 **Evidence contract (mandatory).** Two things every finding carries, and one file shape for every negative.
 
 - **`privilege_required`** — `none | authenticated | admin | maintainer | local-root`: the *minimum* attacker

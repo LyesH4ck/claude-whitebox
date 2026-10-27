@@ -1,0 +1,18 @@
+{
+  "name": "env-flag-truthy",
+  "given": "an auth bypass gated on the truthiness of DISABLE_AUTH, which the production env file sets to the string \"false\", next to a rate-limit switch that compares the string to 'true'",
+  "fixture": "fixtures/env-flag-truthy",
+  "classes": ["auth", "config"],
+  "rationale": "Same shape, opposite verdicts. `if (process.env.DISABLE_AUTH)` is disabled by the string \"false\" — truthy in JavaScript — so the deploy file that intends to turn the bypass off turns the whole token check off. `process.env.RATE_LIMIT_OFF === 'true'` next to it is the correct comparison and must not be reported. A trace-only reader sees a guarded route and a dev-only switch; the finding is in the decision, not in a sink, and the witness is deploy/env.production.",
+  "should_find": [
+    { "path": "app.js", "min_severity": "high", "evidence_contains": ["disable_auth", "truthy"], "required": true }
+  ],
+  "should_not_find": [
+    { "path": "app.js", "evidence_contains": ["rate_limit_off"] },
+    { "path": "lib/tokens.js", "cwe": "CWE-208" }
+  ],
+  "should_rule_out": [
+    { "disposition": "guard_present", "evidence_contains": ["rate_limit_off"], "required": false }
+  ],
+  "must_not_contain": ["django", "flask", "spring"]
+}

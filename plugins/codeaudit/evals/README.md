@@ -128,3 +128,5 @@ the pinned version, a `require()` whose precondition already grants the effect.
 | `upload-svg-inline` | `.svg` served inline from the app origin; sibling served `attachment` + `nosniff` | judging an upload at the filter instead of at the serving response |
 | `jwt-version-gate` | `jwt.decode()` claims deciding a role; sibling `verify()` without `algorithms` on 9.0.2 | reporting the version-fixed pattern, missing the one no upgrade fixes |
 | `circular-precondition` | `require()` from a request param; sibling from an operator-owned plugin dir | filing a circular finding whose precondition already grants the effect |
+| `env-flag-truthy` | `if (process.env.DISABLE_AUTH)` with the production env file setting it to `"false"`; sibling `=== 'true'` | reading a guarded route as guarded — the decision fails open on a truthy string, and the deploy file is the witness |
+| `spread-order-mass-assignment` | `{ role: 'member', ...req.body }` on create; sibling `pick(req.body, PROFILE_FIELDS)` on update | stopping at "role is set server-side" — later keys win; and filing the allowlisted sibling because the body reaches `update()` |

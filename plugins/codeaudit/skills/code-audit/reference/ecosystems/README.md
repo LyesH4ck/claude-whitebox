@@ -47,6 +47,8 @@ almost every entry below is conditional, and the version alone is not the vulner
 | `dotnet.md` | `*.csproj` / `*.sln` — ASP.NET Core, ASP.NET Framework, EF Core, Razor, Newtonsoft.Json |
 | `graphql.md` | **any** GraphQL schema, resolver, SDL, or client — additive, load alongside the language file |
 | `jwt.md` | **any** JWT/JWS/JWE header or claim that influences a principal, tenant, role, scope, or resource decision — additive |
+| `iac.md` | **any** `*.tf`/`*.hcl`, `Dockerfile*`, Kubernetes manifest or `.github/workflows/*.yml` — additive; owned by the config, secrets and deps auditors |
+| `other.md` | a language or runtime with no file above — Rust, Elixir, Swift, Dart, Lua, Clojure, Erlang, Crystal, Apex, Android/iOS, serverless handlers. **Threat highlights only, no version cutoffs**: recon routes here *and* records the stack under `uncovered_relevant_categories` |
 
 **Polyglot repositories load several.** A Next.js front end against a Spring API loads `node.md` *and*
 `java-jvm.md`; the interesting bugs live at the seam (what the front end guarantees vs what the API assumes —

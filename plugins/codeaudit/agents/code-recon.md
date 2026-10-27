@@ -265,17 +265,24 @@ Write three deliverables (create dirs with `mkdir -p` first):
    **`ecosystems` is REQUIRED (not optional).** It tells every auditor which
    `skills/code-audit/reference/ecosystems/*` file to load and gives it the pinned versions those files'
    cutoffs are compared against. `key` must be one of `node | python | php | ruby | java-jvm | go | dotnet |
-   graphql | jwt` — the file names in that directory, so routing is mechanical rather than inferred. Set
+   graphql | jwt |
+   iac | other` — the file names in that directory, so routing is mechanical rather than inferred. Set
    `lockfile` to `null` and leave `pins` empty when no lockfile exists, and name that in the completion
    summary: unpinned dependencies mean every version-gated row downstream becomes a coverage gap rather than
    a verdict. A polyglot repo emits several entries; `graphql` and `jwt` are additive and appear alongside
    the language entries, never instead of them.
-   **A language the directory does not cover (Rust, Swift, C/C++, Elixir, …) is NOT an `ecosystems` entry.**
-   Its routing is mechanical: an unknown key routes nowhere, and the orchestrator has to strip it by hand.
-   Record it instead under `uncovered_relevant_categories` as `{"category": "<lang> components traced from
-   first principles — no reference file, no version cutoffs", "components": [...], "lockfile": "Cargo.lock"}`
-   so the planner still assigns auditors to those components and the report's `coverage_gaps` says why their
-   version facts were not compared.
+   **Two additive keys have no manifest of their own.** Emit `iac` when the tree carries any `*.tf`/`*.hcl`,
+   `Dockerfile*`, Kubernetes manifest (`kind:` YAML, Helm `templates/`) or `.github/workflows/*.yml` — set
+   `manifest` to the first such path, `lockfile` to `.terraform.lock.hcl` when present, and list the surface
+   under the `config`, `secrets` and `deps` sink arrays (the three auditors that own it). Emit `other` for a
+   language or runtime the directory has no file for (Rust, Elixir, Swift, Dart, Lua, Clojure, Erlang,
+   Crystal, Apex, Android/iOS, serverless handlers) with its lockfile (`Cargo.lock`, `mix.lock`,
+   `Package.resolved`, `pubspec.lock`, …) — **and still record that stack under
+   `uncovered_relevant_categories`** as `{"category": "<lang> — routed to ecosystems/other.md: threat
+   highlights only, no version cutoffs", "components": [...], "lockfile": "Cargo.lock"}`, so the planner
+   assigns auditors to those components and the report's `coverage_gaps` says why their version facts were
+   not compared. A language with **neither** a file nor an `other.md` section (C/C++, COBOL, …) stays out of
+   `ecosystems` and goes under `uncovered_relevant_categories` alone.
 
    **Coverage warning (important).** If your sweeps surface an OWASP category with real surface that is
    **not** in the selected `classes` (e.g. token-handling/logging present but `logging` unselected, or

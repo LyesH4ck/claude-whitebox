@@ -121,6 +121,86 @@ not just strings.
 **only** when they omit or reject those fields *and* the **parsed result** — not the original body — reaches
 persistence. `schema.parse(body)` followed by `prisma.user.update({data: body})` is the bug.
 
+**Edge and alternative runtimes have no framework gate at all.** `Bun.serve({ fetch })`, `Deno.serve(handler)`
+and a Workers `export default { fetch(req, env) }` are the whole entry: auth and validation live in that one
+function or nowhere. `Bun.$\`…\`` and `Bun.spawn` with interpolated input are command injection; Workers
+`caches.default` keys on the full URL, so an unnormalised query string poisons the cache; `env.<BINDING>` (KV,
+R2, D1, secrets) is the blast radius of any bug in the handler.
+
+---
+
+## Fail-open and bypass shapes
+
+The patterns below are not sinks. Each is a place where the **security decision itself** is wrong in a way a
+reader skims past because the surrounding code looks careful. Pattern-matchers catch them cheaply; a
+source→sink trace does not, because the path looks guarded. Ask the fail-open question (`SKILL.md`) at each.
+
+- **A security flag read as a truthy string.** `if (process.env.DISABLE_AUTH) skipAuth()` is disabled by
+  `DISABLE_AUTH=false` — the string `"false"` is truthy. Same for `SKIP_*`, `BYPASS_*`, `NO_*` and the inverse
+  `if (process.env.REQUIRE_AUTH)`, which is **off when the variable is unset**. The safe shape compares to a
+  literal (`=== 'true'`) or parses with a boolean helper. Check the deploy files: an env file that sets the
+  variable to `false` to "turn it off" is the finding's witness.
+- **Security gated by a feature flag.** `if (featureFlag('strict-auth')) await verifyToken(req)` — the flag
+  service failing, the flag missing in an environment, or a default of `false` all fail open. Verification,
+  CSRF, rate limiting, header stripping, encryption and signature checks behind `LaunchDarkly.variation(…)`,
+  `statsig.checkGate(…)`, `isFeatureEnabled(…)`, `experiment(…)`: the default branch is the finding.
+- **Test and bypass headers honoured outside tests.** `x-automated-test`, `x-test-*`, `x-debug`, `x-bypass`,
+  `x-skip-auth`, `x-no-rate-limit`, `x-internal` read in handler code with no gate on environment — a
+  production request can send them too. The gate must be the *absence* of the branch in the production
+  build, not a comparison to `NODE_ENV` the deploy can misset.
+- **Development auth bypasses that ship.** `/auth/dev`, `/api/dev/login`, `isDev && autoLogin()`,
+  `mock-session`, `test-token`, `if (process.env.NODE_ENV !== 'production') req.user = admin`. `NODE_ENV` is a
+  build-time string a container can run without; treat a bypass reachable under any `NODE_ENV` value as live.
+- **A cron secret that disables itself when unset.** `if (auth !== \`Bearer ${process.env.CRON_SECRET}\`)
+  return 401` is correct **only when the variable is set**; unset, the comparison is against `Bearer undefined`
+  and a request carrying that literal passes. Require the secret to exist (fail closed) before comparing.
+- **Spread order on a write.** `{ role: 'member', ...req.body }` lets the body overwrite `role` — later keys
+  win. `{ ...req.body, role: 'member' }` is the safe order; better, pick the allowed fields. Same for
+  `Object.assign({}, req.body)` into a create/update, `.values(body)` / `.set(body)` on Drizzle, and
+  `schema.passthrough()` on Zod: passthrough keeps unknown keys, so the parsed result still carries `role`.
+- **Missing `await` on a guard.** `withMutex(() => …)`, `withLock(…)`, `withTransaction(…)`, `redis.set(…)`,
+  `prisma.x.update(…)` called without `await` or `return`: the lock never held, the write races the response,
+  the error is swallowed. A race on an authz-relevant write (quota, balance, token revocation) is a finding.
+- **Read-then-delete without a transaction.** `const t = await redis.get(k); …; await redis.del(k)` and
+  `findUnique` → `delete` without `$transaction`/`WATCH`/`SELECT … FOR UPDATE` is TOCTOU on a single-use
+  token, invite, or balance — two concurrent requests both see the value.
+- **Cache keys without a principal.** `redis.get(\`feature:${name}\`)`, `cache.set(\`profile:${id}\`)` where
+  `id` is request-supplied and the key omits tenant/user — one user's cached object served to another.
+- **Outbound fetch that follows redirects.** `fetch(url)` defaults to `redirect: 'follow'`; an allowlist
+  checked once on `url` is bypassed by a 302 to `169.254.169.254`. `redirect: 'manual'` plus re-validation
+  per hop, or an allowlist applied inside the HTTP client, is the defense.
+- **URL or host validation by regex with a greedy wildcard.** `new RegExp("https?://.+\\.example\\.com")`
+  matches `https://evil.com/#.example.com`; an unanchored or `.+`/`.*` host pattern is bypassable. Parse with
+  `new URL()` and compare `hostname` to an allowlist.
+- **Git-provider URLs built from input.** `\`https://api.github.com/repos/${owner}/${repo}\`` with
+  request-controlled segments: `../` and `?` rewrite the API path (a different endpoint, a different
+  resource) under the server's token. Validate each segment against `[A-Za-z0-9_.-]+`.
+- **JSON in a script slot.** `JSON.stringify(state)` inside `<script>` or `dangerouslySetInnerHTML` is XSS the
+  moment a string contains `</script>`; a `safeJsonStringify` that escapes `<`, `>`, `&`, U+2028/2029 is the
+  defense (`JSON.stringify` alone is not).
+- **Filesystem writes to a computed path with no symlink boundary.** `fs.writeFile(\`${base}/${name}\`)` /
+  `path.join(uploadDir, req.body.name)` without `realpath` + `startsWith(root)`: `../` escapes, and a
+  pre-planted symlink inside `uploadDir` escapes even when `../` is filtered.
+- **Next.js, specifically.** Every `'use server'` export is a public POST endpoint — auth lives **in** the
+  function (`auth()`/`getSession()`/`requireAuth()` before the first write), not on the page that calls it.
+  `[...slug]` / `[[...rest]]` route handlers must authorize every sub-path. A Server Component page that
+  fetches `/api/orders/${params.id}` with no ownership check is IDOR even though the API is "internal".
+  `x-middleware-subrequest`, `x-middleware-rewrite`, `x-next-*`, `next-action`, `rsc`, `next-url` are
+  framework-internal headers: handler code that **reads** them trusts the client; code that **sets** them from
+  request data rewrites routing. The image optimiser's `remotePatterns`/`domains` allowlist is an SSRF
+  boundary — a wildcard host or a private-IP allowlist entry is the finding.
+- **tRPC `publicProcedure` that reaches the session.** A `publicProcedure` whose handler reads
+  `ctx.session` / `ctx.user` / `ctx.prisma` under `/admin`, `/billing`, `/teams`, `/settings` is almost
+  always a mislabelled `protectedProcedure`: without the guard, `ctx.session` is `null` and the handler either
+  throws (DoS-shaped) or, worse, queries with `undefined` as the tenant.
+- **LLM calls without a step cap.** `streamText`/`generateText`/`generateObject` with tools and no
+  `maxSteps`/`stopWhen`, `query()` on an agent SDK with no `maxTurns`/`abortSignal`/`timeout`: a tool loop
+  the model does not exit is a cost-burn and availability finding (resource-exhaustion class).
+- **Secrets in the system prompt.** `system: \`… ${process.env.OPENAI_API_KEY}\``, a `role: 'system'`
+  message interpolating `*_TOKEN`/`*_SECRET`/`*_PASSWORD`: the value reaches the provider, the traces, and
+  any prompt-extraction attack. A literal `sk-…`, `ghp_…`, `xoxb-…`, `AKIA…` in a prompt string is a secrets
+  finding outright.
+
 ---
 
 ## Dangerous APIs
@@ -206,4 +286,23 @@ rg -n 'middleware\.(ts|js)$|x-middleware-subrequest' --glob '!node_modules'
 
 # SSRF + TLS
 rg -n 'fetch\(|axios\.|got\(|node-fetch|undici|maxRedirects|rejectUnauthorized' --glob '!node_modules'
+
+# fail-open and bypass shapes (see the section above — each hit is a decision to read, not a sink)
+rg -n 'process\.env\.\w*(DISABLE|SKIP|BYPASS|NO_|ENABLE|REQUIRE)\w*(AUTH|VERIFY|CSRF|RATE|CHECK)' --glob '!node_modules'
+rg -n -i 'featureFlag|feature_flag|LaunchDarkly|\.variation\(|statsig|checkGate|isFeatureEnabled|flag_enabled|getFlag\(' --glob '!node_modules'
+rg -n -i 'x-automated-test|x-test-|x-debug|x-bypass|x-skip-auth|x-no-rate-limit|x-internal' --glob '!node_modules'
+rg -n -i '/auth/dev|/api/dev|/dev/login|mock[_-]?(session|user|auth)|auto[_-]?login|fake[_-]?auth|test[_-]?(token|bearer)' --glob '!node_modules'
+rg -n 'CRON_SECRET|x-cron-secret' --glob '!node_modules'
+rg -n '\.\.\.(req|request)\.(body|query|params)|\.\.\.(parsed|input|body|params|query)\b|\.passthrough\(\)|\.values\(\s*(body|input|req)' --glob '!node_modules'
+rg -n -P '(?<!await )(?<!return )with\w*(Mutex|Lock|Transaction)\s*\(' --glob '!node_modules'
+rg -n 'redis\.(get|hget|hgetall)\(|findUnique\(|findFirst\(' --glob '!node_modules'          # then look for the del/update within 10 lines, and the transaction around both
+rg -n 'redis\.(get|set|hget|hset|setex)\(\s*`|cache\.(get|set|has)\(\s*`|cacheKey\s*=\s*`' --glob '!node_modules'
+rg -n "redirect:\s*['\"]follow['\"]|new RegExp\([^)]*https?" --glob '!node_modules'
+rg -n 'api\.github\.com[^`'"'"'"]*\$\{|gitlab\.com[^`'"'"'"]*\$\{|bitbucket\.org[^`'"'"'"]*\$\{' --glob '!node_modules'
+rg -n 'JSON\.stringify' --glob '*.tsx' --glob '*.jsx' | rg -n 'dangerouslySetInnerHTML|<script'
+rg -n 'fs(p|\.promises)?\.(writeFile|writeFileSync|mkdir|mkdirSync|createWriteStream|copyFile|appendFile|symlink)\w*\(\s*(`|path\.(join|resolve)\(|[a-zA-Z_]+\s*\+)' --glob '!node_modules'
+rg -n "['\"]use server['\"]|\[\.\.\.|\[\[\.\.\.|x-middleware-|x-next-|next-action|remotePatterns|domains:" --glob '!node_modules'
+rg -n 'publicProcedure\s*\.\s*(input|query|mutation|use)' --glob '!node_modules'          # then: does the handler read ctx.session / ctx.user?
+rg -n 'streamText\(|generateText\(|generateObject\(|streamObject\(|\bquery\(\{' --glob '!node_modules' | rg -v 'maxSteps|maxTurns|stopWhen|abortSignal|timeout'
+rg -n -P '(system|instructions|prompt)\s*:\s*`[^`]*\$\{process\.env\.[A-Z_]*(KEY|TOKEN|SECRET|PASSWORD)' --glob '!node_modules'
 ```
