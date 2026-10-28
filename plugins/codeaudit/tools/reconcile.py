@@ -23,7 +23,10 @@ import collections, glob, json, os, re, sys
 
 OUT = sys.argv[1].rstrip("/")
 AS_JSON = "--json" in sys.argv
-EXT = r"(?:ts|tsx|js|jsx|mjs|cjs|py|rb|php|java|kt|go|cs|rs|swift|sql|vue|svelte|erb|twig|html)"
+EXT = r"(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|php|java|kt|kts|go|cs|rs|swift|dart|ex|exs|scala|lua|sql|vue|svelte|erb|twig|html|json|jsonc|toml|yaml|yml|tf|hcl|sh|bash|cfg|conf|ini|env|xml|gradle|properties)"
+# The list must stay a superset of aggregate.py's FL pattern: on a real engagement whose `iac` ecosystem
+# was five GitHub workflows, `.yml` was absent here but present there, so every workflow an auditor had
+# verdicted still read as uncited residue — the reconciler reported a coverage gap that did not exist.
 
 # ---------------------------------------------------------------- enumerated sources
 rows = []

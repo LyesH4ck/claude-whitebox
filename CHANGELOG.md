@@ -4,6 +4,31 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.81] — 2026-10-28
+
+### Fixed — `codeaudit` 0.20.0: three tool defects a 62-finding engagement exposed
+
+The deepsec engagement (18 auditor instances, 2 sweeps, 62 findings, 470 dispositioned rule-outs) is the
+first run large enough to exercise the Step 6.5/6.6 tools at scale. Each of these was invisible on the
+4-finding fixtures.
+
+- **`reconcile.py` could not see a YAML path.** Its `EXT` pattern listed source extensions only, while
+  `aggregate.py`'s `FL` already accepted `yml`. On a target whose entire `iac` ecosystem is five GitHub
+  workflows, every workflow an auditor had verdicted still read as uncited residue — the reconciler reported
+  a coverage gap that did not exist (8 uncited, of which 7 were workflows). Both patterns are now the same
+  widened list, with a comment saying they must stay in sync. Residue on the live run: 8 → 1, and the
+  remaining one is a genuine recon contract violation (several paths in a single `sources[].at`).
+- **`aggregate.py` parsed severity strictly while being lenient about confidence and privilege.** An auditor
+  writing `**Severity**: informational (hardening — no in-model adversary …)` — the same shape the contract
+  explicitly blesses for `**Confidence**: probable (platform fact …)` — lost its severity entirely: 4 of 62
+  findings, which then **crashed the dry-run printer** on the resulting `None`. Severity now takes the
+  leading enum token and keeps the remainder as `severity_note`; the printer is crash-proof.
+- **`aggregate.py` demanded a request `source` of classes that have none.** `REPORT_CONTRACT` says the
+  non-request classes (secrets, crypto, deps, config, logging) get no `endpoint`, yet the file:line
+  requirement — whose only purpose is endpoint resolution — was applied to all of them: 9 noise violations
+  out of 18. It is now scoped to request-reachable classes. Real violations on the live run: 18 → 5, and all
+  5 are genuine auditor-side format defects (repaired in-session by their authors).
+
 ## [2.4.80] — 2026-10-28
 
 ### Added — `codeaudit` 0.19.0: the preflight says which scanners are on PATH

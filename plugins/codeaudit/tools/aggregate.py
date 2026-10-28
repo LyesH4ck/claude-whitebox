@@ -43,10 +43,12 @@ OWASP = {"injection": "A03:2021 Injection", "xss": "A03:2021 Injection", "auth":
          "http-protocol": "A05:2021 Security Misconfiguration", "ai-llm": "A04:2021 Insecure Design", "ai-agent": "A04:2021 Insecure Design",
          "resource-exhaustion": "A04:2021 Insecure Design"}
 
+NON_REQUEST_CLASSES = {"secrets", "crypto", "deps", "config", "logging"}
+
 violations = []
 def viol(where, msg): violations.append({"where": where, "issue": msg})
 
-FL = re.compile(r"([A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rb|php|java|kt|go|cs|rs|swift|sql|vue|svelte|erb|twig|html|json|toml|yaml|yml)):(\d+)")
+FL = re.compile(r"([A-Za-z0-9_./-]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|php|java|kt|kts|go|cs|rs|swift|dart|ex|exs|scala|lua|sql|vue|svelte|erb|twig|html|json|jsonc|toml|yaml|yml|tf|hcl|sh|bash|cfg|conf|ini|env|xml|gradle|properties)):(\d+)")  # keep in sync with reconcile.py EXT
 
 def field(body, label):
     m = re.search(r"\*\*" + re.escape(label) + r"\*\*\s*:?\s*`?([^\n`*]+)`?", body, re.I)
@@ -73,7 +75,13 @@ def parse_finding(d):
         f["vuln_class"] = PREFIX_CLASS.get(pre, f.get("vuln_class", pre))
     # one-finding-filed-in-another-class case (e.g. auth shard filing resource-exhaustion): keep the declared class
     sev = (field(body, "Severity") or "").lower(); conf = (field(body, "Confidence") or "").lower()
-    f["severity_reported"] = sev if sev in SEV else None
+    # Leading-token leniency, as for confidence and privilege: an auditor writes
+    # `**Severity**: informational (hardening — no in-model adversary …)` as naturally as
+    # `**Confidence**: probable (platform fact outside the repo)`. A strict match dropped the severity of
+    # 4 of 62 findings on a real engagement and then crashed the dry-run printer on the None.
+    sev_tok = re.split(r"[\s(]", sev, maxsplit=1)[0] if sev else ""
+    f["severity_reported"] = sev_tok if sev_tok in SEV else None
+    if f["severity_reported"] and len(sev) > len(sev_tok): f["severity_note"] = sev[len(sev_tok):].strip(" ()")
     # same leniency as privilege: leading enum token, parenthetical kept as a note
     conf_tok = re.split(r"[\s(]", conf, maxsplit=1)[0] if conf else ""
     f["confidence"] = conf_tok if conf_tok in ("high", "probable", "unconfirmed") else None
@@ -97,7 +105,11 @@ def parse_finding(d):
     src = re.search(LBL % "Source", ss, re.I); snk = re.search(LBL % "Sink", ss, re.I)
     f["source"] = src.group(1).strip() if src else None
     f["sink"] = snk.group(1).strip() if snk else None
-    if not f["source"] or not FL.search(f["source"]): viol(fid, "source missing or lacks (file:line) — endpoint cannot be resolved")
+    # Only request-reachable classes need a `source` with a file:line: it is the endpoint-resolution key,
+    # and REPORT_CONTRACT states the non-request classes get no endpoint. Demanding one of a lockfile pin or
+    # a log sink produced 9 noise violations out of 18 on a real engagement.
+    if f["vuln_class"] not in NON_REQUEST_CLASSES and (not f["source"] or not FL.search(f["source"])):
+        viol(fid, "source missing or lacks (file:line) — endpoint cannot be resolved")
     slot = re.search(r"slot\s*`?([A-Za-z-]+)`?", ss or body); f["slot_type"] = slot.group(1) if slot else None
     ws = re.search(r"\*\*Write site\*\*\s*:\s*(.+)", body); f["write_site"] = ws.group(1).strip() if ws else None
     r = field(body, "Reachable"); f["externally_reachable"] = (None if r is None else r.strip().lower().startswith(("true","yes","network","external")))
@@ -454,7 +466,8 @@ print(f"contract violations: {len(violations)}")
 for v in violations[:40]: print(f"  ! {v['where']}: {v['issue']}")
 if DRY:
     print("\nper-finding (id | fingerprint | class | reported->final | conf | priv | verified | change | endpoint):")
-    for f in final: print(f"  {f['id']:34} {f['fingerprint']:22} {f['vuln_class']:18} {f['severity_reported']}->{f['severity']:<13} {f['confidence']:<8} {f['privilege_required']:<13} {((f.get('revalidation') or {}).get('verdict') or '-'):<10} {(f.get('change') or '-'):<10} {(f.get('endpoint') or {}).get('path','-')}{'  ACCEPTED-RISK' if f['status'] == 'accepted-risk' else ''}{'  note: ' + f['privilege_note'][:50] if f.get('privilege_note') else ''}")
+    def _s(v, w=0): return (str(v) if v is not None else "?").ljust(w)
+    for f in final: print(f"  {_s(f['id'],34)} {_s(f.get('fingerprint'),22)} {_s(f['vuln_class'],18)} {_s(f['severity_reported'])}->{_s(f['severity'],13)} {_s(f['confidence'],8)} {_s(f['privilege_required'],13)} {_s((f.get('revalidation') or {}).get('verdict') or '-',10)} {_s(f.get('change') or '-',10)} {(f.get('endpoint') or {}).get('path','-')}{'  ACCEPTED-RISK' if f['status'] == 'accepted-risk' else ''}{'  note: ' + f['privilege_note'][:50] if f.get('privilege_note') else ''}")
     for r_ in refuted: print(f"  {r_['id']:34} REFUTED [{r_['disposition']}] at {r_['cited']} — {r_['title'][:60]}")
 else:
     json.dump(report, open(f"{OUT}/codeaudit-report.json", "w"), indent=1, ensure_ascii=False)
