@@ -199,6 +199,28 @@ test('target mode: a nested directory of a git checkout counts as tracked; a mal
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('the preflight reports which optional scanners are on PATH, so a brief cannot silently say "none"', () => {
+  // The defect this closes: an orchestrator briefed every auditor `tools_available: none` without running
+  // the command's Step 4 probe, and the secrets sweep shipped a coverage gap ("no real scanner installed")
+  // that was false — gitleaks was on PATH the whole time. The preflight is the one command every run starts
+  // with, so it must not leave this unsaid.
+  const r = parse(run());
+  assert.ok(r.scanners && typeof r.scanners.found === 'object', 'the JSON carries a scanners block');
+  assert.ok(Array.isArray(r.scanners.absent));
+  for (const bin of Object.keys(r.scanners.found)) {
+    assert.ok(!r.scanners.absent.includes(bin), `${bin} cannot be both found and absent`);
+  }
+  // the human output names them too (the `run` helper always passes --json, so invoke it directly)
+  let text = '';
+  try { text = execFileSync('node', [SCRIPT], { cwd: MARKET, encoding: 'utf8', env: { ...process.env, HOME: HOME_STUB } }); }
+  catch (e) { text = e.stdout || ''; }
+  assert.match(text, /^\s*scanners:/m);
+  // and a host with no secret scanner is warned about, since that one changes what an auditor may claim
+  if (!r.scanners.found.gitleaks && !r.scanners.found.trufflehog) {
+    assert.ok(r.problems.some((p) => p.check === 'scanners' && /no secret scanner/.test(p.msg)));
+  }
+});
+
 test('target mode BLOCKS on a repo that does not exist', () => {
   const r = run(['--repo', path.join(tmpdir(), 'definitely-not-here-' + process.pid)]);
   assert.equal(r.code, 2);

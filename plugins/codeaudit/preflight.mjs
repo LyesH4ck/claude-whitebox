@@ -326,6 +326,40 @@ function checkTools() {
   return present;
 }
 
+// ───────────────────────────────────────────────────────────── scanners
+
+/**
+ * Optional scanners the deps / secrets / config auditors prefer when present. The command probes these at
+ * Step 4, but an orchestrator driving the pipeline by hand skips steps — and a brief that says
+ * `tools_available: none` when gitleaks is installed makes an auditor record a coverage gap that is simply
+ * false (seen on a real engagement: the secrets sweep ran pattern-only and declared "no real scanner
+ * installed" while gitleaks, trufflehog, osv-scanner, trivy and semgrep were all on PATH). Reporting them
+ * here means the one command every run starts with cannot leave that unsaid.
+ */
+const SCANNERS = {
+  gitleaks: 'secrets', trufflehog: 'secrets',
+  'osv-scanner': 'deps', 'pip-audit': 'deps', govulncheck: 'deps', trivy: 'deps + config (IaC)',
+  pandoc: 'the optional PDF deliverable',
+};
+
+function checkScanners() {
+  const found = {};
+  for (const [bin, who] of Object.entries(SCANNERS)) {
+    try { execFileSync('command', ['-v', bin], { stdio: 'ignore', shell: true }); found[bin] = who; }
+    catch { /* absent */ }
+  }
+  const absent = Object.keys(SCANNERS).filter((b) => !(b in found));
+  if (!found.gitleaks && !found.trufflehog) {
+    warn('scanners', 'no secret scanner on PATH (gitleaks, trufflehog)',
+      'The secrets auditor falls back to pattern + entropy review and records that as a coverage gap — which is correct only if it is true.');
+  }
+  if (!found['osv-scanner'] && !found['pip-audit'] && !found.govulncheck && !found.trivy) {
+    warn('scanners', 'no vulnerability scanner on PATH (osv-scanner, pip-audit, govulncheck, trivy)',
+      'The deps auditor falls back to lockfile version + advisory review; its SCA coverage is partial and must say so.');
+  }
+  return { found, absent };
+}
+
 // ───────────────────────────────────────────────────────────── target
 
 const ECO_MARKERS = {
@@ -417,13 +451,14 @@ function main(argv) {
     safe_headings: checkSafeFileContract(), skipped_register: checkSkippedRegister(), pointers: checkPointers(),
     artifacts: checkArtifacts(), tools: checkTools(),
   };
+  const scanners = checkScanners();
   const target = repo ? checkTarget(path.resolve(repo)) : null;
 
   const blocks = problems.filter((p) => p.level === 'BLOCK');
   const warns = problems.filter((p) => p.level === 'WARN');
 
   if (argv.includes('--json')) {
-    console.log(JSON.stringify({ stats, target, problems, ok: blocks.length === 0 }, null, 2));
+    console.log(JSON.stringify({ stats, scanners, target, problems, ok: blocks.length === 0 }, null, 2));
   } else {
     console.log(`\ncodeaudit preflight — launch dir: ${cwd}`);
     console.log(`  plugin: ${stats.mounts} mount paths · ${stats.agents} agents · ${stats.ecosystems} ecosystem files · ` +
@@ -432,6 +467,9 @@ function main(argv) {
       console.log(`  target: ${path.resolve(repo)} — ${target.isGit ? 'git' : 'NOT git'} · ${target.files} files · ` +
         `ecosystems: ${(target.ecosystems || []).map((e) => e.key + (e.locked ? `(${e.lockfile})` : '(NO LOCKFILE)')).join(', ') || 'none'}`);
     }
+    const sc = Object.keys(scanners.found);
+    console.log(`  scanners: ${sc.length ? sc.join(', ') : 'none'}${scanners.absent.length ? ` · absent: ${scanners.absent.join(', ')}` : ''}`);
+    console.log('            pass these to the auditors as `tools_available` — a brief that says "none" while one is installed makes an auditor record a coverage gap that is false.');
     console.log('');
     for (const p of [...blocks, ...warns]) {
       console.log(`  [${p.level === 'BLOCK' ? 'BLOCK' : ' WARN'}] ${p.check}: ${p.msg}`);
@@ -453,4 +491,4 @@ function isMainModule() {
 }
 if (isMainModule()) process.exit(main(process.argv.slice(2)));
 
-export { checkMounts, checkAgents, checkEnums, checkSafeFileContract, checkSkippedRegister, checkPointers, checkArtifacts, checkTools, checkTarget, problems };
+export { checkMounts, checkAgents, checkEnums, checkSafeFileContract, checkSkippedRegister, checkPointers, checkArtifacts, checkTools, checkScanners, checkTarget, problems };

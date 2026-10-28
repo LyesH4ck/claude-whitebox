@@ -4,6 +4,30 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.80] — 2026-10-28
+
+### Added — `codeaudit` 0.19.0: the preflight says which scanners are on PATH
+
+Mid-engagement on deepsec, the deps auditor reported that `osv-scanner` 2.4.0 and working network access were
+available **contrary to its brief** — the orchestrator had briefed every auditor `tools_available: none`
+without running the command's Step 4 probe. gitleaks, trufflehog, pip-audit, govulncheck, trivy and pandoc
+were all installed. The cost was not a missed finding (gitleaks and trufflehog, run afterwards over 243
+commits, agreed with the manual sweep and added nothing) but something subtler: the secrets auditor shipped
+*"no real scanner installed"* as a coverage gap, which was false. A report that understates its own coverage
+is wrong in the same way as one that overstates it.
+
+- **`preflight.mjs` now probes the optional scanners** (gitleaks, trufflehog, osv-scanner, pip-audit,
+  govulncheck, trivy, pandoc) and prints them with the reminder to pass the set as `tools_available`. It
+  warns when no secret scanner and when no vulnerability scanner is present, because those two absences are
+  the ones that change what an auditor may claim. The JSON gains a `scanners` block. Since the preflight is
+  the one command every run starts with, the answer can no longer go unsaid even when an orchestrator skips
+  Step 4.
+- **Step 4 of the command** now says not to guess the probe's answer, and tells the orchestrator that an
+  auditor reporting a tool it was told it did not have is a brief to correct by `SendMessage` to that agent —
+  its session still holds the work — rather than a false limitation to ship.
+- `preflight.test.mjs` +1 (the JSON carries the block, found and absent are disjoint, the human output names
+  them, and a host without a secret scanner is warned).
+
 ## [2.4.79] — 2026-10-28
 
 ### Fixed — `codeaudit` 0.18.0: an interrupted auditor no longer reads as a finished one

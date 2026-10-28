@@ -249,6 +249,15 @@ Output a one-line summary (e.g. `Scanners: gitleaks=available osv-scanner=missin
 Store the available set as `tools_available` and pass it to the relevant auditors. Missing scanners are
 not fatal — auditors fall back to pattern/version review and log a coverage note.
 
+**Do not skip this step, and do not guess its answer.** `preflight.mjs` (Step 6.0) prints the same probe, so
+you have the list before you dispatch anything — use one or the other, never an assumption. A brief that says
+`tools_available: none` while gitleaks is installed makes the secrets auditor run pattern-only *and* record
+"no real scanner installed" as a coverage gap: a weaker audit plus a false statement about why. On a real
+engagement that is exactly what happened, and it was the deps auditor noticing a scanner on PATH — contrary
+to its brief — that surfaced it. If an auditor reports a tool you told it it did not have, correct the brief
+by `SendMessage` to that agent (its session still holds the work) and fix the affected coverage gap, rather
+than letting the report ship the false limitation.
+
 ## Step 5 — Audit Summary
 
 Output with real values:
