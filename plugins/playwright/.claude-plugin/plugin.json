@@ -1,6 +1,6 @@
 {
   "name": "playwright",
-  "version": "0.2.20",
+  "version": "0.3.0",
   "description": "Playwright MCP server with a stealth-friendly default config (real Chrome channel, headed, realistic UA/viewport/locale, anti-automation flags) for browser-driven security testing. Provides the mcp__plugin_playwright_playwright__* tools the pentest plugin's client-side agents depend on.",
   "author": {
     "name": "Christophe Bailleux",

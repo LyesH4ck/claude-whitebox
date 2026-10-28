@@ -107,6 +107,12 @@ Output (one JSON object): `endpoints[]` grouped by `(host, method, path)`, each 
 - `probe.mjs` — WAF/XSS probe CLI (actions above).
 - `crawl.mjs` — interaction-driven recon crawler (data-POST / grid / cross-frame capture).
 - `crawl.test.mjs` — end-to-end proof (local ag-grid-SSRM fixture → before/after variant capture).
+- `proxy-probe.mjs` — **run this before an engagement.** TCP-connects to the proxy the MCP stealth config
+  declares, and says in one line whether that hard dependency is satisfied. Without it a dead proxy reaches
+  the agent only as `net::ERR_PROXY_CONNECTION_FAILED`, mid-task. Exit 4 = configured but nothing listening.
+- `ua-sync.mjs` — writes an engagement's User-Agent into the MCP stealth config **and** regenerates the three
+  `Sec-Ch-Ua` headers from it, so a UA-bound session (`cf_clearance`) can be replayed without recreating the
+  UA/client-hint mismatch. `--revert` restores the shipped profile. Both need an MCP restart.
 
 ## Limits
 
