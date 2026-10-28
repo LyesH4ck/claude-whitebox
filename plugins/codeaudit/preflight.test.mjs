@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, cpSync, readFileSync } from 'node:fs';
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -215,10 +215,37 @@ test('the preflight reports which optional scanners are on PATH, so a brief cann
   try { text = execFileSync('node', [SCRIPT], { cwd: MARKET, encoding: 'utf8', env: { ...process.env, HOME: HOME_STUB } }); }
   catch (e) { text = e.stdout || ''; }
   assert.match(text, /^\s*scanners:/m);
-  // and a host with no secret scanner is warned about, since that one changes what an auditor may claim
-  if (!r.scanners.found.gitleaks && !r.scanners.found.trufflehog) {
-    assert.ok(r.problems.some((p) => p.check === 'scanners' && /no secret scanner/.test(p.msg)));
-  }
+
+  // A scanner missing from PATH is NEVER a problem. It is a fact about the machine, handled by design: the
+  // auditor falls back to manual review and declares a coverage gap. Routing it through warn() made a
+  // correct install on a bare machine exit 1 under the "0 clean, 1 warnings" contract — which is what broke
+  // CI, where no scanner is installed, while passing here where seven are. The regression guard is this
+  // assertion, and it has to hold whatever the host happens to have.
+  assert.deepEqual(r.problems.filter((p) => p.check === 'scanners'), [],
+    'the scanner probe reports, it does not warn; absence is reported on the scanners line and in degraded[]');
+  assert.ok(Array.isArray(r.scanners.degraded));
+  assert.equal(r.scanners.degraded.some((d) => /^secrets:/.test(d)),
+    !r.scanners.found.gitleaks && !r.scanners.found.trufflehog, 'secrets degradation tracks the found set');
+  assert.equal(r.scanners.degraded.some((d) => /^deps:/.test(d)),
+    !r.scanners.found['osv-scanner'] && !r.scanners.found['pip-audit'] && !r.scanners.found.govulncheck && !r.scanners.found.trivy,
+    'deps degradation tracks the found set');
+
+  // Positive control, independent of the host: a stub executable earlier on PATH must be detected, and must
+  // clear the secrets degradation. Without this the assertions above would pass on a machine with nothing.
+  const bin = mkdtempSync(path.join(tmpdir(), 'pf-bin-'));
+  try {
+    const stub = path.join(bin, 'gitleaks');
+    writeFileSync(stub, '#!/bin/sh\nexit 0\n'); chmodSync(stub, 0o755);
+    let out = '';
+    try {
+      out = execFileSync('node', [SCRIPT, '--json'], { cwd: MARKET, encoding: 'utf8',
+        env: { ...process.env, HOME: HOME_STUB, PATH: `${bin}${path.delimiter}${process.env.PATH}` } });
+    } catch (e) { out = e.stdout || ''; }
+    const g = JSON.parse(out);
+    assert.ok(g.scanners.found.gitleaks, 'a gitleaks earlier on PATH is detected');
+    assert.ok(!g.scanners.degraded.some((d) => /^secrets:/.test(d)), 'a secret scanner clears the secrets degradation');
+    assert.deepEqual(g.problems.filter((p) => p.check === 'scanners'), []);
+  } finally { rmSync(bin, { recursive: true, force: true }); }
 });
 
 test('target mode BLOCKS on a repo that does not exist', () => {

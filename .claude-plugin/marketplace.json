@@ -35,7 +35,7 @@
       "name": "codeaudit",
       "source": "./plugins/codeaudit",
       "description": "White-box source code security audit framework - static source-to-sink analysis across 17 vulnerability domains: core 10 (injection, XSS, auth, access control, SSRF, secrets, crypto, dependencies, configuration, logging) plus extended 7 (business logic, feature abuse, data lifecycle/isolation, client-side, HTTP protocol, AI/LLM, resource exhaustion) with optional live correlation",
-      "version": "0.21.1",
+      "version": "0.21.2",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"
