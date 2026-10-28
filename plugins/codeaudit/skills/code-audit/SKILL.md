@@ -366,6 +366,21 @@ repo**. Naming them explicitly — with what you did try — is coverage informa
 `tested_not_vulnerable` is a false clearance; silently folding them into `coverage_gaps` loses the fact that
 you investigated. Empty findings are never proof of complete coverage.
 
+### Write the evidence file as you go, not at the end
+
+Create `findings/_safe-{class}[-{shard}].md` with its four headings **as soon as you have your first
+verdict**, and append each rule-out when you reach it. Same for a finding: write its directory when the path
+is proven, not after the whole scope is traced. An audit is interrupted by things that are not your doing —
+a rate limit, a context reset, a killed session — and an auditor that holds everything in its head until the
+final turn loses every verdict it reached. Appending costs nothing; a batched write at the end is a bet that
+nothing stops you.
+
+Two consequences you must respect, because the orchestrator's resume probe reads these files:
+- An incremental file with its four headings and **no entries yet** is a skeleton, not a result. Never treat
+  your own skeleton as evidence of coverage, and never leave it empty after you have verdicts to put in it.
+- Your **final status line is what marks you complete** (the orchestrator logs it); the file alone does not.
+  So always end with the status and the register below, even on a short scope.
+
 ### The skipped register
 
 Mandatory, answered in writing before you announce completion. The question: **is there any file or path in my assigned

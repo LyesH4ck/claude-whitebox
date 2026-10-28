@@ -14,8 +14,9 @@ What "done" means per phase (deliberately mechanical — an agent's own "complet
   coverage-gate  recon/_coverage.json exists and passed
   threat-model   recon/threat-model.json parses with entry_points[] and dispositions[]
   plan           plan/deployment-plan.json parses with non-empty waves[]
-  auditors       per planned deployment: the four-heading _safe-{class}[-{shard}].md exists → done;
-                 findings dirs with no _safe file → partial; nothing → missing
+  auditors       per planned deployment: `done` requires BOTH the orchestrator's `auditor-done: complete`
+                 log line AND a four-heading _safe-{class}[-{shard}].md; either alone is `partial`, with
+                 `why_partial` and an `evidence_entries` count saying which case it is; nothing → missing
   reconcile      recon/_reconciliation.json exists
   sweep          the orchestrator log carries "sweeps-complete"
   verify         every finding dir with final severity ≥ high has verification.md (needs the report, else
@@ -27,6 +28,13 @@ import glob, json, os, re, sys
 OUT = sys.argv[1].rstrip("/") if len(sys.argv) > 1 else ""
 AS_JSON = "--json" in sys.argv
 HEADINGS = ["tested_not_vulnerable", "design_properties", "unverified_assumptions", "coverage_gaps"]
+# class → on-disk finding-dir prefix (REPORT_CONTRACT.md `id` rule). Without it a non-sharded auditor's
+# finding count matches every class's directories, which misreads the resume diagnostic.
+CLASS_PREFIX = {"injection": "inj", "xss": "xss", "access-control": "ac", "ssrf": "ssrf", "auth": "auth",
+                "secrets": "sec", "crypto": "crypto", "deps": "deps", "config": "cfg", "logging": "log",
+                "business-logic": "biz", "feature-abuse": "feat", "data-lifecycle": "life",
+                "client-side": "cli", "http-protocol": "http", "ai-llm": "ai", "ai-agent": "ai",
+                "resource-exhaustion": "dos"}
 
 def jload(p):
     try: return json.load(open(p))
@@ -36,6 +44,22 @@ def safe_ok(p):
     try: b = open(p, errors="replace").read()
     except OSError: return False
     return all(re.search(r"^##\s+" + h + r"\s*$", b, re.M) for h in HEADINGS)
+
+def safe_entries(p):
+    """Bullet entries across the four sections, `- none` excluded. An auditor told to write its evidence
+    file incrementally creates the four headings first, so headings alone prove nothing: a killed agent
+    leaves exactly that skeleton, and counting it as done drops a whole class silently (seen on a live run
+    stopped by an API rate limit)."""
+    try: b = open(p, errors="replace").read()
+    except OSError: return 0
+    n = 0
+    for h in HEADINGS:
+        m = re.search(r"^##\s+" + h + r"\s*$\n(.*?)(?=^##\s|\Z)", b, re.S | re.M)
+        if not m: continue
+        for l in m.group(1).splitlines():
+            s = l.strip()
+            if s.startswith("- ") and s[2:].strip().lower() not in ("none", "n/a", ""): n += 1
+    return n
 
 def log_actions(path):
     acts = []
@@ -60,6 +84,9 @@ def main():
     plan = jload(f"{OUT}/plan/deployment-plan.json")
     phases["plan"] = "done" if plan and plan.get("waves") else ("partial" if plan else "missing")
 
+    orch = log_actions(f"{OUT}/activity/codeaudit-orchestrator.log")
+    done_by_log = {(a.get("agent"), a.get("shard")): a.get("status") for a in orch if a.get("action") == "auditor-done"}
+
     auditors = []
     if plan and plan.get("waves"):
         for wi, wave in enumerate(plan["waves"], 1):
@@ -69,12 +96,31 @@ def main():
                 cls = d.get("class") or d.get("vuln_class") or agent.replace("-auditor", "").replace("ai-agent", "ai-llm")
                 shard = d.get("shard")
                 safe = f"{OUT}/findings/_safe-{cls}" + (f"-{shard}" if shard else "") + ".md"
-                state = "done" if os.path.exists(safe) and safe_ok(safe) else ("partial" if os.path.exists(safe) or glob.glob(f"{OUT}/findings/finding-*{('-' + shard + '-') if shard else '-'}*") else "missing")
-                auditors.append({"wave": wi, "agent": agent, "class": cls, "shard": shard, "safe_file": os.path.relpath(safe, OUT), "state": state})
-    orch = log_actions(f"{OUT}/activity/codeaudit-orchestrator.log")
-    done_by_log = {(a.get("agent"), a.get("shard")): a.get("status") for a in orch if a.get("action") == "auditor-done"}
-    for a in auditors:
-        a["logged_status"] = done_by_log.get((a["agent"], a["shard"]))
+                logged = done_by_log.get((agent, shard))
+                entries = safe_entries(safe) if os.path.exists(safe) else 0
+                pre = CLASS_PREFIX.get(cls, cls)
+                # A shard tag often already carries the class prefix (the planner writes `inj-s1`, so the
+                # auditor names its dirs `finding-inj-s1-NNN`, not `finding-inj-inj-s1-NNN`). Accept both.
+                pats = [f"finding-{pre}-*"] if not shard else [f"finding-{pre}-{shard}-*", f"finding-{shard}-*"]
+                findings = len({d for pat in pats for d in glob.glob(f"{OUT}/findings/{pat}")})
+                # `done` needs BOTH halves: the orchestrator's own `auditor-done: complete` line AND a
+                # four-heading evidence file. Either alone is `partial` — an unlogged file may be a
+                # skeleton from a killed agent, and a log line without the file is a lost artifact.
+                # Over-reporting `partial` costs a re-dispatch; under-reporting drops a class.
+                if logged == "complete" and os.path.exists(safe) and safe_ok(safe): state = "done"
+                elif os.path.exists(safe) or findings or logged: state = "partial"
+                else: state = "missing"
+                a = {"wave": wi, "agent": agent, "class": cls, "shard": shard,
+                     "safe_file": os.path.relpath(safe, OUT), "state": state, "logged_status": logged,
+                     "evidence_entries": entries, "finding_dirs": findings}
+                if state == "partial":
+                    a["why_partial"] = ("no `auditor-done: complete` log line — the evidence file carries "
+                                        f"{entries} entr{'y' if entries == 1 else 'ies'}, so it may be finished: confirm from the agent's "
+                                        "final status, or re-dispatch" if os.path.exists(safe) and safe_ok(safe) and entries
+                                        else "evidence file is a skeleton (four headings, no entries) — a killed agent's incremental write"
+                                        if os.path.exists(safe) and safe_ok(safe)
+                                        else "evidence file missing or malformed")
+                auditors.append(a)
     phases["auditors"] = ("done" if auditors and all(a["state"] == "done" for a in auditors) else "partial" if any(a["state"] != "missing" for a in auditors) else "missing") if plan else "missing"
     phases["reconcile"] = "done" if os.path.exists(f"{OUT}/recon/_reconciliation.json") else "missing"
     phases["sweep"] = "done" if any(a.get("action") == "sweeps-complete" for a in orch) else ("partial" if glob.glob(f"{OUT}/findings/_safe-sweep-*.md") else "missing")
@@ -102,7 +148,9 @@ def main():
     for ph, step in order: print(f"  {ph:14} {phases[ph]:8} (step {step})")
     if auditors:
         print("  auditors:")
-        for a in auditors: print(f"    wave {a['wave']} {a['agent']:28} {a['class']:18} {a['shard'] or '-':8} {a['state']:8} log={a['logged_status'] or '-'}")
+        for a in auditors:
+            print(f"    wave {a['wave']} {a['agent']:28} {a['class']:18} {a['shard'] or '-':8} {a['state']:8} log={a['logged_status'] or '-':9} evidence={a['evidence_entries']:>3} findings={a['finding_dirs']}")
+            if a.get("why_partial"): print(f"        {a['why_partial']}")
     if owed: print(f"  verification owed: {', '.join(owed[:12])}{' …' if len(owed) > 12 else ''}")
     print(f"  → resume from step {resume_from}" if resume_from != "done" else "  → every phase has its artifact; re-run Step 6.6/6.7 only if you need to re-aggregate")
     return 0

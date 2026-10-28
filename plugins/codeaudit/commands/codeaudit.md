@@ -331,24 +331,38 @@ Log `phase":"preflight","exit":<0|1|2>,"blocking":<N>,"warnings":<M>`.
 
 ### Step 6.0b — Resume (when the engagement directory already exists)
 
-An interrupted session — a crash, a closed terminal, a context reset at wave 2 — leaves everything it had
-produced on disk: recon, the threat model, the plan, each finished auditor's evidence file and findings, the
-orchestrator log. Starting over throws that away and pays for it twice. Probe before initializing:
+An interrupted engagement leaves everything it had produced on disk: recon, the threat model, the plan, each
+finished auditor's evidence file and findings, the orchestrator log. Starting over throws that away and pays
+for it twice. The interruptions that actually happen, in order of frequency:
+- **the model API refuses** — a rate limit or an exhausted credit balance kills every in-flight agent at
+  once, mid-work, with no artifact for some of them (seen on a real engagement: five of seven auditors died
+  in the same minute). This is the case to expect, and it is why an auditor is told to write its evidence
+  file incrementally;
+- a context reset or a closed terminal at wave 2; a crashed or `TaskStop`-ed agent; an operator pause.
+
+Probe before initializing:
 
 ```bash
 python3 -I "$CA/tools/resume.py" "outputs/{engagement}"
 ```
 
-It classifies each phase as `done` / `partial` / `missing` from artifacts alone — an agent's own "complete" is
-never consulted — and names the first step to resume from and the auditors still owed (those whose
-four-heading `_safe-` file is absent). When it reports an existing engagement with anything `done`, ask via
-AskUserQuestion: **"`outputs/{engagement}` already holds a {recon|plan|N auditors…} — resume from step
-{X}, or start over?"** with **Resume** / **Start over (keeps nothing)** / **Cancel**.
+It classifies each phase as `done` / `partial` / `missing` from artifacts and **your own log** — an agent's
+self-reported "complete" is never consulted — and names the first step to resume from and the auditors still
+owed. An auditor counts as `done` only with **both** your `auditor-done: complete` log line and a
+four-heading evidence file; either alone is `partial`, and the probe says which case it is (`why_partial`,
+plus an `evidence_entries` count: a file with the headings and zero entries is a killed agent's skeleton, a
+file with thirty entries and no log line is probably finished work you failed to log). When it reports an
+existing engagement with anything `done`, ask via AskUserQuestion: **"`outputs/{engagement}` already holds a
+{recon|plan|N auditors…} — resume from step {X}, or start over?"** with **Resume** / **Start over (keeps
+nothing)** / **Cancel**.
 - **Resume** → skip every `done` phase. Re-read the artifacts you need (`recon/*`, `threat-model.json`,
   `deployment-plan.json`) instead of re-dispatching their producers; in Step 6.4 dispatch **only** the
-  auditors the probe lists as owed (`partial` ones on their full scope — a half-written evidence file is not
-  a verdict); run the completeness loop, reconciliation, sweep and verification as usual, each skipping
-  what the probe already shows done. Log `phase":"resume","from":"<step>","auditors_owed":<n>`.
+  auditors the probe lists as owed, each on its **full** assigned scope from the plan — a partial evidence
+  file is not a verdict, and an auditor cannot be resumed mid-trace. Before re-dispatching a `partial` whose
+  file looks finished, read its last entries: if it is genuinely complete, log the missing
+  `auditor-done: complete` line yourself (naming the evidence as the basis) rather than paying for the class
+  twice. Run the completeness loop, reconciliation, sweep and verification as usual, each skipping what the
+  probe already shows done. Log `phase":"resume","from":"<step>","auditors_owed":<n>`.
 - **Start over** → `mv outputs/{engagement} outputs/{engagement}.abandoned-<timestamp>` (never delete), then
   proceed to 6.1.
 A probe with nothing `done` means a stray directory; proceed to 6.1 without asking.
@@ -508,7 +522,10 @@ class with surface gets an auditor. Follow your agent definition's schema."
      recorded — not after the first finding. There is no time budget; completeness is the goal. Apply
      depth: <{depth} guidance>. Report back with a status of `complete` or `incomplete` + what remains.";
    - the reminder to write findings per `$CA/skills/code-audit/reference/REPORT_CONTRACT.md`
-     and record safe vectors.
+     and record safe vectors — **incrementally** (`SKILL.md` → *Write the evidence file as you go*): the
+     four-heading `_safe-` file at the first verdict, each finding directory when its path is proven. An
+     auditor that batches every write into its final turn loses everything if the run is interrupted, and
+     interruptions are not its doing — a rate limit, a context reset, a killed session.
 4. Log `phase":"audit","action":"deploy-auditors","count":<N>,"wave":1`, and one line per dispatched
    agent with the **agent id the `Task` call returned** —
    `phase":"audit","action":"dispatched","agent":"<name>","shard":"<tag|null>","agent_id":"<id>"` — so a

@@ -605,7 +605,26 @@ test('resume: classifies phases from artifacts alone and names the step and the 
   assert.equal(r.phases.auditors, 'partial');
   assert.deepEqual(r.auditors_owed.map((a) => a.class), ['xss']);
   assert.equal(r.auditors[0].logged_status, 'complete');
+  assert.equal(r.auditors[0].state, 'done', 'log line + four-heading file with entries');
   assert.equal(r.resume_from, '6.4/6.5');
+
+  // A killed agent's incremental skeleton (four headings, no entries, no log line) must NOT read as done —
+  // the live-run defect: it dropped a whole class while the probe said the auditor had finished.
+  w(root, 'findings/_safe-xss.md', '# Evidence — xss-auditor\n\n## tested_not_vulnerable\n- none\n\n## design_properties\n- none\n\n## unverified_assumptions\n- none\n\n## coverage_gaps\n- none\n');
+  r = JSON.parse(py('resume.py', [root, '--json'], root));
+  const xss = r.auditors.find((a) => a.class === 'xss');
+  assert.equal(xss.state, 'partial');
+  assert.equal(xss.evidence_entries, 0);
+  assert.match(xss.why_partial, /skeleton/);
+  assert.deepEqual(r.auditors_owed.map((a) => a.class), ['xss'], 'still owed');
+
+  // A finished-looking file with no log line is partial too, but the probe says it may be done
+  w(root, 'findings/_safe-xss.md', '# Evidence — xss-auditor\n\n## tested_not_vulnerable\n- [guard_present] a.tsx:3 escaped by React\n- [not_attacker_controlled] b.tsx:9 constant\n\n## design_properties\n- none\n\n## unverified_assumptions\n- none\n\n## coverage_gaps\n- none\n');
+  r = JSON.parse(py('resume.py', [root, '--json'], root));
+  const xss2 = r.auditors.find((a) => a.class === 'xss');
+  assert.equal(xss2.state, 'partial');
+  assert.equal(xss2.evidence_entries, 2);
+  assert.match(xss2.why_partial, /no `auditor-done: complete` log line/);
   // nothing on disk → start at 6.1, exit 0
   const out = py('resume.py', [path.join(root, 'nope')], root);
   assert.match(out, /nothing to resume/);

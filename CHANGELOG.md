@@ -4,6 +4,33 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.79] — 2026-10-28
+
+### Fixed — `codeaudit` 0.18.0: an interrupted auditor no longer reads as a finished one
+
+A full engagement on a real repository (deepsec, 17 classes, 18 planned instances) was stopped twice: once by
+an API rate limit that killed five of seven in-flight auditors in the same minute, once by the operator. The
+resume probe then reported one of the dead auditors as **done** — it had written its evidence file's four
+headings as its first act, and headings alone satisfied the old rule. A whole class would have been dropped
+from a report that still said "all in-scope sources traced".
+
+- **`resume.py`: `done` now needs both halves** — the orchestrator's own `auditor-done: complete` log line
+  **and** a four-heading evidence file. Either alone is `partial`, with `why_partial` naming the case and an
+  `evidence_entries` count separating a killed agent's skeleton (headings, zero entries) from finished work
+  whose log line is missing. Over-reporting `partial` costs a re-dispatch; under-reporting costs a class.
+  Finding counts are now per-class (the `finding-{prefix}-` map from `REPORT_CONTRACT.md`) instead of
+  matching every class's directories.
+- **`SKILL.md` → *Write the evidence file as you go*** — create the four headings at the first verdict and
+  append each rule-out as it is reached; write a finding's directory when its path is proven. An auditor that
+  batches every write into its final turn loses everything to an interruption that is not its doing. With the
+  two consequences it must respect: a skeleton is not evidence of coverage, and the final **status line** is
+  what marks it complete. Step 6.4's brief carries the same instruction.
+- **Step 6.0b now names the interruption that actually happens** (the model API refusing: rate limit or
+  exhausted credits, killing every in-flight agent at once) ahead of crashes and context resets, and tells the
+  orchestrator to read a finished-looking `partial`'s last entries and log the missing line itself rather
+  than paying for the class twice.
+- `tools.test.mjs` +2 assertions (skeleton stays owed; finished-looking file reports why).
+
 ## [2.4.78] — 2026-10-27
 
 ### Added — `codeaudit` 0.17.0: diff mode, resume, and in-session repair
