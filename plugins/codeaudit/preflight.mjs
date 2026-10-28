@@ -349,15 +349,16 @@ function checkScanners() {
     catch { /* absent */ }
   }
   const absent = Object.keys(SCANNERS).filter((b) => !(b in found));
-  if (!found.gitleaks && !found.trufflehog) {
-    warn('scanners', 'no secret scanner on PATH (gitleaks, trufflehog)',
-      'The secrets auditor falls back to pattern + entropy review and records that as a coverage gap — which is correct only if it is true.');
-  }
-  if (!found['osv-scanner'] && !found['pip-audit'] && !found.govulncheck && !found.trivy) {
-    warn('scanners', 'no vulnerability scanner on PATH (osv-scanner, pip-audit, govulncheck, trivy)',
-      'The deps auditor falls back to lockfile version + advisory review; its SCA coverage is partial and must say so.');
-  }
-  return { found, absent };
+  // Reported, never warned about. A scanner missing from PATH is a fact about the machine, not a defect in
+  // the installation: the auditor falls back to manual review and declares a coverage gap, which is the
+  // designed behaviour. Routing it through warn() would make a clean install on a bare machine — a CI
+  // runner, a fresh laptop — exit 1 under the "0 clean, 1 warnings" contract, and an operator who sees
+  // warnings on a correct install soon stops reading the channel. The orchestrator carries the
+  // consequence instead, by passing `found` to every brief as `tools_available`.
+  const degraded = [];
+  if (!found.gitleaks && !found.trufflehog) degraded.push('secrets: history sweep unavailable (gitleaks, trufflehog)');
+  if (!found['osv-scanner'] && !found['pip-audit'] && !found.govulncheck && !found.trivy) degraded.push('deps: SCA partial, lockfile review only (osv-scanner, pip-audit, govulncheck, trivy)');
+  return { found, absent, degraded };
 }
 
 // ───────────────────────────────────────────────────────────── target
@@ -470,6 +471,7 @@ function main(argv) {
     const sc = Object.keys(scanners.found);
     console.log(`  scanners: ${sc.length ? sc.join(', ') : 'none'}${scanners.absent.length ? ` · absent: ${scanners.absent.join(', ')}` : ''}`);
     console.log('            pass these to the auditors as `tools_available` — a brief that says "none" while one is installed makes an auditor record a coverage gap that is false.');
+    for (const d of scanners.degraded) console.log(`            degraded — ${d}`);
     console.log('');
     for (const p of [...blocks, ...warns]) {
       console.log(`  [${p.level === 'BLOCK' ? 'BLOCK' : ' WARN'}] ${p.check}: ${p.msg}`);

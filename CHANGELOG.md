@@ -4,6 +4,29 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.84] — 2026-10-28
+
+### Fixed — `codeaudit` 0.21.2: the scanner probe reports, it never warns (CI was red on `main`)
+
+0.19.0 routed a missing secret or vulnerability scanner through `warn()`. On a machine with the scanners
+installed the preflight stayed silent; on a bare machine — a CI runner, a fresh laptop — it emitted two
+warnings and exited 1 under its own `0 clean · 1 warnings · 2 blocking` contract. Three preflight tests
+assert a silent baseline, so CI went red on the merge of PR #8 while the same suite was green locally.
+The local run that cleared the merge was also narrower than CI's: four test files, not the 28 that
+`find plugins -name '*.test.mjs'` collects.
+
+A scanner absent from `PATH` is a fact about the machine, not a defect in the installation: the auditor
+falls back to manual review and declares a coverage gap, which is the designed behaviour. Reporting it as
+a warning made a correct install look broken, and an operator who sees warnings on a correct install stops
+reading the channel. The probe now returns `degraded[]` alongside `found`/`absent`, printed under the
+`scanners:` line as information, and the orchestrator still carries the consequence by passing `found` to
+every brief as `tools_available`.
+
+The test that asserted the warning now asserts the opposite — no `scanners` entry in `problems`, whatever
+the host has — and adds a host-independent positive control: a stub `gitleaks` earlier on `PATH` must be
+detected and must clear the secrets degradation. Verified green both with seven scanners installed and
+with a `PATH` that has none.
+
 ## [2.4.83] — 2026-10-28
 
 ### Fixed — `codeaudit` 0.21.1: `aggregate`, `render` and `reconcile` print their usage instead of a traceback
