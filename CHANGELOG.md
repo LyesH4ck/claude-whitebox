@@ -4,6 +4,16 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.83] — 2026-10-28
+
+### Fixed — `codeaudit` 0.21.1: `aggregate`, `render` and `reconcile` print their usage instead of a traceback
+
+Called with no argument the three oldest tools raised `IndexError: list index out of range` on
+`sys.argv[1]`, while the four newer ones print a usage line. The pipeline always passes the output root, so
+this never fired during an engagement — it fired on an operator typing the command by hand to re-render a
+report, which is exactly when a stack trace is least informative. All seven now print their docstring and
+exit 2.
+
 ## [2.4.82] — 2026-10-28
 
 ### Fixed — `codeaudit` 0.21.0: the carry-forward proposal respects the context file's budget

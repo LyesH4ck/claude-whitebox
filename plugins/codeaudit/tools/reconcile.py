@@ -21,6 +21,8 @@ while uncited in-scope sources remain unexplained.
 """
 import collections, glob, json, os, re, sys
 
+if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
+    print(__doc__); sys.exit(2)          # usage, not a traceback: these are run by hand too
 OUT = sys.argv[1].rstrip("/")
 AS_JSON = "--json" in sys.argv
 EXT = r"(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|php|java|kt|kts|go|cs|rs|swift|dart|ex|exs|scala|lua|sql|vue|svelte|erb|twig|html|json|jsonc|toml|yaml|yml|tf|hcl|sh|bash|cfg|conf|ini|env|xml|gradle|properties)"

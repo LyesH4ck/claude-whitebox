@@ -10,6 +10,8 @@ codeaudit.sarif. Deterministic: same inputs → same bytes.
 """
 import csv, json, os, re, sys, collections
 
+if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
+    print(__doc__); sys.exit(2)          # usage, not a traceback: these are run by hand too
 OUT = sys.argv[1].rstrip("/")
 def arg(flag, default=None):
     return sys.argv[sys.argv.index(flag) + 1] if flag in sys.argv else default

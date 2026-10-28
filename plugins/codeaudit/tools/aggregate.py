@@ -23,6 +23,8 @@ Everything it reads is model-authored and therefore untrusted: a malformed file 
 """
 import collections, glob, hashlib, json, os, re, sys
 
+if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
+    print(__doc__); sys.exit(2)          # usage, not a traceback: these are run by hand too
 OUT = sys.argv[1].rstrip("/")
 DRY = "--dry-run" in sys.argv
 def arg(flag, default=None):
