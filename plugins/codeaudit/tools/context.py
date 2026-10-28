@@ -62,32 +62,60 @@ def existing_keys(path):
     body = open(path, errors="replace").read()
     return {norm(l.lstrip()[2:]) for l in section(body, "## Known non-findings").splitlines() if l.lstrip().startswith("- ")}
 
+MAX_LINE = 260          # the file is injected into every agent brief; a paragraph per line defeats its purpose
+HARD_CAP = 120           # never propose more than the file's whole line budget, whatever the engagement found
+
+def clip(s, n=MAX_LINE):
+    s = " ".join(str(s or "").split())
+    if len(s) <= n: return s
+    cut = s[:n].rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:—-") + " …"
+
 def propose(out, ctx):
+    """Rank, clip and cap. A large engagement produces far more durable statements than a 40–120-line
+    standing file can hold: the deepsec run offered 134 of them, several a full paragraph long. The file's
+    value is "what would the next auditor get wrong without this", not a transcript of everything settled —
+    so accepted risks come first (they are decisions, and nothing else records them), then version-gated
+    rule-outs (they expire on upgrade), then by_design statements, shortest first because a one-line
+    citation is the kind that survives being read in a brief."""
     rp = f"{out}/codeaudit-report.json"
     if not os.path.exists(rp): print(f"no report at {rp}", file=sys.stderr); return []
-    R = json.load(open(rp)); have = existing_keys(ctx); lines = []; seen = set()
-    def add(line):
+    R = json.load(open(rp)); have = existing_keys(ctx); seen = set()
+    buckets = {"accepted-risk": [], "version-gated": [], "by_design": []}
+    def add(kind, line):
         k = norm(line[2:])
-        if k and k not in have and k not in seen: seen.add(k); lines.append(line)
-    for d in R.get("design_properties", []):
-        add(f"- [by_design] {d.get('detail', '').strip()} (established {R.get('date', '?')}, {d.get('vuln_class', '?')} auditor)")
+        if k and k not in have and k not in seen: seen.add(k); buckets[kind].append(line)
     for f in R.get("findings", []):
         if f.get("status") == "accepted-risk":
             a = f.get("accepted") or {}; loc = f.get("location") or {}
             who = ", ".join(x for x in (a.get("by"), a.get("date")) if x)
-            add(f"- [accepted-risk] {f.get('title', '').strip()} at {loc.get('file')} — {a.get('reason', 'no reason recorded')} ({who or 'see .codeaudit-accepted.json'}; fingerprint {f.get('fingerprint')})")
+            add("accepted-risk", f"- [accepted-risk] {clip(f.get('title'))} at {loc.get('file')} — {clip(a.get('reason') or 'no reason recorded', 120)} ({who or 'see .codeaudit-accepted.json'}; fingerprint {f.get('fingerprint')})")
     for t in R.get("tested_not_vulnerable", []):
-        det = (t.get("detail") or "").strip()
-        if t.get("disposition") == "by_design":
-            add(f"- [by_design] {det} ({t.get('vuln_class', '?')} auditor, {R.get('date', '?')})")
-        elif re.search(r"\b\d+\.\d+(\.\d+)?\b.*\b(cutoff|pinned|lockfile|package-lock|poetry\.lock|composer\.lock|Gemfile\.lock|go\.sum)\b", det, re.I) \
-             or re.search(r"\b(cutoff|pinned|lockfile)\b.*\b\d+\.\d+(\.\d+)?\b", det, re.I):
-            add(f"- [version-gated] {det} ({t.get('vuln_class', '?')} auditor, {R.get('date', '?')}); re-verify on upgrade")
+        det = (t.get("detail") or "").strip(); cls = t.get("vuln_class", "?")
+        if re.search(r"\b\d+\.\d+(\.\d+)?\b.*\b(cutoff|pinned|lockfile|package-lock|poetry\.lock|composer\.lock|Gemfile\.lock|go\.sum|pnpm-lock)\b", det, re.I) \
+           or re.search(r"\b(cutoff|pinned|lockfile)\b.*\b\d+\.\d+(\.\d+)?\b", det, re.I):
+            add("version-gated", f"- [version-gated] {clip(det)} ({cls}, {R.get('date', '?')}); re-verify on upgrade")
+        elif t.get("disposition") == "by_design":
+            add("by_design", f"- [by_design] {clip(det)} ({cls}, {R.get('date', '?')})")
+    for d in R.get("design_properties", []):
+        add("by_design", f"- [by_design] {clip(d.get('detail'))} ({d.get('vuln_class', '?')}, {R.get('date', '?')})")
+    buckets["by_design"].sort(key=len)
+    ranked = buckets["accepted-risk"] + buckets["version-gated"] + buckets["by_design"]
+    headroom = HARD_CAP
+    if os.path.exists(ctx):
+        headroom = max(8, HARD_CAP - len(open(ctx, errors="replace").read().splitlines()))
+    lines, dropped = ranked[:headroom], ranked[headroom:]
     os.makedirs(f"{out}/plan", exist_ok=True)
     with open(f"{out}/plan/_context-additions.md", "w") as fh:
         fh.write("# Proposed additions to .codeaudit-context.md — Known non-findings\n")
         fh.write("# Review each line; delete what the operator does not endorse, then run `context.py apply`.\n")
+        fh.write(f"# {len(lines)} proposed of {len(ranked)} candidates (headroom {headroom} lines against the {HARD_CAP}-line budget),\n")
+        fh.write(f"# ranked accepted-risk -> version-gated -> by_design (shortest first), each clipped to {MAX_LINE} chars.\n")
+        if dropped:
+            fh.write(f"# {len(dropped)} candidate(s) did not fit and are NOT lost: they are the report's own\n")
+            fh.write("# design_properties and tested_not_vulnerable arrays. Raise the budget deliberately, or leave them there.\n")
         for l in lines: fh.write(l + "\n")
+    globals()["_dropped"] = dropped
     return lines
 
 def apply(out, ctx):
@@ -119,7 +147,9 @@ if __name__ == "__main__":
         lines = propose(out, ctx)
         if "--json" in sys.argv: print(json.dumps({"additions": lines}))
         else:
-            print(f"{len(lines)} proposed addition(s) → {out}/plan/_context-additions.md"); [print("  " + l) for l in lines]
+            d = len(globals().get("_dropped") or [])
+            print(f"{len(lines)} proposed addition(s) → {out}/plan/_context-additions.md" + (f" ({d} candidate(s) over budget, left in the report arrays)" if d else ""))
+            [print("  " + l) for l in lines]
     elif cmd == "apply":
         if not ctx: print("--context <file> required", file=sys.stderr); sys.exit(2)
         print(f"appended {apply(out, ctx)} line(s) to {ctx}")

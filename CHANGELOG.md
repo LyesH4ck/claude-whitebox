@@ -4,6 +4,25 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.82] — 2026-10-28
+
+### Fixed — `codeaudit` 0.21.0: the carry-forward proposal respects the context file's budget
+
+Step 6.7 on the deepsec engagement offered **134 additions** to a file whose stated budget is 40–120 lines,
+several of them a full paragraph. `context.py propose` collected every `design_properties` entry and every
+`by_design` rule-out with no ranking, no length limit and no awareness of the file it was proposing to grow.
+Applied wholesale it would have produced exactly what `PROJECT_CONTEXT.md` warns against: a file so verbose
+that the next run's briefs carry a transcript instead of the handful of statements an auditor would get
+wrong without it.
+
+`propose` now ranks (**accepted-risk** first — they are decisions and nothing else records them; then
+**version-gated**, which expire on upgrade; then **by_design**, shortest first, because a one-line citation
+is the kind that survives being read in a brief), clips each line to 260 characters at a word boundary, and
+caps the total at the file's actual remaining headroom against the 120-line budget. What does not fit is
+reported as a count with the reminder that it is **not lost** — it is in the report's own
+`design_properties` and `tested_not_vulnerable` arrays, which is where a transcript belongs. On the live
+engagement: 141 candidates → 51 proposed, 90 left in the report.
+
 ## [2.4.81] — 2026-10-28
 
 ### Fixed — `codeaudit` 0.20.0: three tool defects a 62-finding engagement exposed
