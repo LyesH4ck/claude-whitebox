@@ -139,6 +139,32 @@ Attacker-controlled object **keys** reaching a recursive merge/clone or a dynami
 - cookies without `HttpOnly`/`Secure`/`SameSite`
 - debug mode on (`DEBUG=True`, `app.debug`, stack traces exposed)
 - default/weak credentials in config; verbose error handlers; directory listing enabled
+- **infrastructure and CI as code** — Terraform/HCL, Dockerfiles, Kubernetes manifests, GitHub workflows:
+  wildcard IAM, public ingress, unencrypted stores, root containers, unpinned actions/modules/images,
+  `pull_request_target` running PR code. Seeds, defaults and safe forms in `ecosystems/iac.md`.
+
+## Fail-open and bypass shapes (language-agnostic — read the decision, not the sink)
+A security *decision* that is wrong in a way the surrounding code hides. None of these is a sink; each is a
+place to ask the fail-open question from `SKILL.md`. Stack-specific forms and seeds live in each
+`ecosystems/*.md` (fullest in `node.md`).
+- a security flag read as a truthy **string** (`if (env.DISABLE_AUTH)` — `"false"` is truthy; `if
+  (env.REQUIRE_AUTH)` — off when unset)
+- verification, CSRF, rate limiting, signature or encryption gated behind a **feature flag** whose default or
+  failure branch is "skip"
+- **test / debug / bypass headers** (`x-test-*`, `x-debug`, `x-bypass`, `x-skip-auth`, `x-internal`) honoured
+  by handler code reachable in production
+- **dev-mode auth shortcuts** (`/auth/dev`, mock sessions, test tokens, `if (!production) user = admin`)
+  gated only on an environment string the deploy can misset
+- a shared secret compared **without requiring it to exist** (`!== "Bearer " + env.CRON_SECRET` with the
+  variable unset)
+- **spread / merge order** on a write where request data can overwrite a server-set field (`{role, ...body}`),
+  schema `passthrough`/`unknown`-keys modes before persistence
+- a lock, transaction or revocation call whose result is **not awaited / not checked**
+- **read-then-write on a single-use value** (token, invite, balance, quota) outside a transaction or
+  compare-and-set
+- cache or KV keys that omit the **principal or tenant**
+- an outbound client that **follows redirects** after a one-time allowlist check
+- host/URL validation by **regex with a wildcard** instead of a parsed hostname compared to an allowlist
 
 ## Sensitive data in logs / egress (CWE-532) — A09 logging
 

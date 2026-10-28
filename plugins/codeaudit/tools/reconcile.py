@@ -21,9 +21,14 @@ while uncited in-scope sources remain unexplained.
 """
 import collections, glob, json, os, re, sys
 
+if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
+    print(__doc__); sys.exit(2)          # usage, not a traceback: these are run by hand too
 OUT = sys.argv[1].rstrip("/")
 AS_JSON = "--json" in sys.argv
-EXT = r"(?:ts|tsx|js|jsx|mjs|cjs|py|rb|php|java|kt|go|cs|rs|swift|sql|vue|svelte|erb|twig|html)"
+EXT = r"(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|php|java|kt|kts|go|cs|rs|swift|dart|ex|exs|scala|lua|sql|vue|svelte|erb|twig|html|json|jsonc|toml|yaml|yml|tf|hcl|sh|bash|cfg|conf|ini|env|xml|gradle|properties)"
+# The list must stay a superset of aggregate.py's FL pattern: on a real engagement whose `iac` ecosystem
+# was five GitHub workflows, `.yml` was absent here but present there, so every workflow an auditor had
+# verdicted still read as uncited residue — the reconciler reported a coverage gap that did not exist.
 
 # ---------------------------------------------------------------- enumerated sources
 rows = []
@@ -43,6 +48,15 @@ elif os.path.exists(inv):
             at = s.get("at")
             if not at or ":" not in at: continue
             rows.append({"at": at, "in": s.get("in", ""), "name": s.get("name", ""), "service": svc, "route": route})
+    # A library / CLI / queue-only module exposes no HTTP routes (entry_points: []) but recon still records
+    # its entry surface — exported functions, commands, consumers — under exported_surface[] with the same
+    # sources[] shape. Reconcile those too, or a route-less repo reconciles to "nothing to check" (live run).
+    for ex in data.get("exported_surface", []) or []:
+        route = f"export {ex.get('name', '?')}" + (f" ({ex.get('handler')})" if ex.get("handler") else "")
+        for s in ex.get("sources", []) or []:
+            at = s.get("at")
+            if not at or ":" not in at: continue
+            rows.append({"at": at, "in": s.get("in", ""), "name": s.get("name", ""), "service": ex.get("component") or "exported", "route": route})
 else:
     print(f"no enumerated sources found ({tsv} or {inv}); nothing to reconcile", file=sys.stderr)
     sys.exit(0)

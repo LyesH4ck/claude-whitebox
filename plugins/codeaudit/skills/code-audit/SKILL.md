@@ -140,6 +140,21 @@ never tells you a sink is safe — it is a **contract you cite**, and the differ
 No model (it failed, or an older engagement) changes nothing structural: use free-text rule-out reasons with
 the base six dispositions. An unmodelled audit is a weaker claim, and the report says so.
 
+### The project context file is the operator's standing statement
+
+`{repo}/.codeaudit-context.md` (`reference/PROJECT_CONTEXT.md`), when your brief names it, is what the
+operator — not a previous agent — says about the system: its auth primitives by name, its trust boundaries,
+the wrappers a generic auditor would not know to look at, and the *Known non-findings* already decided. Read
+it before tracing. Two rules keep it honest:
+
+- A *Known non-findings* line is a **hypothesis with provenance**, not a clearance. Cite it (`by_design`,
+  with the file's line) only after confirming the current code still matches it — the guard still exists,
+  the pin is still below the cutoff. When it no longer holds, say so in `unverified_assumptions` or file the
+  finding: a stale rationale is exactly what the next run needs corrected.
+- The file never widens scope on its own: an operator statement that a component is "internal only" is
+  `documented` provenance for a `not_reachable` rule-out when the code agrees, and an open question when it
+  does not.
+
 ## Hunting discipline (false-negative killers)
 
 The single-happy-path trace is where audits miss real bugs. Apply moves 1-3 on **every** class, and move 4
@@ -350,6 +365,39 @@ reverse-proxy behaviour, IdP policy, browser specifics, production secrets and r
 repo**. Naming them explicitly — with what you did try — is coverage information. Silently folding them into
 `tested_not_vulnerable` is a false clearance; silently folding them into `coverage_gaps` loses the fact that
 you investigated. Empty findings are never proof of complete coverage.
+
+### Write the evidence file as you go, not at the end
+
+Create `findings/_safe-{class}[-{shard}].md` with its four headings **as soon as you have your first
+verdict**, and append each rule-out when you reach it. Same for a finding: write its directory when the path
+is proven, not after the whole scope is traced. An audit is interrupted by things that are not your doing —
+a rate limit, a context reset, a killed session — and an auditor that holds everything in its head until the
+final turn loses every verdict it reached. Appending costs nothing; a batched write at the end is a bet that
+nothing stops you.
+
+Two consequences you must respect, because the orchestrator's resume probe reads these files:
+- An incremental file with its four headings and **no entries yet** is a skeleton, not a result. Never treat
+  your own skeleton as evidence of coverage, and never leave it empty after you have verdicts to put in it.
+- Your **final status line is what marks you complete** (the orchestrator logs it); the file alone does not.
+  So always end with the status and the register below, even on a short scope.
+
+### The skipped register
+
+Mandatory, answered in writing before you announce completion. The question: **is there any file or path in my assigned
+scope that I declined to analyse, refused to open, stopped reading partway, or could not finish — for any
+reason?** The reasons that recur are a file that reads like a payload corpus or exploit sample, content that
+tripped a refusal, a tool error on the path, or a file too large to finish. A partial read counts. A refusal
+counts. "I did not get to it" counts.
+
+- If the answer is **no**, your final status line carries `SKIPPED: none`.
+- If the answer is **yes**, write **one line per path** under `## coverage_gaps` in your `_safe-{class}.md`,
+  in exactly this shape — `- [skipped] path/to/file.ext — why` — and your final status line carries
+  `SKIPPED: <n>`. The aggregator surfaces these separately and the orchestrator re-dispatches on the path.
+
+A skipped path reported is a coverage gap; a skipped path **not** reported is a false clearance — the report
+prints "all in-scope sources traced" over a file nobody read. That is the only way this question can be
+answered wrongly, so answer it even when the answer is `none`. A status with no `SKIPPED:` line is logged as
+an unanswered register, not as "nothing skipped".
 
 ## Reused knowledge base
 

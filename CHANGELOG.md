@@ -4,6 +4,332 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.83] — 2026-10-28
+
+### Fixed — `codeaudit` 0.21.1: `aggregate`, `render` and `reconcile` print their usage instead of a traceback
+
+Called with no argument the three oldest tools raised `IndexError: list index out of range` on
+`sys.argv[1]`, while the four newer ones print a usage line. The pipeline always passes the output root, so
+this never fired during an engagement — it fired on an operator typing the command by hand to re-render a
+report, which is exactly when a stack trace is least informative. All seven now print their docstring and
+exit 2.
+
+## [2.4.82] — 2026-10-28
+
+### Fixed — `codeaudit` 0.21.0: the carry-forward proposal respects the context file's budget
+
+Step 6.7 on the deepsec engagement offered **134 additions** to a file whose stated budget is 40–120 lines,
+several of them a full paragraph. `context.py propose` collected every `design_properties` entry and every
+`by_design` rule-out with no ranking, no length limit and no awareness of the file it was proposing to grow.
+Applied wholesale it would have produced exactly what `PROJECT_CONTEXT.md` warns against: a file so verbose
+that the next run's briefs carry a transcript instead of the handful of statements an auditor would get
+wrong without it.
+
+`propose` now ranks (**accepted-risk** first — they are decisions and nothing else records them; then
+**version-gated**, which expire on upgrade; then **by_design**, shortest first, because a one-line citation
+is the kind that survives being read in a brief), clips each line to 260 characters at a word boundary, and
+caps the total at the file's actual remaining headroom against the 120-line budget. What does not fit is
+reported as a count with the reminder that it is **not lost** — it is in the report's own
+`design_properties` and `tested_not_vulnerable` arrays, which is where a transcript belongs. On the live
+engagement: 141 candidates → 51 proposed, 90 left in the report.
+
+## [2.4.81] — 2026-10-28
+
+### Fixed — `codeaudit` 0.20.0: three tool defects a 62-finding engagement exposed
+
+The deepsec engagement (18 auditor instances, 2 sweeps, 62 findings, 470 dispositioned rule-outs) is the
+first run large enough to exercise the Step 6.5/6.6 tools at scale. Each of these was invisible on the
+4-finding fixtures.
+
+- **`reconcile.py` could not see a YAML path.** Its `EXT` pattern listed source extensions only, while
+  `aggregate.py`'s `FL` already accepted `yml`. On a target whose entire `iac` ecosystem is five GitHub
+  workflows, every workflow an auditor had verdicted still read as uncited residue — the reconciler reported
+  a coverage gap that did not exist (8 uncited, of which 7 were workflows). Both patterns are now the same
+  widened list, with a comment saying they must stay in sync. Residue on the live run: 8 → 1, and the
+  remaining one is a genuine recon contract violation (several paths in a single `sources[].at`).
+- **`aggregate.py` parsed severity strictly while being lenient about confidence and privilege.** An auditor
+  writing `**Severity**: informational (hardening — no in-model adversary …)` — the same shape the contract
+  explicitly blesses for `**Confidence**: probable (platform fact …)` — lost its severity entirely: 4 of 62
+  findings, which then **crashed the dry-run printer** on the resulting `None`. Severity now takes the
+  leading enum token and keeps the remainder as `severity_note`; the printer is crash-proof.
+- **`aggregate.py` demanded a request `source` of classes that have none.** `REPORT_CONTRACT` says the
+  non-request classes (secrets, crypto, deps, config, logging) get no `endpoint`, yet the file:line
+  requirement — whose only purpose is endpoint resolution — was applied to all of them: 9 noise violations
+  out of 18. It is now scoped to request-reachable classes. Real violations on the live run: 18 → 5, and all
+  5 are genuine auditor-side format defects (repaired in-session by their authors).
+
+## [2.4.80] — 2026-10-28
+
+### Added — `codeaudit` 0.19.0: the preflight says which scanners are on PATH
+
+Mid-engagement on deepsec, the deps auditor reported that `osv-scanner` 2.4.0 and working network access were
+available **contrary to its brief** — the orchestrator had briefed every auditor `tools_available: none`
+without running the command's Step 4 probe. gitleaks, trufflehog, pip-audit, govulncheck, trivy and pandoc
+were all installed. The cost was not a missed finding (gitleaks and trufflehog, run afterwards over 243
+commits, agreed with the manual sweep and added nothing) but something subtler: the secrets auditor shipped
+*"no real scanner installed"* as a coverage gap, which was false. A report that understates its own coverage
+is wrong in the same way as one that overstates it.
+
+- **`preflight.mjs` now probes the optional scanners** (gitleaks, trufflehog, osv-scanner, pip-audit,
+  govulncheck, trivy, pandoc) and prints them with the reminder to pass the set as `tools_available`. It
+  warns when no secret scanner and when no vulnerability scanner is present, because those two absences are
+  the ones that change what an auditor may claim. The JSON gains a `scanners` block. Since the preflight is
+  the one command every run starts with, the answer can no longer go unsaid even when an orchestrator skips
+  Step 4.
+- **Step 4 of the command** now says not to guess the probe's answer, and tells the orchestrator that an
+  auditor reporting a tool it was told it did not have is a brief to correct by `SendMessage` to that agent —
+  its session still holds the work — rather than a false limitation to ship.
+- `preflight.test.mjs` +1 (the JSON carries the block, found and absent are disjoint, the human output names
+  them, and a host without a secret scanner is warned).
+
+## [2.4.79] — 2026-10-28
+
+### Fixed — `codeaudit` 0.18.0: an interrupted auditor no longer reads as a finished one
+
+A full engagement on a real repository (deepsec, 17 classes, 18 planned instances) was stopped twice: once by
+an API rate limit that killed five of seven in-flight auditors in the same minute, once by the operator. The
+resume probe then reported one of the dead auditors as **done** — it had written its evidence file's four
+headings as its first act, and headings alone satisfied the old rule. A whole class would have been dropped
+from a report that still said "all in-scope sources traced".
+
+- **`resume.py`: `done` now needs both halves** — the orchestrator's own `auditor-done: complete` log line
+  **and** a four-heading evidence file. Either alone is `partial`, with `why_partial` naming the case and an
+  `evidence_entries` count separating a killed agent's skeleton (headings, zero entries) from finished work
+  whose log line is missing. Over-reporting `partial` costs a re-dispatch; under-reporting costs a class.
+  Finding counts are now per-class (the `finding-{prefix}-` map from `REPORT_CONTRACT.md`) instead of
+  matching every class's directories.
+- **`SKILL.md` → *Write the evidence file as you go*** — create the four headings at the first verdict and
+  append each rule-out as it is reached; write a finding's directory when its path is proven. An auditor that
+  batches every write into its final turn loses everything to an interruption that is not its doing. With the
+  two consequences it must respect: a skeleton is not evidence of coverage, and the final **status line** is
+  what marks it complete. Step 6.4's brief carries the same instruction.
+- **Step 6.0b now names the interruption that actually happens** (the model API refusing: rate limit or
+  exhausted credits, killing every in-flight agent at once) ahead of crashes and context resets, and tells the
+  orchestrator to read a finished-looking `partial`'s last entries and log the missing line itself rather
+  than paying for the class twice.
+- `tools.test.mjs` +2 assertions (skeleton stays owed; finished-looking file reports why).
+
+## [2.4.78] — 2026-10-27
+
+### Added — `codeaudit` 0.17.0: diff mode, resume, and in-session repair
+
+The last three items of the deepsec comparison — the operational habits of a scanner that runs every day,
+fitted to an orchestrated audit.
+
+- **`/codeaudit:codeaudit-diff`** — an incremental audit of a change. `tools/diff-scope.py` resolves the
+  changed set (`--ref` merge-base diff, `--working`, `--staged`, `--files`), drops vendored/test/out-of-scope
+  files, and expands by one import hop each way (importers: where a changed helper becomes reachable;
+  imports: what a changed handler now reaches — regex-resolved for JS/TS, Python, Ruby, PHP, Go). The command
+  reuses the repository's standing baseline by path (`.codeaudit-context.md`, the latest full engagement's
+  recon and threat model, its report as `--previous`, the accepted-risk file), runs recon on the slice only
+  when no baseline exists, plans one wave scoped to the slice, verifies every finding, skips the sweep, and
+  reports **net-new** findings by fingerprint. `render.py --pr-comment` writes a review-sized
+  `pr-comment.md` of the new findings only — nothing on a green run — for a workflow to post from a job that
+  runs no PR code. Carry-forward (Step 6.7) runs at the end.
+- **Resume (Step 6.0b).** `tools/resume.py` classifies each phase of an existing `outputs/{engagement}` as
+  done / partial / missing from artifacts alone — recon files and parse, coverage gate, threat model, plan,
+  per-deployment four-heading `_safe-` files, reconciliation, sweep log line, verification files, report —
+  and names the first step to resume from and the auditors still owed. The command asks **Resume / Start
+  over (renames, never deletes) / Cancel** before initializing, and dispatches only the owed auditors.
+- **In-session repair (Step 6.6).** Every dispatched agent's id is logged; a `contract_violations` line
+  naming a finding or evidence file is sent to its author via `SendMessage` with the exact violation and
+  the instruction to repair only that field — the session still holds the trace, so it costs one short turn.
+  A repair-only `Task` is the fallback when the agent is gone; a full re-audit over a formatting defect is
+  never the answer. The unanswered skipped register uses the same channel.
+- Preflight tools check now reads every command file (7 tools); `tools.test.mjs` +3 (resume probe,
+  diff-scope with a real git history, pr-comment with and without new findings).
+
+### Fixed — the coverage gate converges on a repository full of false marker hits
+
+First full run of 0.16 on a real repository (deepsec itself): 46 of its 50 route-shaped files are its own
+matcher corpus — example strings that look like Express routes and Next.js server actions — and two more
+are prompt templates quoting route syntax. The gate failed at 4 % covered and had no way to accept recon's
+answer that these are not entry points. `sink-inventory.json` gains `not_entry_points[]` (`{file|glob,
+what}`); `recon-coverage.py` removes an explained file from the denominator **only when a `what` is given**
+and lists it under `explained[]`; code-recon is told to use it on a residue and never to hide a real entry
+point in it. The command sends recon back via `SendMessage` (session intact) before falling back to a new
+`Task`. `tools.test.mjs` +1 (explained with a reason passes; a bare glob does not).
+
+## [2.4.77] — 2026-10-27
+
+### Added — `codeaudit` 0.16.0: the recon-coverage gate (the check on the check)
+
+`reconcile.py` proves every source recon enumerated got a verdict. It cannot see the files recon never
+enumerated, and recon, the threat model and the planner can all miss the same family of routes at once —
+after which no auditor is sent there and the report still prints "all in-scope sources traced". Only the
+blind-dig sweep could catch it, one directory per run.
+
+- **`tools/recon-coverage.py`** (Step 6.2, right after recon, before the threat model): lists every tracked
+  source file carrying a route-shaped marker for its language — route registrations, HTTP-method exports,
+  controllers, server actions, queue consumers, cron/webhook/lambda handlers, across JS/TS, Python, PHP,
+  Ruby, Go, JVM, C#, Rust, Elixir, Swift, Dart — minus vendored/generated/test trees and the operator's
+  `out_of_scope`, and checks each against the handler files in `entry_points[]` / `exported_surface[]`.
+  Policy v1: a directory of ≥3 route-shaped files with none covered fails; under 50 % covered overall (≥5
+  files) fails; a language with ≥20 source files and no marker hit warns (the table may not know the
+  stack). Writes `recon/_coverage.json`, prints the residue by directory, exit 1 on a failed gate.
+- **The command** re-dispatches recon once on the residue (as `focus`, extend-never-rewrite), re-runs the
+  gate, and carries anything still uncovered into `coverage_gaps`. A short residue on a passing gate is
+  read, not recorded: a marker hit on a test helper or an example string is noise. **code-recon** is told
+  its inventory is measured and must carry a `file:line` handler for every entry.
+- `tools.test.mjs` +2 (missed family fails / covered passes with residue / absolute handler paths / no
+  inventory; out_of_scope exclusion + silent-language warning); preflight tools count 5.
+
+## [2.4.76] — 2026-10-27
+
+### Added — `codeaudit` 0.15.0: fail-open shapes, infrastructure-as-code, and the stacks with no reference file
+
+Knowledge ported from deepsec's matcher catalogue (Apache-2.0, attributed in `plugins/codeaudit/NOTICE`) and
+re-expressed in this plugin's verdict discipline — rules and `rg` seeds, never a scanner.
+
+- **Fail-open and bypass shapes.** A new section in `ecosystems/node.md` (with seeds under *Commands*) and a
+  language-agnostic list in `SINK_CATALOG.md`: a security flag read as a truthy string (`DISABLE_AUTH=false`
+  disables nothing), security gated behind a feature flag, test/debug/bypass headers honoured in production,
+  dev-mode auth shortcuts, a cron secret that disables itself when unset, spread order on a write and
+  `passthrough()`/`.values(body)`, missing `await` on a lock or transaction, read-then-delete TOCTOU, cache
+  keys without a principal, redirect-following after a one-time allowlist, host validation by wildcard
+  regex, git-provider URLs built from input, JSON in a script slot, filesystem writes with no symlink
+  boundary, the Next.js family (server actions, catch-all routes, internal headers, image-optimiser
+  allowlist, page-level fetch by param), tRPC `publicProcedure` reaching the session, LLM loops with no step
+  cap, secrets interpolated into system prompts. Each is a *decision* to read, not a sink — the fail-open
+  question from `SKILL.md`, applied where pattern-matchers look and trace-readers skim.
+- **`ecosystems/iac.md`** — Terraform/HCL, Dockerfiles, Kubernetes manifests and GitHub workflows, additive
+  like `graphql.md`, owned by the config (misconfiguration, public exposure, workflow injection), secrets
+  (plaintext in manifests, image layers, workflow logs) and deps (unpinned modules, actions, base images)
+  auditors — each got a paragraph saying so. Carries the defaults that decide verdicts: S3 encrypted by
+  default since 2023-01, `pull_request_target` runs with base secrets, expression injection into `run:`,
+  Secrets are base64 not encryption, containers run as root unless told otherwise, tags float and digests
+  do not.
+- **`ecosystems/other.md`** — threat highlights for Rust (Actix/Axum/Rocket/Warp/Tide/Poem/Tonic/Lambda),
+  Elixir, Swift, Dart, Lua/OpenResty, Clojure, Erlang, Crystal, Apex, Android/iOS and serverless handlers.
+  Honest about what it is: **no version cutoffs** — recon routes to it *and* still records the stack under
+  `uncovered_relevant_categories`, so the report says version facts were not compared.
+- Recon's ecosystem key enum gains `iac` and `other` (the preflight's enum check routes mechanically);
+  `ecosystems/README.md` routing table updated; Bun/Deno/Workers get their "no framework gate" paragraph in
+  `node.md`.
+- **Two eval fixtures** for the traps, each with a safe sibling: `env-flag-truthy` (truthy `DISABLE_AUTH`
+  with `deploy/env.production` as the witness; sibling `=== 'true'`) and `spread-order-mass-assignment`
+  (`{ role, ...req.body }`; sibling `pick(body, PROFILE_FIELDS)`).
+
+## [2.4.75] — 2026-10-27
+
+### Added — `codeaudit` 0.14.0: a project context file that outlives the engagement
+
+The threat model is the audit's contract and dies with `outputs/{engagement}/`; the next run re-derives
+"the admin router is intentionally unauthenticated behind the VPN" from scratch and may answer differently.
+`{repo}/.codeaudit-context.md` is the operator-owned, committed, 40–120-line answer that survives:
+
+- **Five fixed headings** — what the codebase does, auth shape (primitives by name, no line numbers), trust
+  boundaries and adversaries, project-specific patterns to flag, and *Known non-findings* as
+  `[by_design] | [accepted-risk] | [version-gated]` lines with their evidence. Spec in
+  `reference/PROJECT_CONTEXT.md`.
+- **Seeded by the threat-modeler** when absent (stamped as agent-written, built from `documented` claims
+  only), **read first** by it afterwards as the highest-authority written source after `SECURITY.md`
+  (`source: ".codeaudit-context.md:<line>"`), read by recon to orient, passed to every auditor and to the
+  finding-verifier — and **withheld from the blind-dig sweep**, whose isolation is the method.
+- **A *Known non-findings* line is a hypothesis with provenance, never a clearance** (`SKILL.md` → *The
+  project context file*): cited as `by_design` only after the current code is confirmed to still match it; a
+  stale rationale is reported, which is how the file gets corrected.
+- **Step 6.7 carry-forward** — `tools/context.py propose` turns the run's design properties, accepted risks
+  and version-gated rule-outs into candidate lines the file does not already carry; the operator approves
+  (Apply all / edit the list / Skip) before `tools/context.py apply` appends them, idempotently. Nothing
+  writes to the file without that answer.
+- `tools/context.py check` and `preflight.mjs --repo` validate headings, budget and leftover seed
+  placeholders. `tools.test.mjs` +1 (check / propose / apply), `preflight.test.mjs` +1.
+
+### Fixed — two things the live pass showed
+
+- **Nested checkouts are tracked.** Recon, the command's scope check, the scope command and the preflight all
+  tested for a `.git` directory at the repo path; a service inside a monorepo or a fixture inside this
+  repository has none and is fully tracked. On the live pass recon told every auditor prior-art was
+  unavailable over tracked files. All four now ask `git rev-parse --is-inside-work-tree`.
+- **A route-less module reconciles its exported surface.** `entry_points: []` is correct for a library,
+  CLI or queue-only module, but `reconcile.py` then had nothing to check and printed a clean result over an
+  untouched surface. Recon now records `exported_surface[]` (same `sources[]` shape) and the reconciler
+  reads both arrays. `tools.test.mjs` +1.
+
+## [2.4.74] — 2026-10-27
+
+### Added — `codeaudit` 0.13.0: independent verification of every serious finding (Step 6.5c)
+
+An auditor that has just traced a path is the least adversarial reader of that path. codeaudit-hybride had
+the answer — a second agent whose job is to refute — but only when Codex was in the loop. It is now in the
+core pipeline, between the adversarial sweep and aggregation.
+
+- **`agents/finding-verifier.md`** — receives a batch of ≤6 finding directories and nothing else (no
+  `_safe-*.md`, no recon, no plan, no previous report — the orchestrator is told the independence is its
+  job to protect). Per finding: open the sink, rebuild the path backwards, hunt the refutation in cost order
+  (ecosystem *Safe or non-reportable forms* row → same-variable sanitizer for the slot → non-controllable
+  source → unreachable sink → subsuming precondition → framework default at the pinned version), check git
+  history, ask the fail-open question, then write `verification.md` next to the claim: `confirmed` /
+  `refuted` / `uncertain`, with a `[disposition]` + cited `file:line` **required** for a refutation — "no
+  citation → uncertain" is the rule, as in the hybride verifier. Carries the skipped register.
+- **`aggregate.py`** parses `verification.md`: `confirmed` keeps the finding (adjusted severity → a recorded
+  `severity_revision` by the verifier, caps still apply; adjusted confidence replaces the filer's);
+  `uncertain` holds confidence at `probable`; a cited `refuted` leaves `findings[]`, lands under
+  `tested_not_vulnerable` with that disposition, and is listed under a new top-level `refuted[]` so the
+  removal is visible. An uncited refutation is downgraded to `uncertain` with a violation. A merged
+  duplicate's verdict is adopted when the canonical has none. `--verified-min <severity>` turns every open
+  finding at or above that band with no verdict into a `coverage_gaps` entry (`kind: unverified`).
+  `orchestrator_adjustments.verification_overrides[]` reinstates a refuted finding as `uncertain` when the
+  cited line does not discharge it — reason required, recorded on the finding.
+- **`/codeaudit:codeaudit` Step 6.5c** — select every `high`/`critical` after caps (all findings when the
+  set is ≤12), batch by six, one parallel `Task` message, collect like auditors, spot-check every refutation
+  of a high/critical by opening the cited line, pass `--verified-min high` to the aggregator.
+- **`render.py`** — per-finding *Independent verification* line, a *Refuted by Independent Verification*
+  section, the verification tally in the executive summary, a `verification` column in the CSV and
+  property in SARIF (a refuted finding is not a SARIF result). `REPORT_CONTRACT.md` (`revalidation`,
+  `refuted`, `verification_overrides`), `OUTPUT_STRUCTURE.md` (file format), `WORKFLOWS.md` (step 6b)
+  updated; `preflight.mjs` includes the verifier in the skipped-register check. `tools.test.mjs` +4.
+
+### Fixed — `aggregate.py`: a wrapped evidence bullet is one entry
+
+Validated 0.12–0.13 on a live pass (recon → auth + access-control auditors → finding-verifier → tools →
+eval judge, on the `jwt-version-gate` fixture: judge PASS, both auditors answered the skipped register, both
+`verification.md` parsed, the version-gated safe sibling was ruled out citing 9.0.2). The one defect it
+surfaced: auditors wrap long `unverified_assumptions` bullets over indented continuation lines, and the parser
+read only the first line — the "still needs" half was lost and a well-formed assumption was logged as a
+shrug. Continuation lines are now joined to their bullet before parsing (+ 1 regression test).
+
+## [2.4.73] — 2026-10-27
+
+### Added — `codeaudit` 0.12.0: the skipped register, and findings that keep their identity across runs
+
+Two things borrowed, in spirit, from how a scanner that runs every day has to behave — neither changes a
+verdict; both change what a report can honestly claim.
+
+- **The skipped register.** An auditor that refuses a file (a payload corpus, a content filter, a tool error, a
+  file too large to finish) does not fail — it says `complete`, and the report prints "all in-scope sources
+  traced" over code nobody read. Every auditor and the adversarial sweep now end their status with
+  `SKIPPED: none` or `SKIPPED: <n>`, the paths written as `- [skipped] path — why` under `coverage_gaps` of
+  the `_safe-` file (`SKILL.md` → *The skipped register*, `OUTPUT_STRUCTURE.md`). `aggregate.py` keeps the
+  path verbatim, tags the entry `kind: skipped`, exposes `skipped_paths[]`; `render.py` prints them as their
+  own section; Step 6.5 re-dispatches on them (a different agent of the same class when the reason was a
+  refusal) and treats a status with no `SKIPPED:` line as an unanswered register, not a clean one;
+  `preflight.mjs` blocks an auditor prompt that stopped asking (+ 1 test in the failing direction).
+- **Stable fingerprints.** Every finding carries `fingerprint`: `fp_` + 16 hex of (class, sink file, sink
+  expression, slot, source expression, source file). No line number goes in, so an unrelated edit above the
+  sink, an id renumbering or a reworded title keep the identity; a renamed sink file reads as new (documented).
+  Identical material at two lines of one file gets `-2`, `-3` suffixes in sink-line order. SARIF carries it as
+  `partialFingerprints["codeaudit/fingerprint"]`; the CSV gains `fingerprint, status, change, first_seen`.
+- **`--previous <older codeaudit-report.json>`** diffs by fingerprint: each finding becomes `new` or
+  `persisting` (`first_seen` inherited through successive reports, `previous_id` kept), the report gains
+  `run_diff` and a *Changes Since Previous Run* section, SARIF gets `baselineState`. `not_refound[]` is stated
+  everywhere as **a list to verify, never a list of fixes** — a finding vanishes just as easily because recon
+  missed its file. An older report with no fingerprints is recomputed, not rejected.
+- **`--accepted <.codeaudit-accepted.json>`** — operator-owned, committed at the repo root, `{ fingerprint,
+  reason, by, date, expires }`. A matching finding becomes `status: accepted-risk`: it stays in `findings[]`
+  with its rating untouched, leaves `summary` (which gains `accepted_risk`), and becomes a SARIF
+  `suppressions[]` entry. An acceptance is **never inherited** from an older report — a finding accepted
+  last run with no entry now comes back `open` with a recorded violation — and an entry matching nothing is
+  listed under `aggregation_stats.accepted_unmatched` (the usual cause is a sink rename, which is the moment
+  to re-read the acceptance).
+- Scope gains an optional `previous_report`; `/codeaudit:codeaudit` Step 2 resolves it (or offers the most
+  recent report of the same repo found under `outputs/`) and the accepted-risk file, echoes both, and Step
+  6.6 passes them to the aggregator. `REPORT_CONTRACT.md` documents `fingerprint`, `change`, `first_seen`,
+  `previous_id`, `accepted`, `run_diff`, `skipped_paths`, the accepted-risk file, and the new meaning of
+  `summary`. `tools.test.mjs` +6 tests (line move, ordinal suffixes, previous diff incl. a legacy report,
+  acceptance, non-inherited acceptance, render/CSV/SARIF end to end).
+
 ## [2.4.72] — 2026-10-27
 
 ### Fixed — `pentest` 2.6.0: the knowledge base is addressed through the plugin root, not the launch directory

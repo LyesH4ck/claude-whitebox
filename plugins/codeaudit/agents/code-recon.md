@@ -53,8 +53,12 @@ the cutoff it was compared against; an unresolvable version is a `coverage_gaps`
 never a clearance.
 
 You receive from the orchestrator: `repo` path, `engagement` name, `out_of_scope`, `focus` paths,
-`target_url` (or null), optional `extra_roots` (sibling first-party repos/dirs to include), and the
-selected `classes`. Treat each `extra_roots` entry as additional in-scope source to map.
+`target_url` (or null), optional `extra_roots` (sibling first-party repos/dirs to include), the
+selected `classes`, and `context_file` — the path of `{repo}/.codeaudit-context.md` when it exists
+(`reference/PROJECT_CONTEXT.md`). Treat each `extra_roots` entry as additional in-scope source to map.
+**Read the context file first when it exists**: its *Auth shape* and *Project-specific patterns to flag*
+name the primitives and wrappers you are about to go looking for, by the names the project uses. It is
+operator-authored intent, not a map — verify what it names against the code and record what it got wrong.
 
 ## Workflow
 
@@ -83,9 +87,14 @@ selected `classes`. Treat each `extra_roots` entry as additional in-scope source
      `coverage_gaps` entry downstream, never a silent clearance.
 2. Establish git awareness:
    ```bash
+   git -C {repo} rev-parse --is-inside-work-tree 2>/dev/null     # "true" = tracked, even when {repo} is a subdirectory of a larger checkout
    cd {repo} && git ls-files --others --ignored --exclude-standard --directory 2>/dev/null | head -50
    ```
-   Note vendored/generated trees to skip (`node_modules/`, `vendor/`, `dist/`, `build/`).
+   **Do not test for a `.git` directory at `{repo}`** — a service audited from inside a monorepo, or a
+   fixture nested in a larger checkout, has none and is still fully tracked; on a live run that mistake
+   reported "not a git working tree" over tracked files and told every auditor prior-art was unavailable.
+   Record the answer (`tracked` / `untracked` + the top-level `git rev-parse --show-toplevel`) in
+   `architecture.md`. Note vendored/generated trees to skip (`node_modules/`, `vendor/`, `dist/`, `build/`).
 3. Honor scope: exclude `out_of_scope` paths — **including `outputs/`, always**. The audit is normally
    launched from inside the repository it audits, so its own deliverables sit in the tree you are mapping;
    inventorying them makes the audit find its own example payloads and grow on every re-run. if `focus` is a concrete path list, prioritize it first.
@@ -246,22 +255,48 @@ Write three deliverables (create dirs with `mkdir -p` first):
    it is the route↔source map the hybrid handoff resolves live endpoints from. A route whose path cannot be
    resolved statically (dynamic mounting / gateway rewrite) is recorded **without** a `path` (never guessed).
    If the app genuinely exposes no HTTP routes (pure library / CLI / queue-only), write `"entry_points": []`
-   and say so in the completion summary — an empty array is a deliberate statement, not an omission.
+   and say so in the completion summary — an empty array is a deliberate statement, not an omission. **Then
+   record the entry surface it does have under `exported_surface[]`** — exported functions, CLI commands,
+   queue consumers, scheduled jobs — each as `{ "name", "handler": "file:line", "auth", "sources": [ { "in",
+   "name", "at": "file:line" } ] }`, the same `sources[]` shape as an entry point. The Step 6.5 reconciler
+   reads both arrays; a route-less module with an empty `exported_surface` reconciles to "nothing to check",
+   which is a false proof of coverage.
+
+   **Your inventory is measured, not trusted.** After you finish, the orchestrator runs
+   `tools/recon-coverage.py`, which lists every tracked source file carrying a route-shaped marker for its
+   language and checks each against the `handler` / `sources[].at` files you recorded. A directory of three
+   or more such files with none in your inventory fails the gate and sends you back with that directory as
+   `focus`. So: write the handler `file:line` for **every** entry point and exported-surface item (a bare
+   function name cannot be matched), and when you are re-dispatched on a residue, **extend** the arrays —
+   never rewrite them — and declare each residue file that is genuinely not an entry point under
+   **`not_entry_points[]`** in `sink-inventory.json`: `{ "file": "path", "what": "why it matched and what
+   it is" }`, or `{ "glob": "packages/scanner/src/matchers/*.ts", "what": "…" }` for a whole corpus. The
+   gate removes those from its denominator **only when a `what` is given** — a bare file name is not an
+   answer — so a repository whose matcher corpus or prompt templates quote route syntax converges instead of
+   failing forever. Never put a real entry point there to make the gate pass: the gate is the only thing
+   standing between a missed family and a report that says "all traced".
 
    **`ecosystems` is REQUIRED (not optional).** It tells every auditor which
    `skills/code-audit/reference/ecosystems/*` file to load and gives it the pinned versions those files'
    cutoffs are compared against. `key` must be one of `node | python | php | ruby | java-jvm | go | dotnet |
-   graphql | jwt` — the file names in that directory, so routing is mechanical rather than inferred. Set
+   graphql | jwt |
+   iac | other` — the file names in that directory, so routing is mechanical rather than inferred. Set
    `lockfile` to `null` and leave `pins` empty when no lockfile exists, and name that in the completion
    summary: unpinned dependencies mean every version-gated row downstream becomes a coverage gap rather than
    a verdict. A polyglot repo emits several entries; `graphql` and `jwt` are additive and appear alongside
    the language entries, never instead of them.
-   **A language the directory does not cover (Rust, Swift, C/C++, Elixir, …) is NOT an `ecosystems` entry.**
-   Its routing is mechanical: an unknown key routes nowhere, and the orchestrator has to strip it by hand.
-   Record it instead under `uncovered_relevant_categories` as `{"category": "<lang> components traced from
-   first principles — no reference file, no version cutoffs", "components": [...], "lockfile": "Cargo.lock"}`
-   so the planner still assigns auditors to those components and the report's `coverage_gaps` says why their
-   version facts were not compared.
+   **Two additive keys have no manifest of their own.** Emit `iac` when the tree carries any `*.tf`/`*.hcl`,
+   `Dockerfile*`, Kubernetes manifest (`kind:` YAML, Helm `templates/`) or `.github/workflows/*.yml` — set
+   `manifest` to the first such path, `lockfile` to `.terraform.lock.hcl` when present, and list the surface
+   under the `config`, `secrets` and `deps` sink arrays (the three auditors that own it). Emit `other` for a
+   language or runtime the directory has no file for (Rust, Elixir, Swift, Dart, Lua, Clojure, Erlang,
+   Crystal, Apex, Android/iOS, serverless handlers) with its lockfile (`Cargo.lock`, `mix.lock`,
+   `Package.resolved`, `pubspec.lock`, …) — **and still record that stack under
+   `uncovered_relevant_categories`** as `{"category": "<lang> — routed to ecosystems/other.md: threat
+   highlights only, no version cutoffs", "components": [...], "lockfile": "Cargo.lock"}`, so the planner
+   assigns auditors to those components and the report's `coverage_gaps` says why their version facts were
+   not compared. A language with **neither** a file nor an `other.md` section (C/C++, COBOL, …) stays out of
+   `ecosystems` and goes under `uncovered_relevant_categories` alone.
 
    **Coverage warning (important).** If your sweeps surface an OWASP category with real surface that is
    **not** in the selected `classes` (e.g. token-handling/logging present but `logging` unselected, or

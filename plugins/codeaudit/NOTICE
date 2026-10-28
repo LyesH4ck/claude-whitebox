@@ -1,0 +1,12 @@
+codeaudit — white-box source code security audit plugin
+Copyright (c) 2026 Christophe Bailleux. Licensed under the MIT License (see ../../LICENSE).
+
+Third-party attribution
+
+Parts of the pattern knowledge in skills/code-audit/reference/ — the fail-open and bypass shapes in
+ecosystems/node.md and SINK_CATALOG.md, the infrastructure-and-CI rules in ecosystems/iac.md, and the
+per-stack threat highlights in ecosystems/other.md — were derived from the matcher catalogue and
+per-technology threat highlights of deepsec (https://github.com/vercel-labs/deepsec), Copyright Vercel, Inc.,
+licensed under the Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0). The text here is
+a re-expression in this plugin's verdict methodology, not a copy of deepsec's source; no deepsec code is
+redistributed.

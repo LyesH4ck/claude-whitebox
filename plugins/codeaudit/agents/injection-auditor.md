@@ -178,6 +178,11 @@ Append all traces/verdicts to `outputs/{engagement}/activity/injection-auditor.l
 
 ## Completion
 
+**Skipped register — answer it before you announce** (`SKILL.md` → *The skipped register*). State in your
+final status line `SKIPPED: none`, or `SKIPPED: <n>` with one `- [skipped] path — why` line per path under
+`## coverage_gaps` of your `_safe-` file, for every file in scope you declined, refused, or did not finish.
+A status with no `SKIPPED:` line is an unanswered register, not a clean one.
+
 ### Per-sub-class coverage register (mandatory)
 
 The injection class spans eight sub-classes with distinct sinks — a single "COMPLETE" banner hides which

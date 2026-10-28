@@ -205,6 +205,29 @@ function checkSafeFileContract() {
   return H.length;
 }
 
+/**
+ * The skipped register. Every auditor must end its status with `SKIPPED: none|<n>` and write skipped paths
+ * as `[skipped]` lines the aggregator parses. An agent that lost the instruction does not fail — it reports
+ * `complete` over a file it never read, and the report prints "all in-scope sources traced" above it. The
+ * three pieces (agent prompt, methodology, parser) must agree, so each is checked.
+ */
+function checkSkippedRegister() {
+  let checked = 0;
+  const agents = agentFiles().filter((f) => /-auditor\.md$|adversarial-sweep\.md$|finding-verifier\.md$/.test(f));
+  for (const f of agents) {
+    checked++;
+    if (!/SKIPPED:\s*none/.test(read(f))) {
+      blocking('skipped-register', `${path.basename(f)} never asks for the skipped register (SKIPPED: none|<n>)`,
+        'An auditor that is not asked whether it skipped a file answers nothing, and nothing reads as "all traced".');
+    }
+  }
+  const skill = read(path.join(PLUGIN, 'skills/code-audit/SKILL.md'));
+  if (!/###\s+The skipped register/.test(skill)) blocking('skipped-register', 'SKILL.md has no "The skipped register" section', 'Agents point at it by name.');
+  const agg = read(path.join(PLUGIN, 'tools/aggregate.py'));
+  if (!agg.includes('[skipped]')) blocking('skipped-register', 'tools/aggregate.py does not parse `[skipped]` lines', 'Registers would be written and never surfaced.');
+  return checked;
+}
+
 /** Cross-file pointers: reference/X.md and "→ *Section*" must resolve. */
 function checkPointers() {
   const refNames = new Set(mdFiles(REF).map((f) => path.basename(f)));
@@ -284,9 +307,10 @@ function checkArtifacts() {
  * back into prose — reconciliation by eye over hundreds of sources, hand-written reports that drop the
  * evidence sections. Blocking when a tool the command references is absent; warning when python3 is.
  */
-const TOOLS = ['reconcile.py', 'aggregate.py', 'render.py'];
+const TOOLS = ['reconcile.py', 'aggregate.py', 'render.py', 'context.py', 'recon-coverage.py', 'resume.py', 'diff-scope.py'];
 function checkTools() {
-  const cmd = read(path.join(PLUGIN, 'commands/codeaudit.md'));
+  // every command may invoke a tool (codeaudit.md owns most; codeaudit-diff.md owns diff-scope.py)
+  const cmd = mdFiles(path.join(PLUGIN, 'commands')).map(read).join('\n');
   let present = 0;
   for (const t of TOOLS) {
     const p = path.join(PLUGIN, 'tools', t);
@@ -295,11 +319,45 @@ function checkTools() {
       continue;
     }
     present += 1;
-    if (!cmd.includes(`tools/${t}`)) warn('tools', `tools/${t} ships but commands/codeaudit.md never invokes it`, 'Wire it into Step 6.5/6.6 or delete it.');
+    if (!cmd.includes(`tools/${t}`)) warn('tools', `tools/${t} ships but no command file invokes it`, 'Wire it into a command step or delete it.');
   }
   try { execFileSync('python3', ['-c', 'import sys; assert sys.version_info >= (3, 8)'], { stdio: 'ignore' }); }
   catch { warn('tools', 'python3 (>= 3.8) not found on PATH', 'reconcile/aggregate/render will not run; the orchestrator must do those steps by hand.'); }
   return present;
+}
+
+// ───────────────────────────────────────────────────────────── scanners
+
+/**
+ * Optional scanners the deps / secrets / config auditors prefer when present. The command probes these at
+ * Step 4, but an orchestrator driving the pipeline by hand skips steps — and a brief that says
+ * `tools_available: none` when gitleaks is installed makes an auditor record a coverage gap that is simply
+ * false (seen on a real engagement: the secrets sweep ran pattern-only and declared "no real scanner
+ * installed" while gitleaks, trufflehog, osv-scanner, trivy and semgrep were all on PATH). Reporting them
+ * here means the one command every run starts with cannot leave that unsaid.
+ */
+const SCANNERS = {
+  gitleaks: 'secrets', trufflehog: 'secrets',
+  'osv-scanner': 'deps', 'pip-audit': 'deps', govulncheck: 'deps', trivy: 'deps + config (IaC)',
+  pandoc: 'the optional PDF deliverable',
+};
+
+function checkScanners() {
+  const found = {};
+  for (const [bin, who] of Object.entries(SCANNERS)) {
+    try { execFileSync('command', ['-v', bin], { stdio: 'ignore', shell: true }); found[bin] = who; }
+    catch { /* absent */ }
+  }
+  const absent = Object.keys(SCANNERS).filter((b) => !(b in found));
+  if (!found.gitleaks && !found.trufflehog) {
+    warn('scanners', 'no secret scanner on PATH (gitleaks, trufflehog)',
+      'The secrets auditor falls back to pattern + entropy review and records that as a coverage gap — which is correct only if it is true.');
+  }
+  if (!found['osv-scanner'] && !found['pip-audit'] && !found.govulncheck && !found.trivy) {
+    warn('scanners', 'no vulnerability scanner on PATH (osv-scanner, pip-audit, govulncheck, trivy)',
+      'The deps auditor falls back to lockfile version + advisory review; its SCA coverage is partial and must say so.');
+  }
+  return { found, absent };
 }
 
 // ───────────────────────────────────────────────────────────── target
@@ -320,12 +378,39 @@ function checkTarget(repo) {
     blocking('target', `repo "${repo}" does not exist or is not a directory`, '');
     return {};
   }
-  const isGit = existsSync(path.join(repo, '.git'));
+  // A subdirectory of a larger checkout (a service in a monorepo, a fixture nested in this repo) has no
+  // .git of its own and is still fully tracked — ask git, and fall back to the directory test only when
+  // git itself is unavailable.
+  let isGit = existsSync(path.join(repo, '.git'));
+  try {
+    isGit = execFileSync('git', ['-C', repo, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() === 'true';
+  } catch { /* git missing or not a work tree: keep the directory test's answer */ }
   if (!isGit) {
-    warn('target', 'target is not a git repository',
-      'SKILL.md gates findings on `git ls-files` tracking: with no .git, every finding risks being ' +
+    warn('target', 'target is not inside a git work tree',
+      'SKILL.md gates findings on `git ls-files` tracking: with no git history, every finding risks being ' +
       'demoted to informational, which is excluded from the headline count. Audit a checkout, or expect ' +
       'to override that rule.');
+  }
+
+  // The operator-owned project context, when present, must parse — a missing heading or a leftover seed
+  // placeholder is carried into every brief as-is. Same rules as tools/context.py check.
+  const ctx = path.join(repo, '.codeaudit-context.md');
+  let contextFile = null;
+  if (existsSync(ctx)) {
+    const body = read(ctx);
+    const lines = body.split('\n').length;
+    const problems = [];
+    for (const h of ['## What this codebase does', '## Auth shape', '## Trust boundaries and adversaries', '## Project-specific patterns to flag', '## Known non-findings']) {
+      if (!new RegExp(`^${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm').test(body)) problems.push(`missing heading "${h}"`);
+    }
+    if (lines > 120) problems.push(`${lines} lines (budget 120)`);
+    if (body.length > 10000) problems.push(`${body.length} chars (budget 10000)`);
+    for (const p of ['{project name}', '{what}', '3–5 bullets', '3-5 bullets', 'TODO']) if (body.includes(p)) problems.push(`placeholder "${p}" still present`);
+    if (problems.length) {
+      warn('target', `.codeaudit-context.md: ${problems.join('; ')}`,
+        'It is injected into every agent brief as the operator\'s statement; fix it before launching (reference/PROJECT_CONTEXT.md).');
+    }
+    contextFile = { path: ctx, lines, problems };
   }
 
   const found = [];
@@ -352,7 +437,7 @@ function checkTarget(repo) {
       { encoding: 'utf8' }).trim()) || 0;
   } catch { /* best effort */ }
 
-  return { isGit, ecosystems: found, files };
+  return { isGit, ecosystems: found, files, contextFile };
 }
 
 // ───────────────────────────────────────────────────────────── main
@@ -363,23 +448,28 @@ function main(argv) {
 
   const stats = {
     mounts: checkMounts(cwd), agents: checkAgents(), ecosystems: checkEnums(),
-    safe_headings: checkSafeFileContract(), pointers: checkPointers(), artifacts: checkArtifacts(), tools: checkTools(),
+    safe_headings: checkSafeFileContract(), skipped_register: checkSkippedRegister(), pointers: checkPointers(),
+    artifacts: checkArtifacts(), tools: checkTools(),
   };
+  const scanners = checkScanners();
   const target = repo ? checkTarget(path.resolve(repo)) : null;
 
   const blocks = problems.filter((p) => p.level === 'BLOCK');
   const warns = problems.filter((p) => p.level === 'WARN');
 
   if (argv.includes('--json')) {
-    console.log(JSON.stringify({ stats, target, problems, ok: blocks.length === 0 }, null, 2));
+    console.log(JSON.stringify({ stats, scanners, target, problems, ok: blocks.length === 0 }, null, 2));
   } else {
     console.log(`\ncodeaudit preflight — launch dir: ${cwd}`);
     console.log(`  plugin: ${stats.mounts} mount paths · ${stats.agents} agents · ${stats.ecosystems} ecosystem files · ` +
-      `${stats.pointers} pointers · ${stats.artifacts} artifacts · ${stats.tools} tools`);
+      `${stats.skipped_register} skipped registers · ${stats.pointers} pointers · ${stats.artifacts} artifacts · ${stats.tools} tools`);
     if (target) {
       console.log(`  target: ${path.resolve(repo)} — ${target.isGit ? 'git' : 'NOT git'} · ${target.files} files · ` +
         `ecosystems: ${(target.ecosystems || []).map((e) => e.key + (e.locked ? `(${e.lockfile})` : '(NO LOCKFILE)')).join(', ') || 'none'}`);
     }
+    const sc = Object.keys(scanners.found);
+    console.log(`  scanners: ${sc.length ? sc.join(', ') : 'none'}${scanners.absent.length ? ` · absent: ${scanners.absent.join(', ')}` : ''}`);
+    console.log('            pass these to the auditors as `tools_available` — a brief that says "none" while one is installed makes an auditor record a coverage gap that is false.');
     console.log('');
     for (const p of [...blocks, ...warns]) {
       console.log(`  [${p.level === 'BLOCK' ? 'BLOCK' : ' WARN'}] ${p.check}: ${p.msg}`);
@@ -401,4 +491,4 @@ function isMainModule() {
 }
 if (isMainModule()) process.exit(main(process.argv.slice(2)));
 
-export { checkMounts, checkAgents, checkEnums, checkSafeFileContract, checkPointers, checkArtifacts, checkTools, checkTarget, problems };
+export { checkMounts, checkAgents, checkEnums, checkSafeFileContract, checkSkippedRegister, checkPointers, checkArtifacts, checkTools, checkScanners, checkTarget, problems };

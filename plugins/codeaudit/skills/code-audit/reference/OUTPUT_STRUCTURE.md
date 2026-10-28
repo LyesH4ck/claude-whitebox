@@ -15,7 +15,8 @@ outputs/{engagement}/
 ├── recon/                          # baseline (the foundation)
 │   ├── attack-surface.md           # entry points, sources, sinks, trust boundaries
 │   ├── architecture.md             # stack, frameworks, data flows, security mechanisms
-│   ├── sink-inventory.json         # machine-readable: sinks by class (file:line) + entry_points[] (route↔source map) + ecosystems[] (reference routing + version pins)
+│   ├── sink-inventory.json         # machine-readable: sinks by class (file:line) + entry_points[] (route↔source map) + exported_surface[] + ecosystems[] (reference routing + version pins)
+│   ├── _coverage.json              # written by tools/recon-coverage.py (Step 6.2 gate): route-shaped files vs recon's handler inventory, residue by directory
 │   └── threat-model.json           # the security contract: entry-point trust table, adversaries, properties provided/disclaimed, controls + assumptions, dispositions
 ├── plan/
 │   ├── deployment-plan.json        # which auditors, against which components
@@ -29,9 +30,19 @@ outputs/{engagement}/
 │       ├── snippet.txt             # the vulnerable code at the sink (with file:line header)
 │       ├── trace.md                # full source→sink hop list with file:line each hop
 │       ├── poc.md                  # OPTIONAL — witness payload / repro idea (no live exec required)
-│       └── corroboration.txt       # OPTIONAL — live witness result (hybrid mode only)
+│       ├── corroboration.txt       # OPTIONAL — live witness result (hybrid mode only)
+│       └── verification.md         # written by the finding-verifier (Step 6.5c) — cited verdict: confirmed | refuted | uncertain
 ├── codeaudit-report.json           # ALWAYS — fixed machine schema
-└── report.md                       # ALWAYS — consolidated human report
+├── report.md                       # ALWAYS — consolidated human report
+└── pr-comment.md                   # diff mode (`render.py --pr-comment`): the net-new findings, review-sized; absent on a green run
+```
+
+Diff mode (`/codeaudit:codeaudit-diff`) adds `plan/_diff-scope.json` — the changed files plus one import hop
+each way, written by `tools/diff-scope.py` — and reuses the previous engagement's `recon/` and
+`threat-model.json` by path. An interrupted engagement is probed by `tools/resume.py`, which reads the tree
+above and never writes to it.
+
+```
 ```
 
 ## Activity Log (NDJSON)
@@ -108,6 +119,34 @@ wrote `**source**` in lower case, one wrote the source as prose with no bullet, 
 `file:line`** is a recorded contract violation and the finding cannot be handed to the pentest plugin. One
 primary source per finding; secondary sources go in the prose or in `locations[]`.
 
+## `verification.md` (per finding, written by the finding-verifier only)
+
+The second opinion, additive and never edited by the filer. `tools/aggregate.py` reads the bold labels
+(leading enum token first) and the two sections:
+
+```markdown
+# Verification — finding-inj-001
+
+**Verdict**: refuted
+**Disposition**: guard_present
+**Cited**: src/db/repo.ts:88
+**Adjusted severity**: none
+**Adjusted confidence**: none
+**Verifier**: finding-verifier (batch v1)
+
+## Reasoning
+Five to ten sentences showing the rebuilt hop, the guard found or not found, the git history, the ecosystem
+or threat-model row relied on, and — for a bypass — the exact input.
+
+## Rebuilt trace
+src/api/users.ts:42 → src/service/list.ts:88 → src/db/repo.ts:130
+```
+
+`Verdict` ∈ `confirmed | refuted | uncertain`. A `refuted` needs a `Disposition` from the closed enum **and** a
+`Cited` `file:line`; without both the aggregator records a violation and treats it as `uncertain`.
+`Adjusted severity` ∈ `none` + the severity enum; `Adjusted confidence` ∈ `none | high | probable` (never
+`unconfirmed`). What each verdict does to the finding is in `REPORT_CONTRACT.md` → `revalidation` / `refuted`.
+
 ## `_safe-{class}.md` format (the four evidence categories)
 
 Each auditor writes exactly one of these (one per **shard** when a class is sharded:
@@ -135,9 +174,15 @@ keep all four even when a section is empty (write `- none`).
 ## coverage_gaps
 - deserialization in the worker queue — payload schema not statically resolvable (dynamic dispatch)
   → recommended: trace src/workers/*.ts consumers
+- [skipped] src/legacy/exploit-samples.ts — declined: reads as a payload corpus; analysis stopped at line 40
 ```
 
 Rules for this file:
+- A `coverage_gaps` line opening with **`[skipped]`** is the **skipped register** (`SKILL.md` → *The skipped
+  register*): one line per path in your scope you declined, refused, or did not finish, as
+  `- [skipped] path — why`. The aggregator keeps the path verbatim, tags the entry `kind: skipped`, lists it
+  under `skipped_paths` in the report and prints it as its own section, and the orchestrator re-dispatches on
+  it. Write the path, not a description — the orchestrator dispatches on what you wrote.
 - A `tested_not_vulnerable` line **must** open with a `[disposition]` from the closed enum in
   `REPORT_CONTRACT.md` and carry the `file:line` that discharges it (`model_gap` carries the open question
   instead).
@@ -162,9 +207,11 @@ These are written by the orchestrator, not by auditors, and are read by the ship
 | `plan/_meta.json` | Step 6.6 (engagement / repo / commit / scope / depth / ecosystems block) | `tools/aggregate.py --meta` |
 | `plan/_narrative.json` | Step 6.6 point 3, before rendering | `tools/render.py` |
 | `plan/_handoffs-wave{N}.md`, `plan/_handoffs-residue-f{N}.md` | between waves / after reconciliation | the next wave's auditors |
+| `plan/_context-additions.md` | Step 6.7 (`tools/context.py propose`) | the operator, then `tools/context.py apply` into `{repo}/.codeaudit-context.md` |
 
 `_relations.json`: `{ "duplicates": [], "subsumed": [], "chains": [], "orchestrator_adjustments": {
-"severity_overrides": [], "additional_locations": [] } }` — shapes in `REPORT_CONTRACT.md`.
+"severity_overrides": [], "additional_locations": [], "verification_overrides": [] } }` — shapes in
+`REPORT_CONTRACT.md`.
 
 `_narrative.json` keys (every one optional; a missing key renders as a visible `TODO-ORCHESTRATOR` marker):
 `plugin_version` · `executive_summary[]` (2-5 paragraphs: nature of the engagement, posture, counts, the single

@@ -6,15 +6,25 @@ caps, resolves endpoints from recon, and emits codeaudit-report.json.
 Usage:
   python3 -I "$CA/tools/aggregate.py" <OUTPUT_ROOT> --dry-run            # parse + report violations, write nothing
   python3 -I "$CA/tools/aggregate.py" <OUTPUT_ROOT> --write [--relations plan/_relations.json] [--meta plan/_meta.json]
+                                      [--previous <older codeaudit-report.json>] [--accepted <.codeaudit-accepted.json>]
 
 The relations file may carry `orchestrator_adjustments` (severity_overrides from a class owner's addendum,
 additional_locations from a follow-up) — see REPORT_CONTRACT.md. Caps still apply after an override.
 
+Every finding gets a stable `fingerprint` (class, sink file, sink expression, slot, source expression, source
+file — never a line number, so a line move does not change it). `--previous` diffs this run against an older
+report by fingerprint: each finding becomes `new` or `persisting` (with `first_seen` carried over), and
+previous findings not re-found are listed under `run_diff.not_refound` — a list to verify, not a list of
+fixes. `--accepted` marks findings whose fingerprint appears in the accepted-risk file: they stay in
+`findings[]` with `status: accepted-risk` and are excluded from the severity tally.
+
 Everything it reads is model-authored and therefore untrusted: a malformed file is reported under
 `contract_violations`, never fatal, and never silently normalised into something that looks clean.
 """
-import collections, glob, json, os, re, sys
+import collections, glob, hashlib, json, os, re, sys
 
+if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
+    print(__doc__); sys.exit(2)          # usage, not a traceback: these are run by hand too
 OUT = sys.argv[1].rstrip("/")
 DRY = "--dry-run" in sys.argv
 def arg(flag, default=None):
@@ -35,10 +45,12 @@ OWASP = {"injection": "A03:2021 Injection", "xss": "A03:2021 Injection", "auth":
          "http-protocol": "A05:2021 Security Misconfiguration", "ai-llm": "A04:2021 Insecure Design", "ai-agent": "A04:2021 Insecure Design",
          "resource-exhaustion": "A04:2021 Insecure Design"}
 
+NON_REQUEST_CLASSES = {"secrets", "crypto", "deps", "config", "logging"}
+
 violations = []
 def viol(where, msg): violations.append({"where": where, "issue": msg})
 
-FL = re.compile(r"([A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|rb|php|java|kt|go|cs|rs|swift|sql|vue|svelte|erb|twig|html|json|toml|yaml|yml)):(\d+)")
+FL = re.compile(r"([A-Za-z0-9_./-]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|py|rb|php|java|kt|kts|go|cs|rs|swift|dart|ex|exs|scala|lua|sql|vue|svelte|erb|twig|html|json|jsonc|toml|yaml|yml|tf|hcl|sh|bash|cfg|conf|ini|env|xml|gradle|properties)):(\d+)")  # keep in sync with reconcile.py EXT
 
 def field(body, label):
     m = re.search(r"\*\*" + re.escape(label) + r"\*\*\s*:?\s*`?([^\n`*]+)`?", body, re.I)
@@ -65,7 +77,13 @@ def parse_finding(d):
         f["vuln_class"] = PREFIX_CLASS.get(pre, f.get("vuln_class", pre))
     # one-finding-filed-in-another-class case (e.g. auth shard filing resource-exhaustion): keep the declared class
     sev = (field(body, "Severity") or "").lower(); conf = (field(body, "Confidence") or "").lower()
-    f["severity_reported"] = sev if sev in SEV else None
+    # Leading-token leniency, as for confidence and privilege: an auditor writes
+    # `**Severity**: informational (hardening — no in-model adversary …)` as naturally as
+    # `**Confidence**: probable (platform fact outside the repo)`. A strict match dropped the severity of
+    # 4 of 62 findings on a real engagement and then crashed the dry-run printer on the None.
+    sev_tok = re.split(r"[\s(]", sev, maxsplit=1)[0] if sev else ""
+    f["severity_reported"] = sev_tok if sev_tok in SEV else None
+    if f["severity_reported"] and len(sev) > len(sev_tok): f["severity_note"] = sev[len(sev_tok):].strip(" ()")
     # same leniency as privilege: leading enum token, parenthetical kept as a note
     conf_tok = re.split(r"[\s(]", conf, maxsplit=1)[0] if conf else ""
     f["confidence"] = conf_tok if conf_tok in ("high", "probable", "unconfirmed") else None
@@ -89,7 +107,11 @@ def parse_finding(d):
     src = re.search(LBL % "Source", ss, re.I); snk = re.search(LBL % "Sink", ss, re.I)
     f["source"] = src.group(1).strip() if src else None
     f["sink"] = snk.group(1).strip() if snk else None
-    if not f["source"] or not FL.search(f["source"]): viol(fid, "source missing or lacks (file:line) — endpoint cannot be resolved")
+    # Only request-reachable classes need a `source` with a file:line: it is the endpoint-resolution key,
+    # and REPORT_CONTRACT states the non-request classes get no endpoint. Demanding one of a lockfile pin or
+    # a log sink produced 9 noise violations out of 18 on a real engagement.
+    if f["vuln_class"] not in NON_REQUEST_CLASSES and (not f["source"] or not FL.search(f["source"])):
+        viol(fid, "source missing or lacks (file:line) — endpoint cannot be resolved")
     slot = re.search(r"slot\s*`?([A-Za-z-]+)`?", ss or body); f["slot_type"] = slot.group(1) if slot else None
     ws = re.search(r"\*\*Write site\*\*\s*:\s*(.+)", body); f["write_site"] = ws.group(1).strip() if ws else None
     r = field(body, "Reachable"); f["externally_reachable"] = (None if r is None else r.strip().lower().startswith(("true","yes","network","external")))
@@ -100,9 +122,71 @@ def parse_finding(d):
     f["shard"] = "-".join(fid.split("-")[2:-1]) or None
     return f
 
+VERDICTS = {"confirmed", "refuted", "uncertain"}
+
+def parse_verification(d):
+    """`verification.md` written by the finding-verifier (Step 6.5c). Returns None when absent. A refutation
+    without a valid disposition AND a cited file:line is downgraded to `uncertain` with a violation — the
+    verifier's own rule ("no citation → uncertain"), enforced here so an uncited opinion never removes a
+    finding from the report."""
+    fid = os.path.basename(d); p = os.path.join(d, "verification.md")
+    if not os.path.exists(p): return None
+    try: body = open(p, errors="replace").read()
+    except OSError: viol(fid, "verification.md unreadable"); return None
+    v = {"verdict": (field(body, "Verdict") or "").strip().lower()}
+    if v["verdict"] not in VERDICTS:
+        viol(fid, f"verification.md verdict missing/invalid: {v['verdict']!r} -> treated as uncertain"); v["verdict"] = "uncertain"
+    disp = (field(body, "Disposition") or "none").strip().lower()
+    v["disposition"] = disp if disp in DISP else None
+    cited = field(body, "Cited") or ""; m = FL.search(cited)
+    v["cited"] = f"{m.group(1)}:{m.group(2)}" if m else None
+    adj_s = (field(body, "Adjusted severity") or "none").strip().lower()
+    v["adjusted_severity"] = adj_s if adj_s in SEV else None
+    if adj_s not in SEV and adj_s != "none": viol(fid, f"verification.md adjusted severity invalid: {adj_s!r} -> ignored")
+    adj_c = (field(body, "Adjusted confidence") or "none").strip().lower()
+    v["adjusted_confidence"] = adj_c if adj_c in ("high", "probable") else None
+    if adj_c not in ("high", "probable", "none"): viol(fid, f"verification.md adjusted confidence invalid: {adj_c!r} -> ignored")
+    v["by"] = (field(body, "Verifier") or "finding-verifier").strip()
+    v["reasoning"] = section(body, "Reasoning")[:1500] or None
+    rt = section(body, "Rebuilt trace"); v["rebuilt_trace"] = [x.strip() for x in re.split(r"→|->", rt.splitlines()[0])] if rt else None
+    if v["verdict"] == "refuted" and (not v["disposition"] or not v["cited"]):
+        viol(fid, "verification.md refutes without a valid [disposition] + cited file:line -> treated as uncertain")
+        v["verdict"] = "uncertain"; v["uncited_refutation"] = True
+    return v
+
 def dedup_key(f):
     s = FL.search(f["source"] or ""); loc = f.get("location") or {}
     return (f["vuln_class"], f"{loc.get('file')}:{loc.get('line')}", f"{s.group(1)}:{s.group(2)}" if s else None, f["slot_type"])
+
+def norm_expr(expr):
+    """The expression part of a `source`/`sink` string: the `(file:line)` parenthetical, backticks, quotes
+    and whitespace stripped, lower-cased. `req.query['sort']` and `req.query.sort` stay distinct on purpose —
+    the fingerprint is a stability key, not a semantic one; the dedup key handles the exact-collapse case."""
+    e = re.sub(r"\([^()]*\)", " ", expr or "")
+    e = re.sub(r"[`'\"]", "", e)
+    return re.sub(r"\s+", " ", e).strip().lower()
+
+def fingerprint_material(f):
+    """What the fingerprint hashes. Line numbers are deliberately absent so a finding survives an unrelated
+    edit above it; a renamed sink file does change it, and that is documented as the limit."""
+    s = FL.search(f.get("source") or ""); loc = f.get("location") or {}
+    return "|".join([
+        f.get("vuln_class") or "", loc.get("file") or "", norm_expr(f.get("sink")),
+        (f.get("slot_type") or "").lower(), norm_expr(f.get("source")), s.group(1) if s else "",
+    ])
+
+def fingerprint(f):
+    return "fp_" + hashlib.sha256(fingerprint_material(f).encode("utf-8")).hexdigest()[:16]
+
+def assign_fingerprints(fs):
+    """Deterministic and collision-aware: two surviving findings with identical material (same sink expression
+    at two lines of one file, fed by the same source) get `-2`, `-3` suffixes in ascending sink-line order."""
+    groups = collections.defaultdict(list)
+    for f in fs: groups[fingerprint(f)].append(f)
+    for fp, members in groups.items():
+        members.sort(key=lambda x: ((x.get("location") or {}).get("line") or 0, x["id"]))
+        for i, f in enumerate(members):
+            f["fingerprint"] = fp if i == 0 else f"{fp}-{i + 1}"
 
 def apply_caps(f):
     sev = f["severity_reported"]; cap = CAP.get(f["privilege_required"])
@@ -121,9 +205,14 @@ def parse_safe(p):
         if not ok: viol(name, f"missing section ## {k}")
     for k in out:
         sec = section(body, k)
+        # Auditors wrap long bullets over several indented lines ("investigated: … \n  → still needs: …").
+        # Join a bullet with its continuation lines before parsing, or the second half is lost and a
+        # well-formed assumption is logged as a shrug — seen on a live run.
+        items = []
         for line in sec.splitlines():
-            if not line.lstrip().startswith("- "): continue
-            item = line.lstrip()[2:].strip()
+            if line.lstrip().startswith("- "): items.append(line.lstrip()[2:].strip())
+            elif items and line.strip() and not line.lstrip().startswith("#"): items[-1] += " " + line.strip()
+        for item in items:
             if item.lower() in ("none", "- none", "n/a"): continue
             if k == "tested_not_vulnerable":
                 m = re.match(r"\[([a-z_]+)\]\s*(.*)", item)
@@ -140,6 +229,19 @@ def parse_safe(p):
                 out[k].append({"vuln_class": cls, "investigated": re.sub(r"^\s*investigated\s*:\s*", "", inv[0], flags=re.I).strip(" *:"), "evidence_needed": need, "detail": item})
                 if len(inv) < 2: viol(name, f"unverified_assumptions line has no recognisable 'evidence needed' half: {item[:60]!r}")
             elif k == "coverage_gaps":
+                # The skipped register: `[skipped] path — reason`. A file the auditor declined, refused or did
+                # not fully analyse is a coverage gap of a specific kind — the orchestrator re-dispatches on
+                # the path rather than treating the class as traced. Parsed before the generic seam split so
+                # the path survives verbatim.
+                sk = re.match(r"\[skipped\]\s*(.*)", item, re.I)
+                if sk:
+                    rest = sk.group(1).strip()
+                    parts = [x.strip(" *") for x in re.split(r"\s*—\s*|\s*(?:→|->)\s*|\s+-\s+", rest, maxsplit=1)]
+                    p = parts[0] if parts else rest
+                    if not p: viol(name, f"[skipped] line names no path: {item[:70]!r}")
+                    out[k].append({"kind": "skipped", "item": p, "reason": (parts[1] if len(parts) > 1 else ""),
+                                   "recommended_action": "re-dispatch the auditor on this path", "vuln_class": cls})
+                    continue
                 # "item — reason → recommended: action": the arrow and the label are ONE seam, not two.
                 parts = [x.strip(" *") for x in re.split(r"\s*(?:(?:→|->)\s*)?recommended(?:\s+action)?\s*:\s*|\s*—\s*|\s*(?:→|->)\s*", item) if x.strip(" *")]
                 out[k].append({"item": parts[0] if parts else item, "reason": (parts[1] if len(parts) > 1 else ""), "recommended_action": (parts[2] if len(parts) > 2 else ""), "vuln_class": cls})
@@ -149,6 +251,8 @@ def parse_safe(p):
 
 # ------------------------------------------------------------------ run
 findings = [f for f in (parse_finding(d) for d in sorted(glob.glob(f"{OUT}/findings/finding-*"))) if f]
+verifications = {os.path.basename(d): parse_verification(d) for d in sorted(glob.glob(f"{OUT}/findings/finding-*"))}
+verifications = {k: v for k, v in verifications.items() if v}
 safe_all = {k: [] for k in ("tested_not_vulnerable", "design_properties", "unverified_assumptions", "coverage_gaps")}
 safe_files = sorted(glob.glob(f"{OUT}/findings/_safe-*.md"))
 for p in safe_files:
@@ -163,11 +267,45 @@ for f in findings:
     else:
         seen[k] = f; kept.append(f)
 
-# confidence gate
+# independent verification (Step 6.5c). The canonical finding's own verdict wins; a merged duplicate's
+# verdict is adopted when the canonical has none. A refutation removes the finding from findings[] and
+# records it under tested_not_vulnerable with the verifier's disposition and citation, and under
+# `refuted[]` so the removal is visible. `verification_overrides` (relations file) can reinstate one.
+rel = arg("--relations")
+rel_doc = json.load(open(rel)) if rel and os.path.exists(rel) else {}
+keep_override = {o["id"]: o for o in rel_doc.get("orchestrator_adjustments", {}).get("verification_overrides", []) if isinstance(o, dict) and o.get("id")}
+refuted = []; refuted_tnv = []
+for f in kept:
+    v = verifications.get(f["id"]) or next((verifications[m] for m in f.get("merged_ids", []) if m in verifications), None)
+    f["revalidation"] = None
+    if not v: continue
+    f["revalidation"] = {k: v.get(k) for k in ("verdict", "disposition", "cited", "reasoning", "by", "rebuilt_trace", "adjusted_severity", "adjusted_confidence")}
+    if v["verdict"] == "refuted" and f["id"] in keep_override:
+        o = keep_override.pop(f["id"])
+        if not o.get("reason"): viol(f["id"], "verification_overrides entry has no reason — override ignored")
+        else:
+            f["revalidation"]["verdict"] = "uncertain"; f["revalidation"]["overridden"] = {"by": o.get("by", "orchestrator"), "reason": o["reason"], "evidence": o.get("evidence")}
+            v = {**v, "verdict": "uncertain"}
+    if v["verdict"] == "uncertain" and f["confidence"] == "high":
+        f["confidence"] = "probable"; f["confidence_note"] = ((f.get("confidence_note") or "") + " verifier uncertain: " + (v.get("reasoning") or "")[:160]).strip()
+    if v["verdict"] == "confirmed":
+        if v.get("adjusted_confidence"): f["confidence"] = v["adjusted_confidence"]
+        if v.get("adjusted_severity") and v["adjusted_severity"] != f["severity_reported"]:
+            f["severity_reported_by_filer"] = f["severity_reported"]; f["severity_reported"] = v["adjusted_severity"]
+            f["severity_revision"] = {"from": f["severity_reported_by_filer"], "to": v["adjusted_severity"], "by": v["by"], "reason": (v.get("reasoning") or "")[:300], "evidence": f"findings/{f['id']}/verification.md"}
+for oid in keep_override: viol(oid, "verification_overrides targets a finding that was not refuted (or does not exist)")
+
+# confidence gate (+ refutation gate)
 gaps_from_unconfirmed = []
 final = []
 for f in kept:
-    if f["confidence"] == "unconfirmed" or f["confidence"] is None:
+    rv = f.get("revalidation")
+    if rv and rv["verdict"] == "refuted":
+        refuted.append({"id": f["id"], "title": f["title"], "vuln_class": f["vuln_class"], "severity_reported": f["severity_reported"],
+                        "disposition": rv["disposition"], "cited": rv["cited"], "reasoning": rv["reasoning"], "by": rv["by"], "evidence": f"findings/{f['id']}/verification.md"})
+        refuted_tnv.append({"vuln_class": f["vuln_class"], "disposition": rv["disposition"], "shard": "finding-verifier",
+                            "detail": f"{f['title']} — filed as {f['id']}, refuted by independent verification: {(rv['reasoning'] or '')[:300]} ({rv['cited']})", "refuted_finding": f["id"]})
+    elif f["confidence"] == "unconfirmed" or f["confidence"] is None:
         gaps_from_unconfirmed.append({"item": f"{f['id']}: {f['title']}", "reason": "confidence unconfirmed/missing — not a finding per contract", "recommended_action": "re-trace", "vuln_class": f["vuln_class"]})
     else:
         final.append(apply_caps(f))
@@ -189,27 +327,99 @@ try:
 except Exception as e:
     viol("recon", f"endpoint resolution skipped: {e}")
 
-vuln = [f for f in final if f["severity"] and f["severity"] != "informational"]
-summary = {s: sum(1 for f in final if f["severity"] == s) for s in SEV}
-summary["total"] = len(vuln)
-summary["informational"] = sum(1 for f in final if f["severity"] == "informational")
+meta = arg("--meta")
+meta_doc = json.load(open(meta)) if meta and os.path.exists(meta) else {}
+run_date = meta_doc.get("date")
+
+# stable identity, then the two optional cross-run inputs
+assign_fingerprints(final)
+
+accepted_path = arg("--accepted")
+accepted_by_fp = {}; accepted_unmatched = []
+if accepted_path:
+    try:
+        acc_doc = json.load(open(accepted_path))
+        for i, a in enumerate(acc_doc.get("accepted", []) if isinstance(acc_doc, dict) else acc_doc):
+            if not isinstance(a, dict) or not a.get("fingerprint") or not a.get("reason"):
+                viol("accepted", f"entry {i} lacks fingerprint or reason — ignored"); continue
+            accepted_by_fp[a["fingerprint"]] = a
+    except Exception as e:
+        viol("accepted", f"accepted-risk file unreadable: {e}")
+for f in final:
+    a = accepted_by_fp.pop(f["fingerprint"], None)
+    if a:
+        f["status"] = "accepted-risk"
+        f["accepted"] = {k: a.get(k) for k in ("reason", "by", "date", "expires") if a.get(k) is not None}
+accepted_unmatched = sorted(accepted_by_fp)
+
+def recompute_summary():
+    """Severity tally over open findings only. An accepted risk stays in findings[] (the reader must see it)
+    but a tally that counted it would make the headline depend on a decision taken outside the audit."""
+    live = [f for f in final if f["status"] != "accepted-risk"]
+    s = {sv: sum(1 for f in live if f["severity"] == sv) for sv in SEV}
+    s["total"] = sum(1 for f in live if f["severity"] and f["severity"] != "informational")
+    s["accepted_risk"] = len(final) - len(live)
+    return s
+summary = recompute_summary()
+
+run_diff = None
+prev_path = arg("--previous")
+if prev_path:
+    try:
+        prev = json.load(open(prev_path))
+        prev_findings = prev.get("findings", [])
+        # an older report written before fingerprints existed: recompute from its fields with the same function
+        if any("fingerprint" not in p for p in prev_findings):
+            for p in prev_findings:
+                if "fingerprint" not in p: p["fingerprint"] = fingerprint(p)
+        prev_by_fp = {p["fingerprint"]: p for p in prev_findings}
+        for f in final:
+            p = prev_by_fp.pop(f["fingerprint"], None)
+            if p:
+                f["change"] = "persisting"; f["first_seen"] = p.get("first_seen") or prev.get("date"); f["previous_id"] = p.get("id")
+                if p.get("status") == "accepted-risk" and f["status"] != "accepted-risk":
+                    viol(f["id"], f"was accepted-risk in the previous report ({p.get('id')}) but no --accepted entry covers it now")
+            else:
+                f["change"] = "new"; f["first_seen"] = run_date
+        run_diff = {
+            "previous_report": prev_path, "previous_engagement": prev.get("engagement"), "previous_date": prev.get("date"),
+            "new": [f["id"] for f in final if f["change"] == "new"],
+            "persisting": [f["id"] for f in final if f["change"] == "persisting"],
+            "not_refound": [{"id": p.get("id"), "fingerprint": fp, "title": p.get("title"), "severity": p.get("severity"),
+                             "location": p.get("location"), "status": p.get("status")} for fp, p in sorted(prev_by_fp.items())],
+            "note": "not_refound is a list to verify, never a list of fixes: confirm each with git history or a focused re-dispatch before marking it remediated",
+        }
+    except Exception as e:
+        viol("previous", f"previous report unreadable, no run diff: {e}")
+        for f in final: f["change"] = None
+else:
+    for f in final: f["change"] = None
 
 report = {
     "findings": final,
     "summary": summary,
-    "tested_not_vulnerable": safe_all["tested_not_vulnerable"],
+    "run_diff": run_diff,
+    "refuted": refuted,
+    "tested_not_vulnerable": safe_all["tested_not_vulnerable"] + refuted_tnv,
     "design_properties": safe_all["design_properties"],
     "unverified_assumptions": safe_all["unverified_assumptions"],
     "coverage_gaps": safe_all["coverage_gaps"] + gaps_from_unconfirmed,
+    "skipped_paths": [g for g in safe_all["coverage_gaps"] if g.get("kind") == "skipped"],
     "finding_relations": {"duplicates": [{"canonical_id": c, "duplicate_ids": [d], "reason": "identical dedup key (class, sink, source, slot)"} for d, c in merged], "subsumed": [], "chains": []},
     "contract_violations": violations,
     "aggregation_stats": {"finding_dirs": len(findings), "kept_after_dedup": len(kept), "final": len(final), "safe_files": len(safe_files),
                           "caps_applied": sum(1 for f in final if f.get("severity_cap_applied")),
-                          "endpoints_resolved": sum(1 for f in final if f.get("endpoint"))},
+                          "endpoints_resolved": sum(1 for f in final if f.get("endpoint")),
+                          "accepted_risk": summary["accepted_risk"], "accepted_unmatched": accepted_unmatched,
+                          "skipped_paths": sum(1 for g in safe_all["coverage_gaps"] if g.get("kind") == "skipped"),
+                          "verified": sum(1 for f in final if f.get("revalidation")) + len(refuted),
+                          "verified_confirmed": sum(1 for f in final if (f.get("revalidation") or {}).get("verdict") == "confirmed"),
+                          "verified_uncertain": sum(1 for f in final if (f.get("revalidation") or {}).get("verdict") == "uncertain"),
+                          "refuted": len(refuted)},
 }
-rel = arg("--relations"); meta = arg("--meta")
+
 if rel and os.path.exists(rel):
-    r = json.load(open(rel));
+    r = rel_doc;
     for k in ("duplicates", "subsumed", "chains"): report["finding_relations"][k] += r.get(k, [])
     # orchestrator adjustments (Step 6.6 judgement, evidence-cited): severity revisions from a class owner's
     # addendum, and additional locations found by a follow-up for an existing finding. Caps still apply.
@@ -227,23 +437,40 @@ if rel and os.path.exists(rel):
         if not f: viol(o["id"], "additional_locations targets unknown finding"); continue
         f["locations"] = f.get("locations", []) + o["locations"]
         f["locations_note"] = o.get("note")
-    for f in final:
-        if f.get("severity_revision"):
-            vuln = [x for x in final if x["severity"] and x["severity"] != "informational"]
-            for s in SEV: summary[s] = sum(1 for x in final if x["severity"] == s)
-            summary["total"] = len(vuln)
-            break
-if meta and os.path.exists(meta): report = {**json.load(open(meta)), **report}
+    if any(f.get("severity_revision") for f in final):
+        summary.update(recompute_summary()); report["summary"] = summary
+# --verified-min <severity>: when the verification pass ran, every open finding at or above this band must
+# carry a verdict; one that does not is a coverage gap (an unverified claim), not a silent omission.
+vmin = arg("--verified-min")
+if vmin:
+    if vmin not in SEV: viol("verified-min", f"invalid severity {vmin!r} — check skipped")
+    else:
+        for f in final:
+            if f["status"] != "accepted-risk" and f["severity"] and SEV.index(f["severity"]) >= SEV.index(vmin) and not f.get("revalidation"):
+                report["coverage_gaps"].append({"item": f"{f['id']}: {f['title']}", "reason": f"{f['severity']} finding with no independent verification (finding-verifier pass ran with --verified-min {vmin})", "recommended_action": "dispatch finding-verifier on this directory", "vuln_class": f["vuln_class"], "kind": "unverified"})
+                viol(f["id"], f"{f['severity']} finding not independently verified")
+    report["aggregation_stats"]["unverified_at_or_above_min"] = sum(1 for g in report["coverage_gaps"] if g.get("kind") == "unverified")
 
-print(f"findings dirs {len(findings)} | after dedup {len(kept)} | final {len(final)} | vuln tally {summary['total']} | informational {summary['informational']}")
-print("severity (after caps):", {s: summary[s] for s in SEV})
+if meta_doc: report = {**meta_doc, **report}
+
+print(f"findings dirs {len(findings)} | after dedup {len(kept)} | final {len(final)} | vuln tally {summary['total']} | informational {summary['informational']} | accepted-risk {summary['accepted_risk']}")
+print("severity (after caps, open findings):", {s: summary[s] for s in SEV})
 print(f"caps applied: {report['aggregation_stats']['caps_applied']} | endpoints resolved: {report['aggregation_stats']['endpoints_resolved']} | safe files {len(safe_files)}")
-print("evidence arrays:", {k: len(v) for k, v in safe_all.items()}, "+ unconfirmed->gaps", len(gaps_from_unconfirmed))
+print("evidence arrays:", {k: len(v) for k, v in safe_all.items()}, "+ unconfirmed->gaps", len(gaps_from_unconfirmed), "| skipped paths", report["aggregation_stats"]["skipped_paths"])
+st = report["aggregation_stats"]
+print(f"verification: {st['verified']} verdicts — confirmed {st['verified_confirmed']} | uncertain {st['verified_uncertain']} | refuted {st['refuted']} (moved to tested_not_vulnerable)" + (f" | unverified ≥ {vmin}: {st.get('unverified_at_or_above_min', 0)}" if vmin else ""))
+if DRY:
+    unv = [f for f in final if not f.get("revalidation") and f["severity"] in ("high", "critical") and f["status"] != "accepted-risk"]
+    if unv: print("high/critical without independent verification: " + ", ".join(f["id"] for f in unv))
+if run_diff: print(f"run diff vs {run_diff['previous_engagement'] or prev_path}: new {len(run_diff['new'])} | persisting {len(run_diff['persisting'])} | not re-found {len(run_diff['not_refound'])} (verify, do not assume fixed)")
+if accepted_unmatched: print(f"accepted-risk fingerprints matching no finding: {len(accepted_unmatched)} — {', '.join(accepted_unmatched[:5])}")
 print(f"contract violations: {len(violations)}")
 for v in violations[:40]: print(f"  ! {v['where']}: {v['issue']}")
 if DRY:
-    print("\nper-finding (id | class | reported->final | conf | priv | endpoint):")
-    for f in final: print(f"  {f['id']:34} {f['vuln_class']:18} {f['severity_reported']}->{f['severity']:<13} {f['confidence']:<8} {f['privilege_required']:<13} {(f.get('endpoint') or {}).get('path','-')}{'  note: ' + f['privilege_note'][:50] if f.get('privilege_note') else ''}")
+    print("\nper-finding (id | fingerprint | class | reported->final | conf | priv | verified | change | endpoint):")
+    def _s(v, w=0): return (str(v) if v is not None else "?").ljust(w)
+    for f in final: print(f"  {_s(f['id'],34)} {_s(f.get('fingerprint'),22)} {_s(f['vuln_class'],18)} {_s(f['severity_reported'])}->{_s(f['severity'],13)} {_s(f['confidence'],8)} {_s(f['privilege_required'],13)} {_s((f.get('revalidation') or {}).get('verdict') or '-',10)} {_s(f.get('change') or '-',10)} {(f.get('endpoint') or {}).get('path','-')}{'  ACCEPTED-RISK' if f['status'] == 'accepted-risk' else ''}{'  note: ' + f['privilege_note'][:50] if f.get('privilege_note') else ''}")
+    for r_ in refuted: print(f"  {r_['id']:34} REFUTED [{r_['disposition']}] at {r_['cited']} — {r_['title'][:60]}")
 else:
     json.dump(report, open(f"{OUT}/codeaudit-report.json", "w"), indent=1, ensure_ascii=False)
     print(f"wrote {OUT}/codeaudit-report.json")

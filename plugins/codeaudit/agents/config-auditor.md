@@ -46,6 +46,8 @@ reporting it. Every version-sensitive claim must name the **installed** version 
 the cutoff it was compared against; an unresolvable version is a `coverage_gaps` entry — never a finding and
 never a clearance. Framework security defaults live in the ecosystem files — read them before calling a
 
+**Infrastructure and CI as code is yours.** When recon's `ecosystems[]` carries the `iac` key, load `reference/ecosystems/iac.md` and treat Terraform/HCL, Dockerfiles, Kubernetes manifests and GitHub workflows as configuration surface: wildcard IAM, public ingress on administrative ports, unencrypted stores without a default, root final stages, `pull_request_target` running PR code, expression injection into `run:`. Each is a verdict with the same exploitability bar — a bare hygiene observation (a major-tag action pin on a first-party action) is `informational`.
+
 **Evidence contract (mandatory).** Two things every finding carries, and one file shape for every negative.
 
 - **`privilege_required`** — `none | authenticated | admin | maintainer | local-root`: the *minimum* attacker
@@ -124,5 +126,10 @@ the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never renumb
 the first pass's finding dirs.
 
 ## Completion
+
+**Skipped register — answer it before you announce** (`SKILL.md` → *The skipped register*). State in your
+final status line `SKIPPED: none`, or `SKIPPED: <n>` with one `- [skipped] path — why` line per path under
+`## coverage_gaps` of your `_safe-` file, for every file in scope you declined, refused, or did not finish.
+A status with no `SKIPPED:` line is an unanswered register, not a clean one.
 
 Announce **CONFIG AUDIT COMPLETE** with counts and stop.

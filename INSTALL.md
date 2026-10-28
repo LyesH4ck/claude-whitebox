@@ -6,6 +6,7 @@
 |--------|---------|--------------|
 | `codeaudit` | `/codeaudit:codeaudit` | White-box source-code security audit (static source-to-sink, optional live correlation) |
 | `pentest`   | `/pentest:pentest`     | Black-box penetration testing framework (64 attack categories, agent-coordinated) |
+| `codeaudit-hybride` | `/codeaudit-hybride:codeaudit-hybride` | The same audit run as two blind detectors (Claude + Codex) with deterministic reconciliation; **requires the `codex` plugin from OpenAI's own marketplace** |
 | `playwright` | _(MCP provider)_ | Playwright MCP server with stealth-friendly defaults; **dependency of `pentest`'s client-side agents** (XSS, CSP, prototype-pollution, JS mapping) |
 
 The `codeaudit` and `pentest` plugins run inside Claude Code as agents, skills, and slash commands — no
@@ -19,7 +20,10 @@ than commands.
 - **Claude Code** installed and working (`claude` in your shell, or the desktop/IDE app).
   Install: https://docs.claude.com/en/docs/claude-code
 - **git** (to add the marketplace from GitHub).
-- **Node.js ≥ 18** (for the `playwright` plugin's MCP server and stealth probe).
+- **Node.js ≥ 18** (for the `playwright` plugin's MCP server and stealth probe, and for `codeaudit`'s preflight).
+- **Python ≥ 3.8** (for `codeaudit`'s seven pipeline tools — reconciliation, coverage gate, resume probe,
+  aggregation, rendering, diff scoping, context carry-forward). Standard library only: **nothing to
+  `pip install`**. Without it the audit's auditors still run, but no report can be aggregated or rendered.
 - Optional, per plugin — see [Optional tooling](#optional-tooling) below, and
   [Browser automation setup](#browser-automation-setup-the-playwright-plugin) for the `playwright` plugin.
 
@@ -123,9 +127,14 @@ Verify the MCP server is live: **`/mcp`** → `plugin:playwright:playwright · �
 
 These plugins work out of the box, but some features call external tools when present:
 
-**`codeaudit` — dependency (SCA) auditing** picks up whichever scanner is installed and otherwise falls
-back to manual version review:
-- `npm audit` (Node), `pip-audit` (Python), `osv-scanner`, `govulncheck` (Go), `trivy`.
+**`codeaudit`** picks up whichever scanner is installed and otherwise falls back to manual review:
+- **Dependencies (SCA):** `npm audit` (Node), `pip-audit` (Python), `osv-scanner`, `govulncheck` (Go), `trivy`.
+- **Secrets:** `gitleaks`, `trufflehog` — these sweep **git history**, which a source-tree read cannot.
+- **Reports:** `pandoc`, only if you want the deliverables converted out of Markdown.
+
+`/codeaudit:codeaudit` probes for all seven at preflight and prints the ones it found. Pass that list to
+the auditors verbatim: a brief that claims `tools_available: none` while a scanner is installed makes the
+auditor record a coverage gap that is simply false — the mistake that put the probe in the preflight.
 
 **`pentest` — active testing** uses, when available:
 - **Playwright MCP** (the `playwright` plugin) — browser-driven evidence capture (XSS, CSP, CSRF PoCs,

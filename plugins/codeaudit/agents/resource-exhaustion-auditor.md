@@ -145,6 +145,11 @@ and unobserved-deployed-control items as coverage gaps). Append to
 
 ## Completion
 
+**Skipped register — answer it before you announce** (`SKILL.md` → *The skipped register*). State in your
+final status line `SKIPPED: none`, or `SKIPPED: <n>` with one `- [skipped] path — why` line per path under
+`## coverage_gaps` of your `_safe-` file, for every file in scope you declined, refused, or did not finish.
+A status with no `SKIPPED:` line is an unanswered register, not a clean one.
+
 Announce **RESOURCE EXHAUSTION AUDIT COMPLETE** with counts and stop. Report `complete` only when every
 in-scope cost path has a verdict; otherwise `incomplete` with what remains. Do not exit after the first
 finding.

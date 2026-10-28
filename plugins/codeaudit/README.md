@@ -18,10 +18,16 @@ install `codeaudit`.
 
 ```
 /codeaudit:codeaudit          # launch an audit (guided scope → plan → audit → report)
+/codeaudit:codeaudit-diff     # audit a change: diff + one import hop, reuse the baseline, report net-new (PR mode)
 /codeaudit:codeaudit-scope    # pre-configure repo/scope without launching
 /codeaudit:codeaudit-classes  # pre-configure which vuln classes to cover
 /codeaudit:codeaudit-exit     # close the session, flush findings, lift isolation
 ```
+
+An interrupted engagement resumes: `/codeaudit:codeaudit` probes `outputs/{engagement}` first
+(`tools/resume.py`) and offers to pick up at the first phase without its artifact. A malformed finding or
+evidence file is repaired by the agent that wrote it, in its own session, from the exact violation line —
+never hand-edited, never re-audited.
 
 You provide a **repository path** (and optionally a running URL for hybrid corroboration) and which of
 the 17 vulnerability classes to cover. There is no time budget — the audit is bounded and runs until every
@@ -68,8 +74,13 @@ See [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md) for the full pipeline, and
 - `reference/SINK_CATALOG.md` — grep-able dangerous sinks by language
 - `reference/ecosystems/` — **per-stack framework defaults, versioned CVE cutoffs with their preconditions,
   explicit non-finding lists, and `rg` seeds** (`node` · `python` · `php` · `ruby` · `java-jvm` · `go` ·
-  `dotnet`, plus additive `graphql` and `jwt`). `SINK_CATALOG.md` says what a sink *is*; these say what it
+  `dotnet`, plus additive `graphql`, `jwt` and `iac` for Terraform/Docker/Kubernetes/GitHub workflows, and
+  `other` — threat highlights without version cutoffs — for Rust, Elixir, Swift, Dart, Lua, Clojure, Erlang,
+  Crystal, Apex, mobile and serverless). `SINK_CATALOG.md` says what a sink *is*; these say what it
   *means* in this framework at this version — which is what most XSS and authz verdicts actually turn on.
+  `node.md` and the catalog also carry the **fail-open and bypass shapes** — decisions, not sinks, that a
+  trace-reader skims past (a flag read as a truthy string, a cron secret that disables itself when unset,
+  spread order on a write) — ported from deepsec's matcher catalogue (see `NOTICE`).
   `code-recon` resolves the applicable files and pins the versions once, into `sink-inventory.json`'s
   `ecosystems[]`; every auditor loads from there.
 - `reference/REPORT_CONTRACT.md` — fixed deliverable schema & severity rubric
@@ -96,19 +107,73 @@ Three zero-dependency Python scripts the orchestrator runs by path (`$CA/tools/�
 engagement where its absence cost a result:
 
 ```sh
+python3 -I tools/recon-coverage.py outputs/<engagement> --repo <repo>   # Step 6.2: route-shaped files vs recon's inventory → missed families
 python3 -I tools/reconcile.py outputs/<engagement>                 # Step 6.5: enumerated vs verdicted sources → uncited residue
 python3 -I tools/aggregate.py outputs/<engagement> --dry-run       # Step 6.6: parse everything, print contract deviations
 python3 -I tools/aggregate.py outputs/<engagement> --write --relations plan/_relations.json --meta plan/_meta.json
-python3 -I tools/render.py    outputs/<engagement>                 # report.md + exec-summary / remediation-plan / csv / sarif
+python3 -I tools/render.py    outputs/<engagement> [--pr-comment]  # report.md + exec-summary / remediation-plan / csv / sarif (+ net-new pr-comment.md)
+python3 -I tools/resume.py    outputs/<engagement>                 # Step 6.0b: which phases are done, which auditors are owed
+python3 -I tools/diff-scope.py --repo <repo> --ref origin/main     # diff mode: changed files + one import hop each way
 ```
 
-`reconcile.py` turns an auditor's "complete" into a proof or a list of files for a follow-up (expanding path
-aliases declared in evidence files). `aggregate.py` de-duplicates, gates on confidence, applies the
+`recon-coverage.py` is the check on the check: `reconcile.py` proves every source recon enumerated got a
+verdict, and says nothing about the files recon never enumerated — a family of routes nobody is sent to is
+not reported missing, it is simply absent. The gate lists every tracked source file with a route-shaped
+marker for its language and compares it with recon's handler inventory; a directory of three or more such
+files with none covered, or under half covered overall, sends recon back on the residue before the threat
+model and the planner inherit the gap. `reconcile.py` turns an auditor's "complete" into a proof or a list of
+files for a follow-up (expanding path aliases declared in evidence files). `aggregate.py` de-duplicates, gates on confidence, applies the
 `privilege_required` caps, splits the four evidence arrays, merges relations and the two permitted
 orchestrator adjustments, and records every malformed input as a `contract_violations` entry instead of
 normalising it away. `render.py` renders the fixed report template plus the operator extras from one
 `codeaudit-report.json` and a `plan/_narrative.json` the orchestrator writes — so the five deliverables can
 never disagree. Tests: `node --test plugins/codeaudit/tools/tools.test.mjs`.
+
+Two inputs make successive audits of one repository comparable:
+
+```sh
+python3 -I tools/aggregate.py outputs/<engagement> --write --previous outputs/<older>/codeaudit-report.json \
+                                                           --accepted /path/to/repo/.codeaudit-accepted.json
+```
+
+Every finding carries a **fingerprint** — a hash of class, sink file, sink and source expressions and slot,
+with no line number in it — so it survives unrelated edits and id renumbering. `--previous` tags each finding
+`new` or `persisting` (with `first_seen`) and lists what was not re-found as a list to verify, never a list
+of fixes. `--accepted` reads the operator's `.codeaudit-accepted.json` (fingerprint + reason + who + when):
+an accepted risk stays listed, keeps its rating, leaves the tally, and becomes a SARIF suppression. An
+acceptance is never inherited from an older report — the file is the only authority.
+
+## The project context file
+
+`{repo}/.codeaudit-context.md` is the operator's standing statement about a repository — what it does, its
+auth primitives by name, its trust boundaries, the wrappers a generic auditor would not know to look at, and
+the *Known non-findings* already decided. The threat-modeler seeds it on the first run; the operator edits it;
+every later run reads it (recon, threat model, every auditor, the verifier — never the blind-dig sweep) and,
+at the end, **proposes** what it established as new *Known non-findings* lines that the operator approves
+before `tools/context.py apply` merges them. A line there is a hypothesis with provenance: an auditor cites it
+only after confirming the current code still matches it. Format and rules in
+`skills/code-audit/reference/PROJECT_CONTEXT.md`; the preflight validates the file when `--repo` is given.
+
+## The second opinion (finding-verifier)
+
+After the sweep and before aggregation, every `high`/`critical` finding (every finding, on a small set) goes
+to a **finding-verifier**: a fresh agent that gets the claim and nothing else, rebuilds the path from the
+sink, hunts the guard the filer missed, checks git history, and writes a cited verdict next to the claim.
+`confirmed` keeps the finding, `uncertain` holds it at `probable`, and `refuted` — only with a disposition
+and the `file:line` that discharges it — moves it to *Vectors Tested — Not Vulnerable* and lists it under
+`refuted[]` so the removal is visible. An uncited refutation is downgraded to `uncertain`; the orchestrator
+spot-checks every refutation of a serious finding and can reinstate one with a recorded reason. This is the
+pass where most false positives of a static audit die, and it costs one read-only agent per six findings.
+
+## The skipped register
+
+Before announcing, every auditor answers one question in writing: *did I decline, refuse, stop partway or not
+reach any file in my scope?* The answer is `SKIPPED: none` or `SKIPPED: <n>` with one `[skipped] path — why`
+line per path in its evidence file. The aggregator surfaces them as `skipped_paths`, the report prints them as
+their own section, the orchestrator re-dispatches on them, and the preflight blocks an auditor prompt that
+stopped asking. It exists because the failure it catches is silent in the worst direction: an auditor that
+refuses a file still says `complete`, and the report then prints "all in-scope sources traced" over code
+nobody read.
 
 ## Measuring it
 

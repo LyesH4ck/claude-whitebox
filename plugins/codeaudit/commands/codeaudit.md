@@ -8,6 +8,7 @@ allowed-tools:
   - Write
   - Task
   - TaskOutput
+  - SendMessage
   - Bash
   - Glob
   - Grep
@@ -67,8 +68,10 @@ Session running with all plugins active. You can still use /codeaudit:codeaudit-
 Try to Read `.codeaudit-scope.json`.
 
 **If the file exists and is valid JSON**, extract `repo`, `engagement`, `out_of_scope`, `focus`,
-`target_url`, `depth` (default `"Thorough"`), `output_formats` (default `[]`), and `extra_roots` (default
-`[]` — sibling first-party repos/dirs to fold into scope, e.g. a separate front-end service). Output:
+`target_url`, `depth` (default `"Thorough"`), `output_formats` (default `[]`), `extra_roots` (default
+`[]` — sibling first-party repos/dirs to fold into scope, e.g. a separate front-end service), and
+`previous_report` (default `null` — an older `codeaudit-report.json` of the same repo to diff this run
+against). Output:
 
 ```
 ============================================================
@@ -143,12 +146,33 @@ After collecting, write `.codeaudit-scope.json` with status `"active"`:
   "depth": "{depth or "Thorough"}",
   "output_formats": {output_formats array},
   "extra_roots": {extra_roots array or []},
+  "previous_report": {previous_report or null},
   "status": "active"
 }
 ```
 
-Then verify the repo: `test -d "{repo}/.git" && echo git || echo no-git`. If `{repo}` does not exist,
-abort with an actionable message and stop. Note whether it is a git repo (auditors use git-awareness).
+Then verify the repo: `git -C "{repo}" rev-parse --is-inside-work-tree 2>/dev/null | grep -q true && echo git
+|| echo no-git` — not a test for a `.git` directory, which a subdirectory of a larger checkout does not have
+and is still fully tracked. If `{repo}` does not exist, abort with an actionable message and stop. Note
+whether it is tracked (auditors use git-awareness).
+
+**Resolve the three cross-run inputs now, so the scope echo states them.** All are optional; the first two
+feed the Step 6.6 aggregator, the third reaches every agent's brief.
+- **`context_file`** — `{repo}/.codeaudit-context.md` when it exists (`reference/PROJECT_CONTEXT.md`): the
+  operator's standing statement of what the system is and what has already been decided. Validate it
+  mechanically — `python3 -I "$CA/tools/context.py" check "{repo}/.codeaudit-context.md"` — and show the
+  operator any problem it prints (a missing heading, an over-budget file, a leftover seed placeholder) before
+  continuing; a malformed context file is carried as-is, never silently dropped. When absent, note
+  `context_file: null` and tell the threat-modeler to **seed** it in Step 6.2b.
+- **`previous_report`** — if the scope file names one, use it. Otherwise look for an older report of the same
+  repository: `ls outputs/*/codeaudit-report.json` from the launch directory, keep those whose `repo` field
+  equals `{repo}` and whose `engagement` is not this one, and take the most recent by `date`. If one is found
+  and the scope file did not name it, ask via AskUserQuestion: "Diff this run against `{path}` ({date})?" with
+  Yes / No. Store the result as `previous_report` (or `null`).
+- **`accepted_file`** — `{repo}/.codeaudit-accepted.json` when it exists (format in `REPORT_CONTRACT.md` →
+  *The accepted-risk file*), else `null`. Never create it yourself; it is operator-owned.
+Echo all three as `Context file: {path or "none — will be seeded"}`, `Previous report: {path or "none — first
+run or not requested"}` and `Accepted risks: {path or "none"}` in the summaries below.
 
 **Always append `outputs/` to `out_of_scope`.** The deliverables are written to `outputs/{engagement}/`
 relative to the launch directory, and the supported way to run this is **from inside the repository being
@@ -225,6 +249,15 @@ Output a one-line summary (e.g. `Scanners: gitleaks=available osv-scanner=missin
 Store the available set as `tools_available` and pass it to the relevant auditors. Missing scanners are
 not fatal — auditors fall back to pattern/version review and log a coverage note.
 
+**Do not skip this step, and do not guess its answer.** `preflight.mjs` (Step 6.0) prints the same probe, so
+you have the list before you dispatch anything — use one or the other, never an assumption. A brief that says
+`tools_available: none` while gitleaks is installed makes the secrets auditor run pattern-only *and* record
+"no real scanner installed" as a coverage gap: a weaker audit plus a false statement about why. On a real
+engagement that is exactly what happened, and it was the deps auditor noticing a scanner on PATH — contrary
+to its brief — that surfaced it. If an auditor reports a tool you told it it did not have, correct the brief
+by `SendMessage` to that agent (its session still holds the work) and fix the affected coverage gap, rather
+than letting the report ship the false limitation.
+
 ## Step 5 — Audit Summary
 
 Output with real values:
@@ -241,6 +274,9 @@ Mode:         {hybrid if target_url else static-only}{ + Live URL: {target_url}}
 Depth:        {depth}  (runs to completeness — every source→sink path in scope, then stops)
 Classes:      {classes}
 Scanners:     {tools_available or "none — pattern/version fallback"}
+Context file:    {context_file or "none — will be seeded by the threat-modeler"}
+Previous report: {previous_report or "none — first run or not requested"}
+Accepted risks:  {accepted_file or "none"}
 Deliverables: report.md + codeaudit-report.json{, plus output_formats if any}
 ============================================================
 ```
@@ -302,6 +338,44 @@ Act on the exit code:
 
 Log `phase":"preflight","exit":<0|1|2>,"blocking":<N>,"warnings":<M>`.
 
+### Step 6.0b — Resume (when the engagement directory already exists)
+
+An interrupted engagement leaves everything it had produced on disk: recon, the threat model, the plan, each
+finished auditor's evidence file and findings, the orchestrator log. Starting over throws that away and pays
+for it twice. The interruptions that actually happen, in order of frequency:
+- **the model API refuses** — a rate limit or an exhausted credit balance kills every in-flight agent at
+  once, mid-work, with no artifact for some of them (seen on a real engagement: five of seven auditors died
+  in the same minute). This is the case to expect, and it is why an auditor is told to write its evidence
+  file incrementally;
+- a context reset or a closed terminal at wave 2; a crashed or `TaskStop`-ed agent; an operator pause.
+
+Probe before initializing:
+
+```bash
+python3 -I "$CA/tools/resume.py" "outputs/{engagement}"
+```
+
+It classifies each phase as `done` / `partial` / `missing` from artifacts and **your own log** — an agent's
+self-reported "complete" is never consulted — and names the first step to resume from and the auditors still
+owed. An auditor counts as `done` only with **both** your `auditor-done: complete` log line and a
+four-heading evidence file; either alone is `partial`, and the probe says which case it is (`why_partial`,
+plus an `evidence_entries` count: a file with the headings and zero entries is a killed agent's skeleton, a
+file with thirty entries and no log line is probably finished work you failed to log). When it reports an
+existing engagement with anything `done`, ask via AskUserQuestion: **"`outputs/{engagement}` already holds a
+{recon|plan|N auditors…} — resume from step {X}, or start over?"** with **Resume** / **Start over (keeps
+nothing)** / **Cancel**.
+- **Resume** → skip every `done` phase. Re-read the artifacts you need (`recon/*`, `threat-model.json`,
+  `deployment-plan.json`) instead of re-dispatching their producers; in Step 6.4 dispatch **only** the
+  auditors the probe lists as owed, each on its **full** assigned scope from the plan — a partial evidence
+  file is not a verdict, and an auditor cannot be resumed mid-trace. Before re-dispatching a `partial` whose
+  file looks finished, read its last entries: if it is genuinely complete, log the missing
+  `auditor-done: complete` line yourself (naming the evidence as the basis) rather than paying for the class
+  twice. Run the completeness loop, reconciliation, sweep and verification as usual, each skipping what the
+  probe already shows done. Log `phase":"resume","from":"<step>","auditors_owed":<n>`.
+- **Start over** → `mv outputs/{engagement} outputs/{engagement}.abandoned-<timestamp>` (never delete), then
+  proceed to 6.1.
+A probe with nothing `done` means a stray directory; proceed to 6.1 without asking.
+
 ### Step 6.1 — Initialize
 
 ```bash
@@ -322,7 +396,7 @@ Log:
 ### Step 6.2 — Code-recon baseline
 
 Dispatch the **code-recon** agent via `Task`. Pass `repo`, `engagement`, `focus`, `out_of_scope`,
-`target_url`, `extra_roots`, and `classes`. Wait for completion. Confirm it wrote `recon/architecture.md`,
+`target_url`, `extra_roots`, `classes`, and `context_file` (or `null`). Wait for completion. Confirm it wrote `recon/architecture.md`,
 `recon/attack-surface.md`, and `recon/sink-inventory.json` — and that `sink-inventory.json` carries a
 non-empty **`ecosystems[]`** (the per-stack reference routing + version pins every auditor consumes in Step
 6.4). If `ecosystems` is missing or empty while the repo clearly has a manifest, re-dispatch recon once for
@@ -331,11 +405,40 @@ that field alone; if it is still empty, continue but note in the audit log and t
 warn the operator (possibly wrong repo or unsupported stack) and ask whether to continue. Log
 `phase":"recon","action":"baseline-complete","sources":<N>,"sinks":<M>`.
 
+**Then gate the baseline mechanically before anything consumes it.** Recon's `complete` is a claim about the
+files it read; the threat model, the planner and every auditor inherit whatever it did not. Run:
+```bash
+python3 -I "$CA/tools/recon-coverage.py" "outputs/{engagement}" --repo "{repo}" --out-of-scope "{out_of_scope}"
+```
+It lists every tracked source file that carries a route-shaped marker for its language (a route
+registration, an HTTP-method export, a controller, a server action, a queue consumer, a cron or webhook
+handler) and checks each against the handler files in `entry_points[]` / `exported_surface[]`. It writes
+`recon/_coverage.json` and prints the uncovered files grouped by directory. Exit `1` is a failed gate: a
+directory of three or more route-shaped files with none in the inventory, or fewer than half of all
+route-shaped files covered.
+- On a failed gate, **send code-recon back once** on the residue — via `SendMessage` to the recon agent's
+  id when its session is still alive (it holds the whole baseline in context), else a fresh `Task` with the
+  uncovered directories, verbatim from the tool's output, as `focus`. Tell it to extend
+  `entry_points[]`/`exported_surface[]` (never rewrite) and to declare every residue file that is **not** an
+  entry point under `not_entry_points[]` with a `what` (a glob for a whole corpus is fine). Re-run the tool
+  after it lands: explained files leave the denominator, so a repository whose matcher corpus or prompt
+  templates quote route syntax converges.
+- A still-failing gate does not stop the audit, but it changes what the report may claim: log
+  `phase":"recon","action":"coverage-gate","result":"failed","uncovered":<n>` and carry every remaining
+  uncovered file into the final report's `coverage_gaps` ("route-shaped file never inventoried by recon").
+- A passing gate with a short residue is normal: a marker hit on a file that is not an entry point (a test
+  helper, a matcher's own example strings, a docs snippet) is noise, and you record it nowhere. Read the
+  list before deciding — on a real engagement the residue is where the missed family lives.
+Log `phase":"recon","action":"coverage-gate","result":"<passed|failed>","route_shaped":<R>,"covered":<C>,"uncovered":<U>`.
+
 ### Step 6.2b — Threat model (the audit's security contract)
 
 Dispatch the **threat-modeler** agent via `Task`, pointing it at the baseline. Pass `repo`, `engagement`,
-`focus`, `out_of_scope`, `target_url`, `classes`, and the `ecosystems[]` array from `sink-inventory.json`.
-Wait for completion.
+`focus`, `out_of_scope`, `target_url`, `classes`, the `ecosystems[]` array from `sink-inventory.json`, and
+`context_file` with one of two instructions: **"read it first; its statements are `documented` provenance"**
+when it exists, or **"seed it after writing the model, per `reference/PROJECT_CONTEXT.md`"** when it does not.
+Wait for completion. If it seeded the file, tell the operator in one line that `{repo}/.codeaudit-context.md`
+now exists, is agent-written, and should be reviewed and committed — it is theirs from here on.
 
 This runs **after** recon and **before** the planner because both the plan and every auditor consume it:
 recon says what exists, the threat model says what is supposed to be true, and a rule-out that cites the
@@ -402,6 +505,10 @@ class with surface gets an auditor. Follow your agent definition's schema."
    the completeness loop.** Each auditor prompt MUST include:
    - the **scope**: `repo`, assigned directories, `out_of_scope`, `mode`, `target_url`, `tools_available`,
      and the `shard` tag if the class was sharded;
+   - the **context file** (when it exists): the path `{repo}/.codeaudit-context.md`, with the instruction
+     "read it before tracing; its *Known non-findings* are hypotheses with provenance — cite one as
+     `by_design` only after confirming the current code still matches it" (`SKILL.md` → *The project context
+     file*);
    - the **threat model** (when Step 6.2b produced one): the path `outputs/{engagement}/recon/threat-model.json`,
      with the instruction "read it before tracing; look each sink's entry point and parameter up in
      `entry_points[]` and carry the row's `condition` into your severity and `privilege_required`; when you
@@ -424,8 +531,15 @@ class with surface gets an auditor. Follow your agent definition's schema."
      recorded — not after the first finding. There is no time budget; completeness is the goal. Apply
      depth: <{depth} guidance>. Report back with a status of `complete` or `incomplete` + what remains.";
    - the reminder to write findings per `$CA/skills/code-audit/reference/REPORT_CONTRACT.md`
-     and record safe vectors.
-4. Log `phase":"audit","action":"deploy-auditors","count":<N>,"wave":1`.
+     and record safe vectors — **incrementally** (`SKILL.md` → *Write the evidence file as you go*): the
+     four-heading `_safe-` file at the first verdict, each finding directory when its path is proven. An
+     auditor that batches every write into its final turn loses everything if the run is interrupted, and
+     interruptions are not its doing — a rate limit, a context reset, a killed session.
+4. Log `phase":"audit","action":"deploy-auditors","count":<N>,"wave":1`, and one line per dispatched
+   agent with the **agent id the `Task` call returned** —
+   `phase":"audit","action":"dispatched","agent":"<name>","shard":"<tag|null>","agent_id":"<id>"` — so a
+   later repair message (Step 6.6) or an unanswered skipped register (Step 6.5) can reach the same session,
+   with its context intact, instead of paying for a fresh one.
 
 Depth guidance to inject: **Quick** = high-confidence sinks and primary paths only, stop tracing a path
 once a clear verdict is reached; **Standard** = all enumerated sources, primary + obvious secondary
@@ -451,7 +565,22 @@ recorded as a coverage gap — a still-running or silently-dead auditor is never
      an entire OWASP class silently drops out of a report that still prints "all in-scope sources traced".
    A `Task` still running is not terminated: keep polling with non-blocking `TaskOutput` and evaluate
    status only once it has actually finished. Log
-   `phase":"audit","action":"auditor-done","agent":"<name>","status":"<complete|incomplete|errored>","findings":<N>`.
+   `phase":"audit","action":"auditor-done","agent":"<name>","status":"<complete|incomplete|errored>","findings":<N>,"skipped":<n|"unanswered">`.
+
+   **Read the skipped register off the same status.** Every auditor must end with `SKIPPED: none` or
+   `SKIPPED: <n>` (`SKILL.md` → *The skipped register*), the `<n>` paths listed as `- [skipped] path — why`
+   lines under `## coverage_gaps` of its `_safe-` file. Three cases:
+   - `SKIPPED: none` — nothing more to do.
+   - `SKIPPED: <n>` — the auditor's `complete` does **not** cover those paths. Treat them exactly like the
+     uncited residue of point 5: dispatch one focused follow-up on the skipped paths (a different auditor of
+     the same class if the reason was a refusal — the same agent will refuse the same file again), and keep
+     the `[skipped]` lines in place until the follow-up has verdicted them; the aggregator lists whatever
+     remains under `skipped_paths`, and that is the correct report when a file genuinely cannot be analysed.
+   - **no `SKIPPED:` line at all** — the register was not answered. Log `"skipped":"unanswered"` and
+     message the agent once via `SendMessage` (its `agent_id` is in the `dispatched` log line), asking only
+     for the register and nothing else; if it still does not answer, record the
+     auditor's whole scope under `coverage_gaps` with the reason "skipped register unanswered" — an unanswered
+     register is indistinguishable from a silent refusal, and both read as "all traced" if you let them.
 2. **If an auditor reports `incomplete`** (untraced sources remain, a helper/branch it flagged needs
    deeper analysis, or it discovered new sources/second-order flows), re-dispatch it (or a focused
    follow-up) on the remaining items. Repeat until it reports `complete`. This is convergence on full
@@ -528,8 +657,9 @@ Dispatch both **adversarial-sweep** agents in a single parallel `Task` message:
 
    > **Context isolation is this sweep's whole method — you enforce it, not the agent.** Its prompt gets the
    > repo path, the one directory, and the scope boundaries. It gets **no** threat model, **no** recon
-   > baseline or sink inventory, **no** plan, and **no** existing findings, and you must not summarise any of
-   > them into the prompt either. Every one of those encodes a prior decision about where the bugs are;
+   > baseline or sink inventory, **no** plan, **no** existing findings, and **no** `.codeaudit-context.md`
+   > path (its *Known non-findings* are prior decisions), and you must not summarise any of them into the
+   > prompt either. Every one of those encodes a prior decision about where the bugs are;
    > passing one reproduces the blind spot the sweep exists to find. If you catch yourself writing "recon
    > found X here" into this prompt, delete it.
 
@@ -556,20 +686,96 @@ Do not re-run a sweep to try to make it find something.
 
 Log `phase":"sweep","action":"sweeps-complete","blind_dig_target":"<dir|skipped>","exclusion_challenged":"<item|skipped>","exclusion_held":<true|false|null>,"findings":<N>`.
 
+### Step 6.5c — Independent verification (the second opinion on every serious claim)
+
+Every finding so far was written by the agent that found it, and an auditor that has just traced a path is
+the least adversarial reader of that path. This step gives each serious finding a **second agent that tries
+to refute it** from source — rebuilding the trace from the sink instead of trusting the filed one, hunting
+the guard the filer missed, checking git history for a fix — and writes a cited verdict next to the claim.
+On a static audit this pass is where most false positives die, and it is cheap: one read-only agent per
+batch, after all the tracing is done.
+
+1. **Select.** Run the aggregator read-only to see the filed set after caps:
+   ```bash
+   python3 -I "$CA/tools/aggregate.py" "outputs/{engagement}" --dry-run
+   ```
+   Select every finding whose **final** severity (after caps) is `high` or `critical`. When the whole filed
+   set is small (twelve findings or fewer), select all of them — the pass costs less than the arguing it
+   prevents. Skip nothing in the selected band: a finding that "obviously holds" is exactly the kind a
+   second reader is for. Log `phase":"verify","action":"select","selected":<N>,"of":<M>`.
+2. **Batch and dispatch.** Split the selection into batches of at most six finding directories, grouped by
+   class where possible, tagged `v1`, `v2`, …. Dispatch the **finding-verifier** agent via `Task` once per
+   batch, **all in a single parallel message**, `run_in_background=True`. Each brief carries: `repo`,
+   `engagement`, the `batch` tag, the `finding_dirs[]` (full paths), `out_of_scope`, the `ecosystems[]`
+   array verbatim from `recon/sink-inventory.json`, and the threat-model path when Step 6.2b produced one.
+   Pass `context_file` too when it exists — it is the operator's statement, not an auditor's reasoning.
+   **Pass nothing else**: no `_safe-*.md`, no recon narrative, no plan, no previous report, and no summary
+   of what the filing auditor concluded — the verifier's independence is the whole value of the step, and
+   it is yours to protect, not the agent's. Log
+   `phase":"verify","action":"dispatch","batches":<B>`.
+3. **Collect.** Treat each verifier like an auditor in the status handling of 6.5 (`complete` /
+   `incomplete` / terminated-without-status) **and read its skipped register**: a directory in its batch
+   with no `verification.md` and no `[skipped]` entry means the batch did not complete. Re-dispatch once on
+   the missing directories; what still lacks a verdict afterwards stays unverified and the aggregator records
+   it under `coverage_gaps` (point 4). Log
+   `phase":"verify","action":"batch-done","batch":"<tag>","confirmed":<c>,"refuted":<r>,"uncertain":<u>,"skipped":<n|"unanswered">`.
+4. **What the verdicts do — and what you may do about them.** The aggregator (Step 6.6) applies them
+   mechanically, so you do not edit a finding by hand:
+   - `confirmed` → the finding stays, carrying `revalidation`; an `Adjusted severity` becomes a recorded
+     `severity_revision` by the verifier (caps still apply afterwards); an `Adjusted confidence` replaces the
+     filer's.
+   - `uncertain` → the finding stays; a `high` confidence drops to `probable` with the verifier's blocker
+     noted.
+   - `refuted` **with a disposition and a cited `file:line`** → the finding leaves `findings[]`, lands under
+     `tested_not_vulnerable` with that disposition and citation, and is listed under the report's `refuted[]`
+     so the removal is visible. A refutation **without** a citation is downgraded to `uncertain` with a
+     contract violation — an uncited opinion never removes a finding.
+   - **Spot-check every refutation of a `critical` or `high` finding yourself**: open the cited line. If the
+     citation does not discharge the finding (the guard is on a sibling variable, the "enum" is user-fed
+     upstream, the version row does not match the pin), reinstate it by writing a
+     `verification_overrides` entry in `plan/_relations.json` — `{ "id", "reason", "by", "evidence" }` —
+     which turns the verdict into `uncertain` and records who overrode it and why. Never delete a
+     `verification.md`, and never override a refutation you merely dislike: the override needs the line
+     that shows the citation wrong.
+   - Pass `--verified-min high` to the aggregator in Step 6.6 so a `high`/`critical` finding that still has
+     no verdict after the re-dispatch is a visible `coverage_gaps` entry, not a quiet omission.
+   Log `phase":"verify","action":"verify-complete","verified":<N>,"confirmed":<c>,"refuted":<r>,"uncertain":<u>,"unverified":<k>`.
+
 ### Step 6.6 — Aggregate + report
 
 The mechanical half of this step is a shipped tool; run it, read its violations, then do the judgement half:
 ```bash
 python3 -I "$CA/tools/aggregate.py" "outputs/{engagement}" --dry-run          # parse everything, write nothing
 python3 -I "$CA/tools/aggregate.py" "outputs/{engagement}" --write \
-        --relations outputs/{engagement}/plan/_relations.json --meta outputs/{engagement}/plan/_meta.json
+        --relations outputs/{engagement}/plan/_relations.json --meta outputs/{engagement}/plan/_meta.json \
+        {--previous "{previous_report}" when set} {--accepted "{accepted_file}" when set} \
+        --verified-min high
 ```
 `--dry-run` prints every contract deviation it found (a `Severity` outside the enum, a `tested_not_vulnerable`
 line without a `[disposition]`, a `source` with no `file:line`) and the per-finding table
-(`reported -> final` severity, confidence, privilege, resolved endpoint). Fix what is yours to fix (a
-malformed file is re-dispatched to its auditor, never hand-edited), write `plan/_relations.json` (point 1,
-"Relate what you did not merge") and `plan/_meta.json` (engagement/repo/commit/scope/depth/ecosystems block
-of the contract), then `--write`. The tool is lenient where auditors are legitimately verbose — a
+(`reported -> final` severity, confidence, privilege, fingerprint, change, resolved endpoint). Fix what is
+yours to fix, write `plan/_relations.json` (point 1, "Relate what you did not merge") and `plan/_meta.json`
+(engagement/repo/commit/scope/depth/ecosystems block of the contract), then `--write`.
+
+**A malformed file is repaired by its author, in session, never hand-edited and never re-audited.** For each
+`contract_violations` line that names a finding or evidence file (a `Severity` outside the enum, a `Source`
+with no `file:line`, a `tested_not_vulnerable` line without a `[disposition]`, an assumption with no
+"still needs" half), look up the author's `agent_id` in the `dispatched` log lines and **send it the exact
+violation text and the file path** via `SendMessage`, with the instruction: "repair only the field named,
+keep the substance, do not re-trace, do not touch anything else, reply `REPAIRED <path>`". The session still
+holds the trace that produced the file, so the fix costs one short turn. Then re-run `--dry-run`. Only when
+the agent is gone (no reply, or the message cannot be delivered) dispatch a **repair-only** `Task` of the
+same agent type with the finding directory and the violation — a brief that says "repair this field", not
+"audit this class" — and never a full re-audit over a formatting defect. Record each repair as
+`phase":"aggregate","action":"repair","file":"<path>","via":"<message|task>"`.
+
+Pass the two cross-run inputs resolved in Step 2 whenever they exist. With `--previous` every finding gets
+`change: new | persisting` by **fingerprint** (a line-number-free identity, `REPORT_CONTRACT.md` →
+`fingerprint`) and the report gains `run_diff`, whose `not_refound[]` is **a list to verify, never a list of
+fixes** — a finding vanishes just as easily because recon missed its file this time. With `--accepted`,
+findings whose fingerprint the operator's `.codeaudit-accepted.json` names become `status: accepted-risk`,
+stay listed, and leave the tally. Never write that file yourself, and never carry an acceptance forward on
+your own authority: the aggregator flags a finding that was accepted last run and is not covered now. The tool is lenient where auditors are legitimately verbose — a
 `**Confidence**: probable (platform fact outside the repo)` keeps its leading token and stores the rest as
 `confidence_note`; same for `privilege_required` — and strict where leniency would hide a defect: an
 `unconfirmed` or missing confidence is a `coverage_gaps` entry, a missing `privilege_required` is `unknown`
@@ -635,6 +841,10 @@ The rules it implements are the ones below — read them so you know what you ar
      log so the drift is visible rather than silently normalised.
      An auditor that wrote **no** `_safe-*.md` at all has not proven coverage: log it and record its scope
      under `coverage_gaps`, exactly as for an auditor that terminated without a parseable status (Step 6.5).
+     The `[skipped]` lines (the skipped registers) come out as `coverage_gaps` entries with `kind: "skipped"`
+     **and** as the top-level `skipped_paths[]`; `render.py` prints them as their own section. Anything still
+     listed there after the Step 6.5 follow-ups is a path the audit did not analyse, and the executive summary
+     must say so in one sentence — never let "all in-scope sources traced" stand over a non-empty register.
    - **Resolve ids & evidence**: keep each finding's on-disk class-prefixed dir name as its `id`
      (`finding-{prefix}-{NNN}`) — never renumber to a flat `finding-001`; set `evidence` to that dir's
      `description.md` and confirm the path resolves before writing the report (drop or flag any finding
@@ -662,8 +872,10 @@ The rules it implements are the ones below — read them so you know what you ar
    back to param correlation. To make this resolvable, findings **must** record the source with its
    `file:line` (see REPORT_CONTRACT `source` rule).
 2. Present a findings summary to the operator via AskUserQuestion before writing the final report (total;
-   critical/high/medium/low/info counts; confidence breakdown; top 3; coverage gaps). Confirm: "Write the
-   final report now?"
+   critical/high/medium/low/info counts; confidence breakdown; top 3; coverage gaps; **skipped paths**, if
+   any; the **verification line** — verified / confirmed / uncertain / refuted, and which refutations you
+   spot-checked or overrode; and, when `--previous` ran, the `run_diff` line — `new / persisting / not
+   re-found` — plus the `accepted_risk` count when `--accepted` ran). Confirm: "Write the final report now?"
 3. On confirmation, produce the deliverables **exactly per** `$CA/skills/code-audit/reference/REPORT_CONTRACT.md`:
    - `outputs/{engagement}/codeaudit-report.json` — fixed schema (engagement/repo/commit/target_url
      metadata, findings[] with file:line/source/sink/slot/confidence/owasp/**`privilege_required`** **and
@@ -716,5 +928,27 @@ The rules it implements are the ones below — read them so you know what you ar
      instead.`) — graceful degradation, never fail the run.
 5. Log `phase":"report","action":"report-written","path":"outputs/{engagement}/codeaudit-report.json","formats":<output_formats>,"result":"complete"` and tell the operator where the deliverables are.
 
+### Step 6.7 — Carry forward (what this run established, into the context file)
+
+The run just settled things the next run should not re-derive: the design properties the auditors confirmed
+as intended, the risks the operator accepted, the version-gated patterns ruled out at a named pin. Propose them
+for `{repo}/.codeaudit-context.md` — and only propose:
+
+```bash
+python3 -I "$CA/tools/context.py" propose "outputs/{engagement}" --context "{repo}/.codeaudit-context.md"
+```
+
+It writes `plan/_context-additions.md` (one *Known non-findings* line per item the file does not already
+carry) and prints them. If there are none, log `phase":"carry-forward","additions":0` and stop. Otherwise show
+the lines to the operator via AskUserQuestion — "Add these {n} lines to `.codeaudit-context.md`?" with
+**Apply all** / **Let me edit the list first** / **Skip** — and:
+- **Apply all** → `python3 -I "$CA/tools/context.py" apply "outputs/{engagement}" --context "{repo}/.codeaudit-context.md"`.
+- **Let me edit** → tell them to delete the lines they do not endorse from `plan/_context-additions.md`,
+  wait for their go-ahead (plain prompt), then run `apply`.
+- **Skip** → leave the additions file in place and move on.
+Never run `apply` without that answer: the file is the operator's statement, and an agent-written line in it
+without their approval is exactly the kind of inherited claim the *Known non-findings* rule exists to prevent.
+Remind them to commit the file. Log `phase":"carry-forward","additions":<n>,"applied":<true|false>`.
+
 Do not ask for additional confirmation before Step 6.1 — the audit summary is the launch confirmation.
-The operator gates remain at Step 6.4 (plan approval) and Step 6.6 (pre-report).
+The operator gates remain at Step 6.4 (plan approval), Step 6.6 (pre-report) and Step 6.7 (carry forward).

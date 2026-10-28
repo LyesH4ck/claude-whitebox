@@ -47,6 +47,8 @@ reporting it. Every version-sensitive claim must name the **installed** version 
 the cutoff it was compared against; an unresolvable version is a `coverage_gaps` entry — never a finding and
 never a clearance.
 
+**Infrastructure and CI as code is partly yours.** When recon's `ecosystems[]` carries the `iac` key, load `reference/ecosystems/iac.md`: plaintext `stringData`/long base64 `value:` in committed Kubernetes manifests, literal `data` in a Terraform `kubernetes_secret`, secrets passed as Docker `ARG`/`ENV` (they persist in image layers), and `secrets.*` echoed or written to artifacts in workflows are secrets findings; a `secretKeyRef`/`secretName`/ExternalSecret reference is the safe shape.
+
 **Evidence contract (mandatory).** Two things every finding carries, and one file shape for every negative.
 
 - **`privilege_required`** — `none | authenticated | admin | maintainer | local-root`: the *minimum* attacker
@@ -115,5 +117,10 @@ the highest free `NNN`** — a re-dispatched pass (Step 6.5.2) must never renumb
 the first pass's finding dirs.
 
 ## Completion
+
+**Skipped register — answer it before you announce** (`SKILL.md` → *The skipped register*). State in your
+final status line `SKIPPED: none`, or `SKIPPED: <n>` with one `- [skipped] path — why` line per path under
+`## coverage_gaps` of your `_safe-` file, for every file in scope you declined, refused, or did not finish.
+A status with no `SKIPPED:` line is an unanswered register, not a clean one.
 
 Announce **SECRETS AUDIT COMPLETE** with counts and stop.

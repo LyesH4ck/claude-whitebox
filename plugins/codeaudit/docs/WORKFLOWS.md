@@ -33,6 +33,8 @@ Optional pre-configuration:
 1. code-recon  (Task)        → recon/architecture.md, attack-surface.md, sink-inventory.json
         │   the ONLY baseline pass: maps stack, sources, sinks, mechanisms, ecosystems + version pins
         │   WHAT EXISTS
+        │   → tools/recon-coverage.py gates it: every route-shaped source file vs the handler
+        │     inventory; a missed family sends recon back on the residue before anything inherits it
         ▼
 2. threat-modeler (Task)     → recon/threat-model.json
         │   entry-point trust table, adversaries, properties provided/disclaimed,
@@ -52,7 +54,12 @@ Optional pre-configuration:
         │              (context isolation is the method — it prevents anchoring)
         │   challenge-exclusion: take one exclusion the AUDIT made and try to refute it
         ▼
-7. aggregate + report        → de-dup → relations (duplicates/subsumed/chains) → confidence gate
+6b. finding-verifier (parallel Task, batches of ≤6)  → findings/finding-*/verification.md
+        │   every high/critical finding (or all, on a small set) gets a SECOND agent that tries to
+        │   refute it from source — rebuilt trace, guard hunt, git history — and writes a cited
+        │   verdict: confirmed / refuted (needs disposition + file:line) / uncertain
+        ▼
+7. aggregate + report        → de-dup → verification (refuted → tested_not_vulnerable) → relations
                              → privilege_required severity caps → OPERATOR CONFIRMS
                              → codeaudit-report.json + report.md (+ optional formats)
 ```
@@ -75,6 +82,27 @@ into that prompt has defeated the sweep without breaking anything visible.
 Shannon's `pre-recon` agent delegates code reading to its own sub-Task agents. Here, under the nesting
 constraint, `code-recon` reads the code **directly** (Grep/Glob/Read) — it is itself a subagent and
 cannot fan out. The orchestration fan-out happens one level up, in the command, across the auditors.
+
+## Diff mode (a change, not a repository)
+
+```
+/codeaudit:codeaudit-diff
+```
+
+Scope is the files a diff touched (`--ref origin/main`, `--working`, `--staged` or an explicit list) plus one
+import hop each way (`tools/diff-scope.py`): importers are where a changed helper becomes reachable, imports
+are what a changed handler now reaches. The standing baseline is reused by path — the repo's
+`.codeaudit-context.md`, the most recent full engagement's recon and threat model, its report as
+`--previous`, the accepted-risk file. The planner scopes auditors to the slice, every finding is verified,
+and `render.py --pr-comment` writes the **net-new** findings by fingerprint — nothing on a green run. It
+does not replace the full engagement, which is what builds the baseline a change is judged against.
+
+## Resuming an interrupted engagement
+
+Everything a run produces is on disk. `tools/resume.py outputs/<engagement>` classifies each phase from
+artifacts alone (never from an agent's "complete") and names the first step to resume from and the auditors
+still owed; `/codeaudit:codeaudit` Step 6.0b offers **Resume** / **Start over** / **Cancel** before
+initializing anything.
 
 ## Static vs hybrid mode
 

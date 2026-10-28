@@ -109,6 +109,22 @@ test('BLOCKS an agent whose root resolver cannot fail loudly, or globs the cache
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('BLOCKS an auditor that no longer asks for the skipped register', () => {
+  // The failure is silent in the worst direction: an auditor never asked whether it skipped a file reports
+  // `complete`, and the report prints "all in-scope sources traced" over a file nobody read.
+  const dir = mkdtempSync(path.join(tmpdir(), 'pf-skip-'));
+  try {
+    cpSync(HERE, path.join(dir, 'plugins', 'codeaudit'), { recursive: true });
+    const agent = path.join(dir, 'plugins/codeaudit/agents/crypto-auditor.md');
+    writeFileSync(agent, readFileSync(agent, 'utf8').replaceAll('SKIPPED:', 'DONE:'));
+    let out, code = 0;
+    try { out = execFileSync('node', [path.join(dir, 'plugins/codeaudit/preflight.mjs'), '--json'], { cwd: dir, encoding: 'utf8' }); }
+    catch (e) { code = e.status; out = e.stdout; }
+    assert.equal(code, 2);
+    assert.ok(JSON.parse(out).problems.some((p) => p.check === 'skipped-register' && /crypto-auditor\.md never asks/.test(p.msg)));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('BLOCKS on a disposition that is not in the report contract', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'pf-'));
   try {
@@ -153,13 +169,56 @@ test('target mode reports git and lockfile state, which change what the audit ca
     assert.ok(noLock.target.ecosystems.some((e) => e.key === 'node' && !e.locked));
     assert.ok(noLock.problems.some((p) => /no lockfile/.test(p.msg)),
       'a missing lockfile turns every version-gated row into a coverage gap — the operator must know before launching');
-    assert.ok(noLock.problems.some((p) => /not a git repository/.test(p.msg)));
+    assert.ok(noLock.problems.some((p) => /not inside a git work tree/.test(p.msg)));
 
     writeFileSync(path.join(dir, 'package-lock.json'), '{"lockfileVersion":3}');
     const locked = parse(run(['--repo', dir]));
     assert.ok(locked.target.ecosystems.some((e) => e.key === 'node' && e.locked));
     assert.ok(!locked.problems.some((p) => /no lockfile/.test(p.msg)));
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('target mode: a nested directory of a git checkout counts as tracked; a malformed context file warns', () => {
+  // the fixture directory has no .git of its own — it is tracked by this repository's checkout
+  const nested = path.join(HERE, 'evals/fixtures/jwt-version-gate');
+  const ok = parse(run(['--repo', nested]));
+  assert.equal(ok.target.isGit, true, 'rev-parse, not a .git directory test');
+  assert.ok(!ok.problems.some((p) => /git work tree/.test(p.msg)));
+
+  const dir = mkdtempSync(path.join(tmpdir(), 'pf-ctx-'));
+  try {
+    writeFileSync(path.join(dir, 'package.json'), '{"name":"t"}');
+    writeFileSync(path.join(dir, 'package-lock.json'), '{}');
+    writeFileSync(path.join(dir, '.codeaudit-context.md'), '# Audit context — t\n\n## What this codebase does\nA thing.\n\n## Auth shape\n- requireUser\n\n## Known non-findings\n- [by_design] x — y (docs)\n');
+    const bad = parse(run(['--repo', dir]));
+    const w = bad.problems.find((p) => /\.codeaudit-context\.md/.test(p.msg));
+    assert.ok(w, 'a context file missing two headings must warn');
+    assert.match(w.msg, /Trust boundaries and adversaries/);
+    assert.match(w.msg, /Project-specific patterns to flag/);
+    assert.equal(bad.target.contextFile.problems.length, 2);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the preflight reports which optional scanners are on PATH, so a brief cannot silently say "none"', () => {
+  // The defect this closes: an orchestrator briefed every auditor `tools_available: none` without running
+  // the command's Step 4 probe, and the secrets sweep shipped a coverage gap ("no real scanner installed")
+  // that was false — gitleaks was on PATH the whole time. The preflight is the one command every run starts
+  // with, so it must not leave this unsaid.
+  const r = parse(run());
+  assert.ok(r.scanners && typeof r.scanners.found === 'object', 'the JSON carries a scanners block');
+  assert.ok(Array.isArray(r.scanners.absent));
+  for (const bin of Object.keys(r.scanners.found)) {
+    assert.ok(!r.scanners.absent.includes(bin), `${bin} cannot be both found and absent`);
+  }
+  // the human output names them too (the `run` helper always passes --json, so invoke it directly)
+  let text = '';
+  try { text = execFileSync('node', [SCRIPT], { cwd: MARKET, encoding: 'utf8', env: { ...process.env, HOME: HOME_STUB } }); }
+  catch (e) { text = e.stdout || ''; }
+  assert.match(text, /^\s*scanners:/m);
+  // and a host with no secret scanner is warned about, since that one changes what an auditor may claim
+  if (!r.scanners.found.gitleaks && !r.scanners.found.trufflehog) {
+    assert.ok(r.problems.some((p) => p.check === 'scanners' && /no secret scanner/.test(p.msg)));
+  }
 });
 
 test('target mode BLOCKS on a repo that does not exist', () => {
@@ -187,9 +246,9 @@ test('exit codes are the contract: 0 clean, 1 warnings only, 2 blocking', () => 
   } finally { rmSync(bad, { recursive: true, force: true }); }
 });
 
-test('tools: the three Step 6.5/6.6 tools ship and are invoked by the command; a missing one blocks', () => {
+test('tools: the seven shipped tools exist and are invoked by a command; a missing one blocks', () => {
   const clean = parse(run());
-  assert.equal(clean.stats.tools, 3);
+  assert.equal(clean.stats.tools, 7);
   assert.ok(!clean.problems.some((p) => p.check === 'tools'), 'clean plugin has no tools problem');
 
   const tmp = mkdtempSync(path.join(tmpdir(), 'codeaudit-pf-'));
