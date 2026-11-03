@@ -39,7 +39,11 @@ export function flattenParams(v, prefix, out) {
   if (v && typeof v === 'object') { for (const k of Object.keys(v)) flattenParams(v[k], prefix ? prefix + '.' + k : k, out); return; }
   if (prefix) out.add(prefix);
 }
-export const normPath = (p) => p.replace(/\/\d+(?=\/|$)/g, '/{id}').replace(/\/[0-9a-f]{8,}(?=\/|$)/gi, '/{id}');
+// Collapse id-shaped segments to `{id}`: all-digit, a canonical 8-4-4-4-12 UUID, or 8+ hex (ObjectId, dashless
+// UUID, hash). The UUID rule was missing: its dashes broke the hex run, so every `/orders/<uuid>` stayed a
+// distinct "route" — one per object seen — and a UUID-keyed API inflated the surface by its object count.
+const UUID_SEG = /\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\/|$)/gi;
+export const normPath = (p) => p.replace(/\/\d+(?=\/|$)/g, '/{id}').replace(UUID_SEG, '/{id}').replace(/\/[0-9a-f]{8,}(?=\/|$)/gi, '/{id}');
 const safeDecode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
 // Collect tagged param names from a request's query + body into a Set: `query:k`, `json:a.b[].c` (nested leaves),
 // or `form:k`. The canonical extraction every recon source shares (crawl / crawl-write / burp-import).

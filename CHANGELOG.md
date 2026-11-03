@@ -6,6 +6,24 @@ All notable changes to `claude-whitebox` are documented here.
 
 ## [2.4.86] — 2026-11-03
 
+### Fixed — `pentest` 2.8.0, `playwright` 0.3.1: UUID path segments were never collapsed to `{id}`
+
+`normPath`, the route-identity kernel every inventory tool, the orchestrator and `coverage.mjs` key on,
+collapsed all-digit and 8+-hex segments but not a canonical UUID: its dashes broke the hex run. So on a
+UUID-keyed API every object seen became its own "route" — `/orders/550e8400-…` and `/orders/0b7c2a10-…` two
+endpoints — and the surface was inflated by the number of objects browsed, the same failure as M-02 through
+a different door. `normPath` now collapses `8-4-4-4-12` hex segments (case-insensitive, only when the segment
+ends there). Both byte-identical copies (pentest `op-signature/`, playwright `stealth/`) are re-synced; the
+drift guard holds.
+
+**In-flight engagements migrate automatically.** Unit keys embed `normPath`, so a `state.json` enrolled before
+this release would have kept `GET /orders/<uuid>` units pending forever beside the new `GET /orders/{id}`
+ones. `orchestrator.mjs` now re-derives every key on load; units that come to share a key merge, keeping the
+strongest outcome (`finding` > `tested` > `pending`), the highest attempt count and every `finding_dir`
+(`merged_finding_dirs`). The migration is recorded in `state.migrations`, surfaced by `--action status`, and
+announced on stderr — a `record --key` handed out before it carries an old key, so re-read keys with
+`--action next`. A state already on current keys is not rewritten.
+
 ### Added — `pentest` 2.8.0: object-reference graph (`flow-graph.mjs`), produces → consumes
 
 The recon corpus says what routes exist; it cannot say which operation hands out the identifiers another one
