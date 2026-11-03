@@ -4,6 +4,169 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.85] — 2026-10-28
+
+Eleven defects from a post-engagement review of `loreal-essentiality-dev-2026-10` (11 deployments, 3 waves,
+16 findings, 3 h 15 of active testing). Each one was measured on that run, not inferred, and each fix below
+carries the test that reproduces it.
+
+### Fixed — `playwright` 0.3.0: the shipped proxy address did not match the plugin's own launch topology
+
+`launchOptions.proxy` defaulted to `http://host.internal:8080`. That name resolves from **inside** an
+OrbStack/Docker container and nowhere else — but `.mcp.json` launches `npx @playwright/mcp` **natively**, so
+the MCP server and the Chromium it drives are host processes. On a stock install (macOS or Linux) the default
+could not resolve and every navigation failed. The default is now `127.0.0.1:8080`, which matches the launch
+the plugin actually performs; `PLAYWRIGHT_MCP_PROXY_SERVER` overrides it (`@playwright/mcp` merges config
+file < environment < CLI, so the variable wins), and both topologies are documented side by side with the
+part that is easy to miss: **the config is read once, at startup**, so editing it and retrying the navigation
+— the natural reflex — changes nothing.
+
+New `stealth/proxy-probe.mjs` TCP-connects to the configured address and reports whether that hard
+dependency is satisfied. The config declared the dependency and nothing ever checked it, so a dead proxy
+reached the operator only as `net::ERR_PROXY_CONNECTION_FAILED`, inside an agent's work — three executors on
+one engagement each hit that wall independently, hours apart. A container-only hostname is diagnosed as such
+rather than merely reported down.
+
+### Fixed — `playwright` 0.3.0: a UA-bound session could not be replayed by the stealth browser
+
+A Cloudflare `cf_clearance` is issued against the exact User-Agent that solved the challenge. The operator's
+session was captured in Chrome 156 on macOS; the config pinned Chrome/124 on Linux, with no per-engagement
+override. New `stealth/ua-sync.mjs` reads the UA from `.pentest-identities.json` (`user_agent`, per identity
+or top level) and writes it into the config **together with all three regenerated `Sec-Ch-Ua` headers** —
+never one without the other. That restriction is the point: per the config's own `_clienthints_note`
+(established by replay through an intercepting proxy: no hints → 200, `HeadlessChrome` → 403,
+`Google Chrome` → 200) a UA/client-hint **mismatch** is more detectable than either value alone, so a
+hand-edited `userAgent` is worse than the stock profile. A non-Chromium UA removes the three headers, which
+is what Firefox and Safari actually send. `--revert` restores the shipped profile.
+
+### Fixed — `pentest` 2.7.0: the browser-availability probe could not fail
+
+The mandated probe was `browser_navigate(url="about:blank")`. `about:blank` is served by the browser itself:
+it crosses no proxy, no DNS and no network stack. It passed, `playwright_active: true` was logged, and every
+real navigation afterwards failed — discovered three times, mid-task, by three different executors. The
+probe now navigates to an **in-scope target URL** and the verdict rests on what came back (final URL, title,
+DOM belonging to the target), not on the absence of an exception; a proxy TCP probe runs first so the most
+common cause is named before the browser is blamed.
+
+Step 6.2 was emphatic about unverified **negatives** about a tool ("an unverified negative about a TOOL cost
+~92% of the engagement's surface") and had no symmetric rule for positives — the hole this defect went
+through. Added: **a claim about a tool cites what was executed and what was observed, whichever way it
+points.** A `playwright_active: true` with no captured observation is now as inadmissible as a `false` with
+no captured error.
+
+### Fixed — `pentest` 2.7.0: `surface-synth.mjs` inflated the endpoint count by 43%
+
+The endpoint key is (host, normalized_path, method), and three producers — `directories.json`,
+`javascript-routes.json`, `api-endpoints.json` — emit no `host`. Their rows keyed on `''` and could never
+merge with the ledger/corpus rows that carry one: **607 endpoints announced against 348 real ones**, 259
+duplicated pairs. Not a one-off either — Step 6.6/0 re-synthesizes after every wave from the same unmodified
+files, so each re-run climbed back to 607.
+
+Host-less rows now adopt the engagement's host: `--host` when given, otherwise the single distinct host seen
+across all sources. With two or more known hosts and no `--host`, nothing is guessed — merging rows that may
+belong to different origins would be worse — and `completeness.host_backfill: "ambiguous"` reports the
+inflation with its exact size instead of hiding it. The three producers' output contracts now require `host`
+on every path-bearing row as well, so the tool's inference is a backstop rather than the only line of
+defence. Proof includes the one that matters: two successive synthses over the same corpus return the same
+count.
+
+### Fixed — `pentest` 2.7.0: the exhaustion gate depended on an accounting nothing could feed
+
+`enroll` mints routes × identities × classes — **20 184 units on an engagement with a 4 390-request
+budget** — while executors report per deployment. Step 6.6/4 required `counts.pending == 0` to authorise an
+exhaustion exit, so the gate could never open however much work was done: that run ended at
+`0 tested / 20 184 pending` while `coverage.mjs` measured 86% of routes and 16% of parameters. Unreachable
+exit conditions do not make a run more rigorous; they make the honest endings unavailable.
+
+`coverage.mjs` is now the sole exhaustion authority (which the rest of the spec already claimed). The
+worklist is reported as dispatch bookkeeping, and only `counts.errored_pending` still blocks — the command
+writes that counter itself whenever it sees an executor fail, so it has a real writer. To give it one at the
+right granularity, `record` now takes a **filter** (`--class` / `--identity` / `--route`): one call settles
+what a deployment actually covered. A filter matching no pending unit is refused rather than reported as
+success. `enroll` also names the three factors and the product it just minted, so the scale is visible at the
+moment it is created.
+
+### Fixed — `pentest` 2.7.0: the log contract did not require the field the report contract demands
+
+`OUTPUT_STRUCTURE.md` made `endpoint` mandatory ("always") and mentioned the vuln class once, requiring it
+nowhere. So no executor emitted it, and after 11 deployments and ~2 800 probe lines `by_family` read
+`{"info-disclosure": 0/266, "unclassified": 42/266}`: two rows, one of them a bin, no real family — while
+`REPORT_CONTRACT.md` requires a per-family denominator behind every `tested_not_vulnerable` in a
+param-driven class. The denominators were rebuilt by hand from the agents' prose. **A contract that cannot
+be met is worse than no contract, because it invites inventing the number.**
+
+`vuln_class` is now mandatory on every `test`/`experiment`/`verify`/`exploit` line, documented with the
+recognized values, stated in the dispatch brief with the same insistence as the `endpoint` rule — the rule
+every agent on that run respected without exception, which is the evidence that the wording works when it is
+used. `coverage.mjs` counts `unclassified_test_lines` and `--lint` now fails when the bin holds the
+majority; one odd label stays noise. It deliberately does **not** set `lower_bound`: those lines are
+attributed to their routes, so the route/param figures stay exact — what is missing is the family split.
+
+### Fixed — `pentest` 2.7.0: `param-inventory.json` had no writer in practice
+
+Every producer is told `reconcile-inventory.mjs` is that file's single writer, and two agents explicitly
+flagged abstaining as a deviation. But the gate only topped up rows that already **existed**: with the file
+at `[]` nothing matched, params on already-mapped routes fell through to a loop that only handles route
+orphans, and the file stayed empty for a whole engagement while the ledger carried 7 distinct parameters
+across 130 route×param pairs. Nobody wrote it. Coverage survived only because `coverage.mjs` aggregates four
+independent sources.
+
+The gate now **derives** the file from the union on every pass — the ledger lines already carry their
+parameters, so this is arithmetic — creating the row when there is none, idempotent across passes, following
+whichever of the three shapes in the wild the file already uses, and reporting `backfilled_param_rows`.
+
+### Fixed — `pentest` 2.7.0: browser request budgets were wrong by a factor of ~50
+
+The brief stated a budget with no unit, and an agent driving a browser reads a bare number as page loads.
+One SPA navigation fires 30–80 sub-resource requests. Two executors overran independently and both reported
+it themselves: **912 requests against a budget of 250** (46 page loads), and 211 against 150. The brief now
+spells out that the unit is one HTTP request on the wire, names the fan-out, converts the budget into the
+page equivalent for the nine browser-driving agents (`--page-budget`), and prescribes caching from the first
+navigation — the mitigation an executor worked out mid-run, which cut its traffic by twenty.
+
+### Fixed — `pentest` 2.7.0: scanners wrote the live session into their own output files
+
+`ffuf` copies the command line it was given — `-H "Cookie: …"` and all — into the `commandline` field of
+both its `.txt` and its `.json`; `feroxbuster`, `gobuster` and `nikto` do the same with their banners. Three
+files under `outputs/` held a live `cf_clearance`, and clearing them took **three** successive passes,
+because each scrub was followed by another scanner run that wrote the value back. The rule now ships in
+every brief that carries a session (added by hand at wave 1 on the real run, after which every agent
+respected it — one switching from `ffuf` to `curl` loops rather than risk it), and new
+`secret-sweep.mjs` sweeps the tree at engagement close, before any deliverable is produced. It searches for
+the **actual values** on file (each header, and each `name=value` pair inside a Cookie header, so one leaked
+cookie out of six is still caught), never prints a secret — findings are `secret_id` + fingerprint +
+`file:line`, so the report of a leak is not a second copy of it — and `--redact` rewrites every occurrence
+then re-verifies its own work. Two things it refuses to do: finding nothing to look for is exit 3, a **failed
+sweep**, never a clean tree; and an unreadable `--in` is exit 2 rather than a green sweep over a path that was
+never scanned. The `.pentest-*` session files are excluded by name — they are the store the values were read
+from, so redacting them would destroy the session and the run's ability to resume.
+
+### Fixed — `pentest` 2.7.0: the "no analysis `.md`" rule contradicted five agent definitions
+
+Five agents reported the conflict and all five resolved it the same way, as a declared deviation: their
+definitions require `analysis/<name>.md`, an engagement policy forbids it. The consequence was invisible
+until it paid off by accident — the surface synthesizer, finding no `.md` to read, fell back to the raw
+captures and there found the PHP-FPM signal no producer had ledgered, which became two medium findings. That
+was luck, not design.
+
+Resolved in the direction that always works: the JSON inventory is the contract, the `.md` is the narrative
+and may legitimately be absent, and the **raw captures are now mandatory inputs** to the synthesizer rather
+than an improvised fallback. Anything a producer would have written only in prose must reach the JSON or the
+ledger, because that is what every downstream tool reads.
+
+### Fixed — `pentest` 2.7.0: `dispatch-brief.mjs` was too easy to bypass silently
+
+The tool exists because fourteen blocks per agent, per wave, from context is a path a model under fan-out
+pressure will shorten — most expensively by dropping the session, which turns a login-wall result into "the
+app is clean". On the real engagement all 11 briefs were hand-written. They happened to carry the session,
+and nothing anywhere recorded that the risk had been taken. The tool now leaves a **redacted receipt** per
+dispatch (metadata only: agent, wave, prefix, which blocks went out, the warnings — no header value, no
+brief text), and `orchestrator.mjs --action brief-check --expect <agents> --wave N` counts them: exit 4 names
+the dispatches with no receipt, and Step 6.5 must either re-assemble them or log the deviation into the
+report as a methodology gap.
+
+---
+
 ## [2.4.84] — 2026-10-28
 
 ### Fixed — `codeaudit` 0.21.2: the scanner probe reports, it never warns (CI was red on `main`)
