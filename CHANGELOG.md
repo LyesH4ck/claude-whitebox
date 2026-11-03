@@ -60,6 +60,26 @@ before shipping:
 Wired into `/pentest:recon` as **Step 5d**, and re-run after the Step 6c CRUD reconcile: the CRUD HARs hold
 the creates that mint the ids, and did not exist when 5d first ran.
 
+### Added — `pentest` 2.8.0: workflow order (`precedes`) for business-logic-tester
+
+The same pass also derives `precedes`: every successful write `E` of a principal was preceded by a successful
+write `S` of that same principal. `dispatch-brief.mjs` renders it for `business-logic-tester` as a
+`WORKFLOW ORDER` block, as candidate invariants of the workflow-skip class ("`E` requires `S`") that go
+through the agent's own Phase 2→3 write gate and delta oracle. They are never a licence to fire writes.
+- **Bounded window.** Predecessors are looked for since `E`'s previous occurrence, at most `--window`
+  seconds back (default 600). So `POST /login`, true before everything, is not reported.
+- **Repeated vs single.** Repeated observations are intersected (`repeated`, an optional coupon drops out). A
+  single observation keeps only the adjacent write, flagged `single_occurrence`; the brief calls it weak.
+- **Noise.** Only successful writes count. A write present before most other writes (autosave, telemetry) is
+  ambient and excluded. Order is per principal.
+- **`data_dependency`** is set when a produces edge joins the same pair.
+
+**Measured on the real HARs, and said plainly.** Recon recordings rarely replay a flow, so most edges there
+are `single_occurrence`; `repeated` ones come mainly from CRUD HARs and flows done by several identities.
+GraphQL cannot be ordered at all at route level, because every operation, queries included, is a POST to one
+route. Its writes are excluded and **counted** (`graphql_writes_unordered`, plus a warning and a brief line),
+because "no workflow order" and "workflow order not measured" must not look the same.
+
 ### Fixed — `pentest` 2.8.0: a truncated HAR lost the whole engagement's browser traffic
 
 The MCP's persistent context writes its single HAR at **shutdown**; a server killed mid-write leaves the
