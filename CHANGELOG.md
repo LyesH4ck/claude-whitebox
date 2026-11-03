@@ -4,6 +4,47 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.87] — 2026-11-03
+
+### Fixed — `pentest` 2.8.1, `playwright` 0.3.2: the MCP browser's traffic almost never reached the corpus
+
+Of the twelve session HARs on the machine that measured this, six had captured nothing usable: three 0 bytes,
+two with no entries, one truncated. The cause was established by driving the real `@playwright/mcp` 0.0.84
+over stdio, with this plugin's config (`isolated:false` + `contextOptions.recordHar`), against a local HTTP
+server. Each step checked the file:
+
+- **The HAR is written ONLY by `browser_close`.** A graceful shutdown (stdin closed, SIGTERM) and a SIGKILL both
+  **lose** the segment in progress. The config note claimed "flushes on server shutdown"; that was false.
+- **While the browser is open the file is absent**, or still holds an older segment. The recon ingest read it
+  mid-engagement and so saw nothing of the current session, or an earlier session's traffic, possibly
+  another target's when the directory is reused.
+- **Every `browser_close` overwrites the file** with the segment since the previous close. A close with no
+  navigation writes a 0-entry HAR over a full one: those are the two entry-less files.
+- **The path is relative to the server's CWD**, the engagement root, outside `outputs/`. The ingest globs
+  (`outputs/ENGAGEMENT/**/*.har`) never even looked at it.
+
+**The checkpoint.** Before every ingest, the main session calls `browser_close`, once no browser agent is
+running, and runs the new `har-import/har-rotate.mjs`. It **moves** the file to
+`.pentest-har/mcp-<label>-<first-entry-time>.har`, so no later close can overwrite an un-ingested segment, and it
+rejects what is not this engagement's traffic:
+- exit 3 for an absent, 0-byte or entry-less file: a capture gap, never a clean checkpoint;
+- exit 4 for a segment entirely older than `state.json` `start_epoch`: moved to `rejected/`, never ingested.
+
+Checkpoints are wired into `/pentest:recon` Step 5c and Step 6c (CRUD, now *before* the reconcile), and into
+`/pentest:pentest` 6.3.6 and 6.7/0 (testing traffic, before the credential sweep).
+
+**Where.** `.pentest-har/` sits at the engagement root beside `.pentest-identities.json`, not under `outputs/`.
+These are raw captures carrying live headers, and `secret-sweep` cannot read a 200 MB HAR anyway (64 MB cap).
+The sweep now excludes `.pentest-har/` like the credential stores, and reports it. A HAR left under `outputs/`
+is still swept.
+
+**Also fixed on the same path — only the LAST HAR reached the corpus.** Step 5c imported one HAR per call, and
+every call rewrote `har-endpoints.json`, the only file `observed-merge` reads. `har-import` now takes repeatable
+`--har` and folds every segment into one output, so a file named twice by overlapping globs counts once. The
+ingest is one call, with `globstar` + `nullglob` so `**` actually recurses.
+
+---
+
 ## [2.4.86] — 2026-11-03
 
 ### Fixed — `pentest` 2.8.0, `playwright` 0.3.1: UUID path segments were never collapsed to `{id}`
