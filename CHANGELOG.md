@@ -4,6 +4,56 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.86] — 2026-11-03
+
+### Added — `pentest` 2.8.0: object-reference graph (`flow-graph.mjs`), produces → consumes
+
+The recon corpus says what routes exist; it cannot say which operation hands out the identifiers another one
+accepts, because it is deduplicated per operation and has lost the order of requests, the values sent and
+every response body. New `essential-skills/flow-graph/flow-graph.mjs` reads the RAW HARs instead and emits
+`analysis/flow-graph.json`: one edge per *(producer, field) → (consumer, location)*, e.g.
+`POST /orders [json:id] → GET /orders/{id} [path[3]]`. `dispatch-brief.mjs` renders the edges for
+`idor-bola-tester` as an `OBJECT REFERENCES` block, so a BOLA pass starts from references the app was seen to
+hand out and accept — and from how to mint the victim object — rather than from guessed ids.
+
+The rules, each with a test:
+- **The graph adds no route.** Nodes use the orchestrator's `METHOD normPath` key, and with `--corpus` an edge
+  touching a route the corpus lacks goes to `orphan_edges` and is reported, never added.
+- **Causality.** A value the client sent before any response produced it (an echo, a client-generated uuid)
+  is never an edge. A consumer echoing the id it was given does not steal the edge or make it ambiguous.
+- **Noise.** Booleans, numbers < 10, strings < 4 chars and paging/sort fields are skipped; token / session /
+  CSRF fields are excluded by key — a CSRF round-trip is not an object reference.
+- **No value persisted.** Not an id, not a header, not a JWT subject: each edge carries a 12-hex SHA-256
+  `example_fp` only.
+- **Nothing measured is a failure, not a result.** No in-scope request (wrong `--scope`) or no response body
+  in any HAR (`recordHar.content` not `"embed"`) is exit 3 — never "this app has no object references".
+
+**Identity attribution was the part real traffic got wrong — twice.** Run against six real engagement HARs
+before shipping:
+- A plain fingerprint of the token/cookie turned two accounts into nine "identities" (tokens rotate), so nearly
+  every edge read as cross-identity — which would have sent the BOLA tester after crossings that never
+  happened. `cross_identity` is now `true` only between two *reliably* attributed principals (a named identity
+  from `.pentest-identities.json`, a JWT subject, or a request with no credential at all) and **`null`** when
+  that cannot be told.
+- The JWT key was first `iss|sub`. On one HAR a gateway minted a random `iss` per token, so one admin became
+  five principals and seven false crossings appeared. The principal is now the subject alone: merging two
+  users only loses a priority hint, splitting one invents a crossing — the key now errs on the safe side.
+
+Wired into `/pentest:recon` as **Step 5d**, and re-run after the Step 6c CRUD reconcile: the CRUD HARs hold
+the creates that mint the ids, and did not exist when 5d first ran.
+
+### Fixed — `pentest` 2.8.0: a truncated HAR lost the whole engagement's browser traffic
+
+The MCP's persistent context writes its single HAR at **shutdown**; a server killed mid-write leaves the
+file without its closing `]}}`, and `har-import.mjs` rejected all of it (exit 2) for three missing bytes.
+Measured on this machine: one real engagement HAR ended that way, and two more were 0 bytes. New shared
+`har-import/har-read.mjs` salvages every complete entry and reports `truncated: true` + `salvaged_entries`;
+an empty HAR stays exit 2, now with its cause named ("never flushed"). `har-import` and `flow-graph` share
+the reader so the corpus and the graph always see the same traffic — if only one salvaged, every salvaged
+route would turn up as an orphan in the other.
+
+---
+
 ## [2.4.85] — 2026-10-28
 
 Eleven defects from a post-engagement review of `loreal-essentiality-dev-2026-10` (11 deployments, 3 waves,
