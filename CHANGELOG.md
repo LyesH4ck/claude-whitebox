@@ -4,6 +4,94 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.86] — 2026-11-03
+
+### Fixed — `pentest` 2.8.0, `playwright` 0.3.1: UUID path segments were never collapsed to `{id}`
+
+`normPath`, the route-identity kernel every inventory tool, the orchestrator and `coverage.mjs` key on,
+collapsed all-digit and 8+-hex segments but not a canonical UUID: its dashes broke the hex run. So on a
+UUID-keyed API every object seen became its own "route" — `/orders/550e8400-…` and `/orders/0b7c2a10-…` two
+endpoints — and the surface was inflated by the number of objects browsed, the same failure as M-02 through
+a different door. `normPath` now collapses `8-4-4-4-12` hex segments (case-insensitive, only when the segment
+ends there). Both byte-identical copies (pentest `op-signature/`, playwright `stealth/`) are re-synced; the
+drift guard holds.
+
+**In-flight engagements migrate automatically.** Unit keys embed `normPath`, so a `state.json` enrolled before
+this release would have kept `GET /orders/<uuid>` units pending forever beside the new `GET /orders/{id}`
+ones. `orchestrator.mjs` now re-derives every key on load; units that come to share a key merge, keeping the
+strongest outcome (`finding` > `tested` > `pending`), the highest attempt count and every `finding_dir`
+(`merged_finding_dirs`). The migration is recorded in `state.migrations`, surfaced by `--action status`, and
+announced on stderr — a `record --key` handed out before it carries an old key, so re-read keys with
+`--action next`. A state already on current keys is not rewritten.
+
+### Added — `pentest` 2.8.0: object-reference graph (`flow-graph.mjs`), produces → consumes
+
+The recon corpus says what routes exist; it cannot say which operation hands out the identifiers another one
+accepts, because it is deduplicated per operation and has lost the order of requests, the values sent and
+every response body. New `essential-skills/flow-graph/flow-graph.mjs` reads the RAW HARs instead and emits
+`analysis/flow-graph.json`: one edge per *(producer, field) → (consumer, location)*, e.g.
+`POST /orders [json:id] → GET /orders/{id} [path[3]]`. `dispatch-brief.mjs` renders the edges for
+`idor-bola-tester` as an `OBJECT REFERENCES` block, so a BOLA pass starts from references the app was seen to
+hand out and accept — and from how to mint the victim object — rather than from guessed ids.
+
+The rules, each with a test:
+- **The graph adds no route.** Nodes use the orchestrator's `METHOD normPath` key, and with `--corpus` an edge
+  touching a route the corpus lacks goes to `orphan_edges` and is reported, never added.
+- **Causality.** A value the client sent before any response produced it (an echo, a client-generated uuid)
+  is never an edge. A consumer echoing the id it was given does not steal the edge or make it ambiguous.
+- **Noise.** Booleans, numbers < 10, strings < 4 chars and paging/sort fields are skipped; token / session /
+  CSRF fields are excluded by key — a CSRF round-trip is not an object reference.
+- **No value persisted.** Not an id, not a header, not a JWT subject: each edge carries a 12-hex SHA-256
+  `example_fp` only.
+- **Nothing measured is a failure, not a result.** No in-scope request (wrong `--scope`) or no response body
+  in any HAR (`recordHar.content` not `"embed"`) is exit 3 — never "this app has no object references".
+
+**Identity attribution was the part real traffic got wrong — twice.** Run against six real engagement HARs
+before shipping:
+- A plain fingerprint of the token/cookie turned two accounts into nine "identities" (tokens rotate), so nearly
+  every edge read as cross-identity — which would have sent the BOLA tester after crossings that never
+  happened. `cross_identity` is now `true` only between two *reliably* attributed principals (a named identity
+  from `.pentest-identities.json`, a JWT subject, or a request with no credential at all) and **`null`** when
+  that cannot be told.
+- The JWT key was first `iss|sub`. On one HAR a gateway minted a random `iss` per token, so one admin became
+  five principals and seven false crossings appeared. The principal is now the subject alone: merging two
+  users only loses a priority hint, splitting one invents a crossing — the key now errs on the safe side.
+
+Wired into `/pentest:recon` as **Step 5d**, and re-run after the Step 6c CRUD reconcile: the CRUD HARs hold
+the creates that mint the ids, and did not exist when 5d first ran.
+
+### Added — `pentest` 2.8.0: workflow order (`precedes`) for business-logic-tester
+
+The same pass also derives `precedes`: every successful write `E` of a principal was preceded by a successful
+write `S` of that same principal. `dispatch-brief.mjs` renders it for `business-logic-tester` as a
+`WORKFLOW ORDER` block, as candidate invariants of the workflow-skip class ("`E` requires `S`") that go
+through the agent's own Phase 2→3 write gate and delta oracle. They are never a licence to fire writes.
+- **Bounded window.** Predecessors are looked for since `E`'s previous occurrence, at most `--window`
+  seconds back (default 600). So `POST /login`, true before everything, is not reported.
+- **Repeated vs single.** Repeated observations are intersected (`repeated`, an optional coupon drops out). A
+  single observation keeps only the adjacent write, flagged `single_occurrence`; the brief calls it weak.
+- **Noise.** Only successful writes count. A write present before most other writes (autosave, telemetry) is
+  ambient and excluded. Order is per principal.
+- **`data_dependency`** is set when a produces edge joins the same pair.
+
+**Measured on the real HARs, and said plainly.** Recon recordings rarely replay a flow, so most edges there
+are `single_occurrence`; `repeated` ones come mainly from CRUD HARs and flows done by several identities.
+GraphQL cannot be ordered at all at route level, because every operation, queries included, is a POST to one
+route. Its writes are excluded and **counted** (`graphql_writes_unordered`, plus a warning and a brief line),
+because "no workflow order" and "workflow order not measured" must not look the same.
+
+### Fixed — `pentest` 2.8.0: a truncated HAR lost the whole engagement's browser traffic
+
+The MCP's persistent context writes its single HAR at **shutdown**; a server killed mid-write leaves the
+file without its closing `]}}`, and `har-import.mjs` rejected all of it (exit 2) for three missing bytes.
+Measured on this machine: one real engagement HAR ended that way, and two more were 0 bytes. New shared
+`har-import/har-read.mjs` salvages every complete entry and reports `truncated: true` + `salvaged_entries`;
+an empty HAR stays exit 2, now with its cause named ("never flushed"). `har-import` and `flow-graph` share
+the reader so the corpus and the graph always see the same traffic — if only one salvaged, every salvaged
+route would turn up as an orphan in the other.
+
+---
+
 ## [2.4.85] — 2026-10-28
 
 Eleven defects from a post-engagement review of `loreal-essentiality-dev-2026-10` (11 deployments, 3 waves,
