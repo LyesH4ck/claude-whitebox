@@ -4,6 +4,76 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.89] — 2026-11-04
+
+### Added — `pentest` 2.9.0, `playwright` 0.3.3: GraphQL is keyed per operation
+
+**The problem.** GraphQL sends every operation to one path, and the route key was `METHOD normPath(path)`. A
+GraphQL API was therefore ONE route: one corpus row, one worklist unit per class, one graph node. The op
+signature saw the same `{operationName, query, variables}` shape everywhere. On ProductBoard, 232 GraphQL
+requests became one `POST /graphql`, which caused three blind spots:
+- 8 of its 14 object-reference edges could not say which operation;
+- 227 requests were excluded from workflow order;
+- coverage could not tell a tested mutation from an untested query.
+
+**The key.** The operation becomes part of the path: `POST /graphql#CreateNote`. The `op-signature` kernel
+(vendored byte-identical into playwright) derives the name, in this order:
+- `operationName`;
+- the named definition;
+- `<type>:<root fields>` for an anonymous document, so two objects of one operation stay one route;
+- `apq:<hash prefix>` for a persisted query.
+
+It also handles a few special cases:
+- a batch is one route per item, each with its own body;
+- GET operations are read from the query string;
+- strings and comments cannot fake structure;
+- REST bodies with a `query` field (`{"query":"shoes"}`) stay plain routes.
+
+`normPath` leaves the suffix untouched, so every key builder downstream carries it unchanged: corpus,
+`surface-map.json`, `state.json`, `coverage.mjs`, `flow-graph.json`. The suffix is never sent, since a URL
+fragment does not go on the wire.
+
+**The kind.** Corpus rows carry `graphql: {operation, type, type_source}`. The kind is read from the document
+(`document`). Failing that, it comes from the Relay-enforced name suffix of a persisted document sent without
+its text (`…Query` / `…Mutation`), marked `name`. Otherwise it stays unknown. On ProductBoard that is 227 of
+232 requests (`documentId` + `operationName`); all 38 operations follow the convention.
+
+**Producers.** `har-import`, `burp-import`, `crawl.mjs` (endpoints and `raw-traffic.jsonl`) and `crawl-write`
+(captures and session writes) split each request into its operations. A GraphQL write is a seed only when it is
+a `mutation`. `observed-merge` carries the `graphql` field. The four URL parsers (coverage, surface-synth,
+orchestrator, reconcile) keep an operation suffix and drop any other fragment, such as an SPA `#/route`.
+
+**flow-graph.** Nodes, edges and writes are per operation:
+- produces → consumes edges join operations through `variables` (`#CreateNote [json:data.createNote.id] →
+  #GetNote [json:variables.id]`);
+- a batch response is split by index;
+- only a successful `mutation` is a write, and a `200` with `errors` and no `data` is a rejected operation;
+- the blanket GraphQL exclusion is gone: `graphql_writes_unordered` now counts only requests whose kind
+  cannot be read;
+- new totals: `graphql_operations` and `graphql_kind_from_name`.
+
+On ProductBoard, against `main`:
+- corpus 795 → 832 routes (1 → 38 GraphQL operations);
+- edges 14 → 16;
+- `graphql_writes_unordered` 227 → 0.
+
+**The worklist and coverage.**
+- **The bare door.** The `POST /graphql` that API discovery lists beside the operations is their header. It
+  is not enrolled and not counted (`graphql_endpoints_folded`).
+- **Migration.** A state enrolled before 2.9.0 has its pending bare units superseded and removed, logged in
+  `migrations` as `graphql-operation-split`. Settled bare units stay.
+- **Record.** `record --route "POST /graphql"` is refused and lists the operations to name.
+- **Coverage attribution.** A test line credits an operation through the `#` suffix, a full URL, or an
+  `operation` field. A line naming only the bare endpoint credits NO operation and makes the figures a floor
+  (`graphql_unattributed_test_lines`).
+- **Briefs.** `dispatch-brief` adds the GraphQL locator rule to every brief whose worklist has operations.
+
+Prompts updated: the locator rule in `OUTPUT_STRUCTURE.md`, `idor-bola-tester`, `injection-tester`,
+`business-logic-tester` (GraphQL flows are now in WORKFLOW ORDER), `inventory-surface-analyzer`, and
+`/pentest:recon` Step 5d.
+
+---
+
 ## [2.4.88] — 2026-11-04
 
 ### Fixed — `pentest` 2.8.2: every tool resolves to the copy the harness loaded, and says so when it is absent

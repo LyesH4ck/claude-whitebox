@@ -31,7 +31,7 @@ import { parseArgs } from 'node:util';
 import { mkdir, writeFile, access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bodySignature, flattenParams, normPath } from './op-signature.mjs';
+import { bodySignature, flattenParams, normPath, splitOperations } from './op-signature.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const emit = (o) => process.stdout.write(JSON.stringify(o, null, 2) + '\n');
@@ -317,9 +317,12 @@ try {
       const post = req.postData() || null;
       // dedup by operation signature (method + normalized path + body shape + query) — the same canonical kernel
       // the recon crawler uses, so filter/sort variants of one grid POST stay distinct while pagination collapses.
-      const key = bodySignature(req.method(), normPath(u.pathname), post, u.search);
-      if (seenReq.has(key)) return; seenReq.add(key);
-      captured.push({ method: req.method(), host: u.hostname, path: u.pathname, query: u.search, post_data: post });
+      // one record per operation: a GraphQL request is keyed `/graphql#Op`, one per batch item
+      for (const op of splitOperations(req.method(), u.pathname, u.search, post)) {
+        const key = bodySignature(req.method(), normPath(op.path), op.body, u.search);
+        if (seenReq.has(key)) continue; seenReq.add(key);
+        captured.push({ method: req.method(), host: u.hostname, path: op.path, query: u.search, post_data: op.body });
+      }
     } catch { /* ignore */ }
   });
 
@@ -334,21 +337,26 @@ try {
       const u = new URL(rq.url());
       if (!inScope(u.hostname.toLowerCase(), u.pathname)) return;
       const status = resp.status();
-      const key = `${m} ${u.hostname}${normPath(u.pathname)} ${status}`;
-      if (seenWrite.has(key)) return; seenWrite.add(key);
       const ct = (resp.headers()['content-type'] || '').split(';')[0] || null;
       let reqBody; try { reqBody = rq.postData() || undefined; } catch { reqBody = undefined; }
-      // F5 — classify each write so crud-merge seeds only real MUTATIONS, not read-POSTs (a GraphQL query, an
-      // ag-grid list POST, a search). Signal = method + status + form: PUT/PATCH/DELETE always mutate; a POST is a
-      // mutation only on a 201, a Location, or a 2xx to a non-preview/search/telemetry terminal segment.
-      const loc = resp.headers()['location'] || null;
-      // bug#2 — a GraphQL query / ag-grid list POST is a READ, never a mutation seed (even to a non-preview path).
-      const mutation = /^(PUT|PATCH|DELETE)$/i.test(m)
-        || (m === 'POST' && !isReadPost(u.pathname, reqBody) && (status === 201 || !!loc || (status >= 200 && status < 300 && !isNonPersistTerminal(u.pathname))));
-      sessionWrites.push({ method: m, host: u.hostname, path: u.pathname, status, content_type: ct, mutation });
-      if (status >= 400) {
-        let snippet = ''; try { snippet = (await resp.text()).slice(0, 300); } catch { /* body unavailable */ }
-        findings.push({ type: 'error_write', method: m, host: u.hostname, path: u.pathname, status, request_body: reqBody, snippet });
+      for (const op of splitOperations(m, u.pathname, u.search, reqBody)) {
+        const key = `${m} ${u.hostname}${normPath(op.path)} ${status}`;
+        if (seenWrite.has(key)) continue; seenWrite.add(key);
+        // F5 — classify each write so crud-merge seeds only real MUTATIONS, not read-POSTs (a GraphQL query, an
+        // ag-grid list POST, a search). Signal = method + status + form: PUT/PATCH/DELETE always mutate; a POST is a
+        // mutation only on a 201, a Location, or a 2xx to a non-preview/search/telemetry terminal segment.
+        const loc = resp.headers()['location'] || null;
+        // bug#2 — a GraphQL query / ag-grid list POST is a READ, never a mutation seed (even to a non-preview path).
+        // A GraphQL operation states its own kind: only a `mutation` writes. Unknown (a persisted query sent by
+        // hash) falls back to the read-POST heuristic below, like any other POST.
+        const mutation = op.graphql && op.graphql.type ? (op.graphql.type === 'mutation' && status >= 200 && status < 300)
+          : /^(PUT|PATCH|DELETE)$/i.test(m)
+          || (m === 'POST' && !isReadPost(u.pathname, op.body) && (status === 201 || !!loc || (status >= 200 && status < 300 && !isNonPersistTerminal(u.pathname))));
+        sessionWrites.push({ method: m, host: u.hostname, path: op.path, status, content_type: ct, mutation });
+        if (status >= 400) {
+          let snippet = ''; try { snippet = (await resp.text()).slice(0, 300); } catch { /* body unavailable */ }
+          findings.push({ type: 'error_write', method: m, host: u.hostname, path: op.path, status, request_body: op.body ?? reqBody, snippet });
+        }
       }
     } catch { /* ignore */ }
   });

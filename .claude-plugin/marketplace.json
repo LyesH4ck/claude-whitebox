@@ -11,7 +11,7 @@
       "name": "playwright",
       "source": "./plugins/playwright",
       "description": "Playwright MCP server with a stealth-friendly default config (real Chrome channel, headed, realistic UA/viewport/locale, anti-automation flags) for browser-driven security testing. Provides the mcp__plugin_playwright_playwright__* tools the pentest plugin's client-side agents depend on.",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"
@@ -23,7 +23,7 @@
       "name": "pentest",
       "source": "./plugins/pentest",
       "description": "Full penetration testing framework - 64 attack categories across 11 domains covering OWASP, injection, authentication, cloud, and more",
-      "version": "2.8.2",
+      "version": "2.9.0",
       "author": {
         "name": "Christophe Bailleux",
         "url": "https://github.com/LyesH4ck"

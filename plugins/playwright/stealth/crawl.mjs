@@ -101,7 +101,7 @@ const DISCLOSURE = '[aria-expanded="false"], .accordion-button.collapsed, [role=
 const RAIL = /\b(delete|remove|supprim|drop|revoke|deactivate|send|pay|charge|refund|email|notify|export|download|invite|approve|reject|submit|save|create|confirm|logout|sign\s?out)\b/i;
 
 // ── operation fingerprint + param helpers — shared canonical kernel (drift-tested against the pentest copy) ──
-import { bodySignature, flattenParams, normPath } from './op-signature.mjs';
+import { bodySignature, flattenParams, normPath, splitOperations } from './op-signature.mjs';
 
 const { launch, newStealthContext } = await import('./browser.mjs');
 const emitOut = { ok: true, start_url: a.url, scope: SCOPE, exclude: { hosts: EXCLUDE_HOSTS, paths: EXCLUDE_PATHS } };
@@ -162,22 +162,23 @@ try {
 
   // ── aggregate: endpoints grouped by (host, method, normalized path); variants by operation fingerprint ──
   const endpoints = new Map();
-  for (const r of captured) {
-    const np = normPath(r.path);
+  for (const r of captured) for (const op of splitOperations(r.method, r.path, r.query, r.post_data)) {
+    // a GraphQL request is keyed by its operation (`/graphql#CreateNote`), one per batch item
+    const np = normPath(op.path), post = op.body;
     const ekey = `${r.host} ${r.method} ${np}`;
-    if (!endpoints.has(ekey)) endpoints.set(ekey, { host: r.host, method: r.method, path: np, frames: new Set(), variants: new Map(), params: new Set() });
+    if (!endpoints.has(ekey)) endpoints.set(ekey, { host: r.host, method: r.method, path: np, graphql: op.graphql && { operation: op.graphql.operation, type: op.graphql.type, type_source: op.graphql.type_source }, frames: new Set(), variants: new Map(), params: new Set() });
     const e = endpoints.get(ekey);
     if (r.frame_url) e.frames.add(new URL(r.frame_url).host + new URL(r.frame_url).pathname);
-    const sig = bodySignature(r.method, np, r.post_data, r.query);
-    if (!e.variants.has(sig)) e.variants.set(sig, { signature: sig, count: 0, sample_body: r.post_data ? r.post_data.slice(0, 600) : null, statuses: new Set() });
+    const sig = bodySignature(r.method, np, post, r.query);
+    if (!e.variants.has(sig)) e.variants.set(sig, { signature: sig, count: 0, sample_body: post ? post.slice(0, 600) : null, statuses: new Set() });
     const v = e.variants.get(sig); v.count++; if (r.status != null) v.statuses.add(r.status);
     // params: query keys (in:query) + JSON body leaves (in:json)
     if (r.query) for (const k of new URLSearchParams(r.query).keys()) e.params.add('query:' + k);
-    if (r.post_data) { try { const j = JSON.parse(r.post_data); const s = new Set(); flattenParams(j, '', s); for (const p of s) e.params.add('json:' + p); } catch { for (const kv of r.post_data.split('&')) if (kv.split('=')[0]) e.params.add('form:' + safeDecode(kv.split('=')[0])); } }
+    if (post) { try { const j = JSON.parse(post); const s = new Set(); flattenParams(j, '', s); for (const p of s) e.params.add('json:' + p); } catch { for (const kv of post.split('&')) if (kv.split('=')[0]) e.params.add('form:' + safeDecode(kv.split('=')[0])); } }
   }
 
   const endpointList = [...endpoints.values()].map((e) => ({
-    host: e.host, method: e.method, path: e.path,
+    host: e.host, method: e.method, path: e.path, ...(e.graphql ? { graphql: e.graphql } : {}),
     frames: [...e.frames],
     variant_count: e.variants.size,
     variants: [...e.variants.values()].map((v) => ({ signature: v.signature, count: v.count, statuses: [...v.statuses], sample_body: v.sample_body })),
@@ -223,12 +224,13 @@ try {
     // makes "seen on the wire but never mapped" measurable (Phase 2). Deduped by the shared op-signature fingerprint.
     const seenFp = new Set();
     const lines = [];
-    for (const r of captured) {
-      const fp = bodySignature(r.method, normPath(r.path), r.post_data, r.query);
+    for (const r of captured) for (const op of splitOperations(r.method, r.path, r.query, r.post_data)) {
+      const fp = bodySignature(r.method, normPath(op.path), op.body, r.query);
       if (seenFp.has(fp)) continue; seenFp.add(fp);
       lines.push(JSON.stringify({
-        method: r.method, host: r.host, path: r.path, query: r.query || '',
-        post_data_shape: r.post_data ? (/^\s*[[{]/.test(r.post_data) ? 'json' : 'form') : null,
+        method: r.method, host: r.host, path: op.path, query: r.query || '',
+        ...(op.graphql ? { graphql: { operation: op.graphql.operation, type: op.graphql.type, type_source: op.graphql.type_source } } : {}),
+        post_data_shape: op.body ? (/^\s*[[{]/.test(op.body) ? 'json' : 'form') : null,
         status: r.status, frame_url: r.frame_url, fingerprint: fp, source: 'browser-crawl', trigger: null,
       }));
     }
