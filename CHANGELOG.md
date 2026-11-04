@@ -4,6 +4,48 @@ All notable changes to `claude-whitebox` are documented here.
 
 ---
 
+## [2.4.88] — 2026-11-04
+
+### Fixed — `pentest` 2.8.2: every tool resolves to the copy the harness loaded, and says so when it is absent
+
+**The cache glob.** The 23 tool lookups in the commands and agents resolved a tool by listing
+`~/.claude/plugins/cache/*/pentest/*/…` and keeping the `sort -V` maximum. Two failures came from that:
+- **Wrong build.** The cache keeps every installed version side by side, so a tool could come from a build the
+  harness never loaded. That is what ran tools from 2.4.49 while the operator believed 2.4.56 was live.
+- **Missing tool.** When the loaded copy predates a tool, no cache entry has it. The variable came back empty,
+  `node ""` failed, and the agent improvised the step. Today that is `har-rotate` and `flow-graph` on a 2.6.0
+  install.
+
+Each lookup now tries the checkout, then the `installPath` that `installed_plugins.json` records. The same
+change covers the playwright stealth harness. A miss prints a `GAP <tool> is not in the loaded pentest copy`
+line instead of falling through to another build. The plugin-root resolver (`$PR`) keeps the sorted glob,
+but only as its last resort, after `installed_plugins.json` and the marketplace.
+
+**Variables carried across blocks.** Shell state does not survive between Bash calls, and the model runs a
+fenced block as one call. Seventeen blocks ran a tool whose variable an earlier block had set:
+- **`recon.md`.** `$HARDIR` (`har-import`, `observed-merge`, `flow-graph`) and the `HARS` array, a defect
+  introduced in 2.8.1.
+- **`pentest.md`.** `$ORCH` in seven blocks, and `$PR` for the 6.3.6 / 6.7 HAR checkpoints and the preflight.
+- **Agents.** `$PW_STEALTH` / `$DXS` in `xss-tester`, and `$AUTHZ_RUN` in `idor-bola-tester`.
+
+Each of these blocks now resolves its own tools.
+
+**The preflight blocks the regressions.** Four new BLOCK rules, each tested in both directions:
+- a tool fallback that does not read `installed_plugins.json`;
+- a tool found by globbing the cache;
+- a fallback with no `GAP` / `NOT FOUND` line;
+- a fenced block that runs `node "$X…"` without assigning `X` itself.
+
+One end-to-end test runs the real resolver from `recon.md` against a staged `~/.claude`. In the cache, a newer
+build is present but not loaded, and the loaded build lacks the tool. The resolver must print the GAP and must
+never borrow the newer build.
+
+**Stale copy.** The preflight also WARNS when the marketplace offers a newer pentest than the loaded one: every
+prompt and tool of that run is the old build. `/pentest:recon` now runs the preflight (Step 4/0), as
+`/pentest:pentest` already did at init.
+
+---
+
 ## [2.4.87] — 2026-11-03
 
 ### Fixed — `pentest` 2.8.1, `playwright` 0.3.2: the MCP browser's traffic almost never reached the corpus
