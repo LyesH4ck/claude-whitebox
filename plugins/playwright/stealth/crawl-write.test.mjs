@@ -1066,6 +1066,7 @@ function startReadPostServer() {
         document.getElementById('cb').addEventListener('click',()=>{document.getElementById('lb').style.display='block';});
         document.getElementById('s').addEventListener('input',()=>{
           fetch('/api/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'query Q($k:String){items(k:$k){id}}',variables:{k:'a'}})});
+          fetch('/api/graphql',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({operationName:'AddItem',query:'mutation AddItem($k:String){addItem(k:$k){id}}',variables:{k:'a'}})});
           fetch('/api/rows',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filterModel:{},startRow:0,endRow:100})});
           fetch('/transaction/api/v1/create-activity-log',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"e":1}'});
         });
@@ -1086,10 +1087,14 @@ test('T-bug2: a GraphQL query / ag-grid list POST is classified mutation:false (
     const out = JSON.parse(stdout.trim());
     assert.equal(out.ok, true);
     const sw = out.session_writes || [];
-    const gql = sw.find((w) => w.path === '/api/graphql');
+    // each GraphQL operation is its own write record, keyed by its operation (the op-signature convention)
+    const gql = sw.find((w) => w.path === '/api/graphql#Q');
     const rows = sw.find((w) => w.path === '/api/rows');
     assert.ok(gql, `graphql POST was captured (got ${JSON.stringify(sw)})`);
     assert.equal(gql.mutation, false, 'GraphQL query POST is mutation:false');
+    const add = sw.find((w) => w.path === '/api/graphql#AddItem');
+    assert.ok(add && add.mutation === true, `a GraphQL mutation that succeeded IS a seed (got ${JSON.stringify(add)})`);
+    assert.ok(!sw.some((w) => w.path === '/api/graphql'), 'no bare-endpoint record');
     assert.ok(rows && rows.mutation === false, 'ag-grid list POST is mutation:false');
     const log = sw.find((w) => w.path === '/transaction/api/v1/create-activity-log');
     assert.ok(log && log.mutation === false, 'a telemetry (activity-log) POST is mutation:false, not a seed');
